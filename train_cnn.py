@@ -9,7 +9,7 @@ from unet3d.training import load_old_model, train_model
 from unet3d.generator import FileGenerator
 
 
-def train(data_files, truth_files, input_shape=(144,144,144,50))
+def train(data_files, truth_files, input_shape=(144,144,144,50)):
 	model = unet_model_3d(input_shape=input_shape)
 
 	train, validation, t_gen, v_gen = FileGenerator.get_training_and_validation(input_shape, cnt=5, border=10, cnt=5, batch_size=20, n_samples=500)
