@@ -1,5 +1,6 @@
 import os
 import argparse
+import datetime
 
 from keras import backend as K
 K.set_image_dim_ordering('tf')
@@ -12,10 +13,10 @@ from unet3d.generator import FileGenerator
 def train(data_files, truth_files, input_shape=(144,144,144,50)):
 	model = unet_model_3d(input_shape=input_shape)
 
-	train, validation, t_gen, v_gen = FileGenerator.get_training_and_validation(input_shape, cnt=5, border=10, cnt=5, batch_size=20, n_samples=500)
+	train, validation, t_gen, v_gen = FileGenerator.get_training_and_validation(data_file, truth_files, num_classes_per_file=2, num_samples_per_class=20, batch_size=20)
 
 	train_model(model=model, 
-	            model_file=os.path.abspath("./SphereCNN.h5"), 
+	            model_file=os.path.abspath("./molmomic_{}.h5".format(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))), 
 	            training_generator=t_generator,
 	            validation_generator=v_generator, 
 	            steps_per_epoch=train.num_steps,
