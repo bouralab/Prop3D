@@ -224,8 +224,11 @@ class Structure(object):
     else:
         return atom.parent().resname
 
-  def get_features_for_atom(self, atom):
+  def get_features_for_atom(self, atom, i_seq=False):
     """Calculate FEATUREs"""
+    if i_seq:
+        atom = self.pdb_hierarchy.atoms()[atom]
+
     atom_type             = self.get_atom_type(atom)
     #partial_charge        = None
     element_type          = self.get_element_type(atom)

@@ -7,13 +7,13 @@ K.set_image_dim_ordering('tf')
 
 from unet3d.model import unet_model_3d
 from unet3d.training import load_old_model, train_model
-from unet3d.generator import FileGenerator
+from unet3d.generator import DistributedH5FileGenerator
 
 
-def train(data_files, truth_files, input_shape=(144,144,144,50)):
+def train(h5_files, input_shape=(144,144,144,50)):
 	model = unet_model_3d(input_shape=input_shape)
 
-	train, validation, t_gen, v_gen = FileGenerator.get_training_and_validation(data_file, truth_files, num_classes_per_file=2, num_samples_per_class=20, batch_size=20)
+	train, validation, = DistributedH5FileGenerator.get_training_and_validation(data_file, truth_files, num_classes_per_file=2, num_samples_per_class=20, batch_size=20)
 
 	train_model(model=model, 
 	            model_file=os.path.abspath("./molmomic_{}.h5".format(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))), 
@@ -29,23 +29,16 @@ def train(data_files, truth_files, input_shape=(144,144,144,50)):
 def parse_args():
 	parser = argparse.ArgumentParser(description="Load data and truth files to train the 3dCNN")
 	parser.add_argument(
-		"-d",
-		"--data",
-		nargs="+",
-		required=True)
-	parser.add_argument(
-		"-t",
-		"--truth",
-		nargs="+",
-		required=True)
-	parser.add_argument(
 		"-s",
 		"--shape",
 		nargs=4,
-		default=(144,144,144,50))
+		default=(96, 96, 96, 50))
+	parser.add_argument(
+		"h5_files",
+		nargs="+")
 
 	return parser.parse_args()
 
 if __name__ == "__main__":
 	args = parse_args()
-	train(args.data, args.truth, args.shape)
+	train(args.h5_files, args.shape)
