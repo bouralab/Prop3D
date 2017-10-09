@@ -5,8 +5,8 @@ def parse_ibis_centroid(index, pdb, chain, resi):
     """
     import h5py
     f = h5py.File('{}_{}_{}.h5'.format(index, pdb, chain), 'w')
-    data_grid = f.create_dataset("data", (96, 96, 96, 50), fillvalue=0, compression='gzip', compression_opts=9)
-    truth_grid = f.create_dataset("truth", (96, 96, 96, 1), fillvalue=0, compression='gzip', compression_opts=9)
+    data_grid = f.create_dataset("data", (200, 96, 96, 96, 50), fillvalue=0, compression='gzip', compression_opts=9)
+    truth_grid = f.create_dataset("truth", (200, 96, 96, 96, 1), fillvalue=0, compression='gzip', compression_opts=9)
     print index, pdb, chain, resi
     try:
         structure = Structure.from_pdb(pdb, expand_to_p1=False)
@@ -19,11 +19,12 @@ def parse_ibis_centroid(index, pdb, chain, resi):
     structure.orient_to_pai()
     sele = "resseq {}".format(resi.replace(",", " or resseq "))
     binding_site = structure.extract_selection_from_string(sele)
-    
-    for atom in binding_site.pdb_hierarchy.atoms():
-        grid = binding_site.get_grid_coord(atom)
-        data_grid[grid[0], grid[1], grid[2], :] = structure.get_features_for_atom(binding_site.parent_iseqs[atom.i_seq], i_seq=True)
-        truth_grid[grid[0], grid[1], grid[2], 0] = 1
+
+    for rotation_num in binding_site.rotations(200):
+        for atom in binding_site.pdb_hierarchy.atoms():
+            grid = binding_site.get_grid_coord(atom)
+            data_grid[rotation_num, grid[0], grid[1], grid[2], :] = structure.get_features_for_atom(binding_site.parent_iseqs[atom.i_seq], i_seq=True)
+            truth_grid[rotation_num, grid[0], grid[1], grid[2], 0] = 1
     
     f.close()
 
@@ -34,8 +35,8 @@ def concatenate(h5_files_f):
         num_binding_sites = sum(1 for _ in f)
 
     output_file = h5py.File('ibis_binding_sites.h5', 'w')
-    data_grid = output_file.create_dataset("data", (num_binding_sites, 96, 96, 96, 50), fillvalue=0., compression='gzip', compression_opts=9)
-    truth_grid = output_file.create_dataset("truth", (num_binding_sites, 96, 96, 96, 1), fillvalue=0., compression='gzip', compression_opts=9)
+    data_grid = output_file.create_dataset("data", (num_binding_sites*200, 96, 96, 96, 50), fillvalue=0., compression='gzip', compression_opts=9)
+    truth_grid = output_file.create_dataset("truth", (num_binding_sites*200, 96, 96, 96, 1), fillvalue=0., compression='gzip', compression_opts=9)
 
     with open(h5_files_f) as files:
         for i, file in enumerate(files):

@@ -99,6 +99,16 @@ class Structure(object):
     self.xray_structure.replace_sites_cart(flex.vec3_double(coords))
     self.pdb_hierarchy.adopt_xray_structure(self.xray_structure)
 
+  def rotate(self, num=1):
+    num = max(1, num)
+    for r in xrange(num):
+        M = rotation_matrix(random = True)
+        coords = np.dot(self.pdb_hierarchy.atoms.extract_xyz())
+        self.xray_structure = self.pdb_hierarchy.extract_xray_structure()
+        self.xray_structure.replace_sites_cart(flex.vec3_double(coords))
+        self.pdb_hierarchy.adopt_xray_structure(self.xray_structure)
+        yield self
+
   def get_interface(self, other_structure, max_distance=5, residue_level=True):
     interface = defaultdict(list)
     res1 = set()
@@ -547,6 +557,31 @@ def flip_around_axis(coords, axis = (0.2, 0.2, 0.2)):
         if np.random.binomial(1, axis[col]):
             coords[:,col] = np.negative(coords[:,col])
     return coords
+
+def rotation_matrix(random = False, theta = 0, phi = 0, z = 0):
+    'Creates a rotation matrix'
+    # Adapted from: http://blog.lostinmyterminal.com/python/2015/05/12/random-rotation-matrix.html
+    # Initialization
+    if random == True:
+        randnums = np.random.uniform(size=(3,))
+        theta, phi, z = randnums
+    theta = theta * 2.0*np.pi  # Rotation about the pole (Z).
+    phi = phi * 2.0*np.pi  # For direction of pole deflection.
+    z = z * 2.0  # For magnitude of pole deflection.
+    r = np.sqrt(z)
+    Vx, Vy, Vz = V = (
+        np.sin(phi) * r,
+        np.cos(phi) * r,
+        np.sqrt(2.0 - z)
+        )
+    st = np.sin(theta)
+    ct = np.cos(theta)
+    R = np.array(((ct, st, 0), (-st, ct, 0), (0, 0, 1)))
+ 
+    # Construct the rotation matrix  ( V Transpose(V) - I ) R.
+    M = (np.outer(V, V) - np.eye(3)).dot(R)
+ 
+    return M
 
 def rotation_around_axis(coords, factor = 0, axis = [1,0,0]):
     'Rotation of coords around axis'
