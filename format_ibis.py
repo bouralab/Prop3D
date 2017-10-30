@@ -1,6 +1,6 @@
 import sys
 
-def parse_ibis_centroid(index, pdb, chain, resi):
+def parse_ibis_centroid(pdb, chain, resi, input_shape=(96,96,96), rotations=200):
     """
     """
     import h5py
@@ -72,7 +72,7 @@ def parse_ibis_centroids(tax_glob_group="A_eukaryota", num_represtatives=20):
     h5_data_files.close()
 
     qsub = Qsub("ibis_merge".format(i), threads=1)
-    qsub += "python {} {}\n".format(sys.argv[0], "h5_data_files.txt")
+    qsub += "iotbx.python {} {}\n".format(sys.argv[0], "h5_data_files.txt")
     qsub.submit(hold_jid=job_ids)
 
 if __name__ == "__main__":

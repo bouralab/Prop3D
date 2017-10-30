@@ -34,8 +34,6 @@ hydrophobicity_scales = {
            "T": -0.25, "V":  0.46, "W":  2.09, "Y":  0.71,}
     }
 
-
-
 class Structure(object):
   def __init__(self, pdb_hierarchy, xray_structure, pdb_in, expand_to_p1=False, gridding=None, parent=None, parent_iseqs=None):
     self.pdb_hierarchy = pdb_hierarchy
@@ -107,7 +105,7 @@ class Structure(object):
         self.xray_structure = self.pdb_hierarchy.extract_xray_structure()
         self.xray_structure.replace_sites_cart(flex.vec3_double(coords))
         self.pdb_hierarchy.adopt_xray_structure(self.xray_structure)
-        yield self
+        yield r
 
   def get_interface(self, other_structure, max_distance=5, residue_level=True):
     interface = defaultdict(list)
