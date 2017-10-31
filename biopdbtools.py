@@ -220,19 +220,27 @@ class Structure(object):
         print
         return mapped_resdues
 
-    def get_features(self, input_shape=(96, 96, 96), residue_list=None):
+    def get_features(self, input_shape=(96, 96, 96), residue_list=None, return_data=True, return_truth=True):
         if residue_list is not None:
-            atoms = it.chain(*[r.get_atoms() for r in residue_list])
+            atoms = [a for r in residue_list for a in r]
         else:
             atoms = self.get_atoms()
 
         data_grid = np.zeros(list(input_shape)+[52])
-        truth_grid = np.zeros(list(input_shape)+[52])
+        truth_grid = np.zeros(list(input_shape)+[1])
         for atom in atoms:
             grid = self.get_grid_coord(atom, vsize=input_shape[0])
-            data_grid[grid[0], grid[1], grid[2], :] = self.get_features_for_atom(atom)
-            truth_grid[grid[0], grid[1], grid[2], 0] = 1
-        yield data_grid, truth_grid
+            if return_data:
+                data_grid[grid[0], grid[1], grid[2], :] = self.get_features_for_atom(atom)
+            if return_truth:
+                truth_grid[grid[0], grid[1], grid[2], 0] = 1
+
+        if return_data and return_truth:
+            return data_grid, truth_grid
+        elif return_data:
+            return data_grid
+        else:
+            return truth_grid
 
     def get_features_for_atom(self, atom):
         """Calculate FEATUREs"""
