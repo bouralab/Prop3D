@@ -1,10 +1,12 @@
 import os
 import gzip
 import itertools as it
-
+import numpy as np
+from sklearn.decomposition import PCA
 from Bio import PDB
-from pdb2pqr import mainCommand
-import freesasa
+from Bio import SeqIO
+#from pdb2pqr import mainCommand
+#:import freesasa
 
 import warnings
 warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
@@ -27,7 +29,7 @@ hydrophobicity_scales = {
            "T": -0.25, "V":  0.46, "W":  2.09, "Y":  0.71,}
     }
 
-vdw = {'Ru': 1.2, 'Re': 1.3, 'Ra': 2.57, 'Rb': 2.65, 'Rn': 2.3, 'Rh': 1.22, 'Be': 0.63, 'Ba': 2.41, 'Bi': 1.73, 'Bk': 1.64, 'Br': 1.85, 'D': 1.2, 'H': 1.2, 'P': 1.9, 'Os': 1.58, 'Es': 1.62, 'Hg': 1.55, 'Ge': 1.48, 'Gd': 1.69, 'Ga': 1.87, 'Pr': 1.62, 'Pt': 1.72, 'Pu': 1.67, 'C': 1.775, 'Pb': 2.02, 'Pa': 1.6, 'Pd': 1.63, 'Cd': 1.58, 'Po': 1.21, 'Pm': 1.76, 'Ho': 1.61, 'Hf': 1.4, 'K': 2.75, 'He': 1.4, 'Md': 1.6, 'Mg': 1.73, 'Mo': 1.75, 'Mn': 1.19, 'O': 1.45, 'S': 1.8, 'W': 1.26, 'Zn': 1.39, 'Eu': 1.96, 'Zr': 1.42, 'Er': 1.59, 'Ni': 1.63, 'No': 1.59, 'Na': 2.27, 'Nb': 1.33, 'Nd': 1.79, 'Ne': 1.54, 'Np': 1.71, 'Fr': 3.24, 'Fe': 1.26, 'Fm': 1.61, 'B': 1.75, 'F': 1.47, 'Sr': 2.02, 'N': 1.5, 'Kr': 2.02, 'Si': 2.1, 'Sn': 2.17, 'Sm': 1.74, 'V': 1.06, 'Sc': 1.32, 'Sb': 1.12, 'Se': 1.9, 'Co': 1.13, 'Cm': 1.65, 'Cl': 1.75, 'Ca': 1.95, 'Cf': 1.63, 'Ce': 1.86, 'Xe': 2.16, 'Lu': 1.53, 'Cs': 3.01, 'Cr': 1.13, 'Cu': 1.4, 'La': 1.83, 'Li': 1.82, 'Tl': 1.96, 'Tm': 1.57, 'Lr': 1.58, 'Th': 1.84, 'Ti': 1.95, 'Te': 1.26, 'Tb': 1.66, 'Tc': 2.0, 'Ta': 1.22, 'Yb': 1.54, 'Dy': 1.63, 'I': 1.98, 'U': 1.75, 'Y': 1.61, 'Ac': 2.12, 'Ag': 1.72, 'Ir': 1.22, 'Am': 1.66, 'Al': 1.5, 'As': 0.83, 'Ar': 1.88, 'Au': 1.66, 'At': 1.12, 'In': 1.93}
+vdw = {'Ru': 1.2, 'Re': 4.3, 'Ra': 2.57, 'Rb': 2.65, 'Rn': 2.3, 'Rh': 1.22, 'Be': 0.63, 'Ba': 2.41, 'Bi': 1.73, 'Bk': 1.64, 'Br': 1.85, 'D': 1.2, 'H': 1.2, 'P': 1.9, 'Os': 1.58, 'Es': 1.62, 'Hg': 1.55, 'Ge': 1.48, 'Gd': 1.69, 'Ga': 1.87, 'Pr': 1.62, 'Pt': 1.72, 'Pu': 1.67, 'C': 1.775, 'Pb': 2.02, 'Pa': 1.6, 'Pd': 1.63, 'Cd': 1.58, 'Po': 1.21, 'Pm': 1.76, 'Ho': 1.61, 'Hf': 1.4, 'K': 2.75, 'He': 1.4, 'Md': 1.6, 'Mg': 1.73, 'Mo': 1.75, 'Mn': 1.19, 'O': 1.45, 'S': 1.8, 'W': 1.26, 'Zn': 1.39, 'Eu': 1.96, 'Zr': 1.42, 'Er': 1.59, 'Ni': 1.63, 'No': 1.59, 'Na': 2.27, 'Nb': 1.33, 'Nd': 1.79, 'Ne': 1.54, 'Np': 1.71, 'Fr': 3.24, 'Fe': 1.26, 'Fm': 1.61, 'B': 1.75, 'F': 1.47, 'Sr': 2.02, 'N': 1.5, 'Kr': 2.02, 'Si': 2.1, 'Sn': 2.17, 'Sm': 1.74, 'V': 1.06, 'Sc': 1.32, 'Sb': 1.12, 'Se': 1.9, 'Co': 1.13, 'Cm': 1.65, 'Cl': 1.75, 'Ca': 1.95, 'Cf': 1.63, 'Ce': 1.86, 'Xe': 2.16, 'Lu': 1.53, 'Cs': 3.01, 'Cr': 1.13, 'Cu': 1.4, 'La': 1.83, 'Li': 1.82, 'Tl': 1.96, 'Tm': 1.57, 'Lr': 1.58, 'Th': 1.84, 'Ti': 1.95, 'Te': 1.26, 'Tb': 1.66, 'Tc': 2.0, 'Ta': 1.22, 'Yb': 1.54, 'Dy': 1.63, 'I': 1.98, 'U': 1.75, 'Y': 1.61, 'Ac': 2.12, 'Ag': 1.72, 'Ir': 1.22, 'Am': 1.66, 'Al': 1.5, 'As': 0.83, 'Ar': 1.88, 'Au': 1.66, 'At': 1.12, 'In': 1.93}
 
 maxASA = {"A": 129.0, "R": 274.0, "N": 195.0, "D": 193.0, "C": 167.0, "E": 223.0, "Q": 225.0, "G": 104.0, "H": 224.0, "I": 197.0, "K": 201.0, "L": 236.0, "M": 224.0, "F": 240.0, "P": 159.0, "S": 155.0, "T": 172.0, "W": 285.0, "Y": 263.0, "V": 174.0}
 
@@ -43,13 +45,14 @@ class SelectChain(PDB.Select):
         return chain.get_id() == self.chain
 
 class Structure(object):
-    def __init__(self, pdb, snapshot=True):
-        if not os.path.isfile(pdb) and len(pdb) == 4:
+    def __init__(self, pdb, chain, path=None, snapshot=True):
+        if path is None and not os.path.isfile(pdb) and len(pdb) == 4:
             if snapshot:
                 path = "{}/pdb/{}/pdb{}.ent.gz".format(os.environ.get("PDB_SNAPSHOT", "/pdb"), pdb[1:3].lower(), pdb.lower())
             else:
                 path = download_pdb(pdb)
-        else:
+            pdb = pdb.lower()
+        elif path is None:
             path = pdb
 
         print path
@@ -75,14 +78,14 @@ class Structure(object):
         self.starting_residue = None
         self.starting_index_seq = None
         self.starting_index_struc = None
+        self.chain = chain
 
         try:
             aa = SeqIO.index("{}/sequences/pdb_seqres.txt".format(os.environ.get("PDB_SNAPSHOT", "/pdb")), "fasta")
-            self.aa = str(pdb_aa["{}_{}".format(pdb.lower(), chain.upper())].seq)
+            self.aa = str(aa["{}_{}".format(pdb, chain.upper())].seq)
         except KeyError:
             self.aa = None
-            starting_index_seq = 0
-            starting_index_struc = first_struct_aa.parent().resseq_as_int()
+            print "Canot read seq file"
 
     @staticmethod
     def features_from_string(pdb, chain, resi, input_shape=(96,96,96), rotations=200):
@@ -99,7 +102,8 @@ class Structure(object):
         input_shape : 3-tuple
         rotations : int
         """
-        s = Structure(pdb).extract_chain(chain)
+        s = Structure(pdb, chain).extract_chain(chain)
+        s.align_to_pai()
         binding_site = [s.align_seq_to_struc(int(r), return_residue=True) for r in resi.split(",")]
         for rotation_num in self.rotate(rotations):
             data_grid, truth_grid = self.get_features(input_shape=input_shape, residue_list=binding_site)
@@ -146,7 +150,7 @@ class Structure(object):
 
     def _mean_coord(self):
         if not self.mean_coord_updated:
-            self.mean_coord = np.mean(np.array(a.coord for a in self.structure.get_atoms()), axis=0)
+            self.mean_coord = np.mean(self.get_coords(), axis=0)
             self.mean_coord_updated = True
         return self.mean_coord
 
@@ -156,10 +160,10 @@ class Structure(object):
         if not os.path.isfile(out_path):
             writer.set_structure(self.structure)
             writer.save(out_path, select=SelectChain(chain))
-        return Structure(out_path)
+        return Structure(self.pdb, chain, path=out_path)
 
     def get_coords(self):
-        return np.array(a.coord for a in self.structure.get_atoms())
+        return np.array([a.get_coord() for a in self.structure.get_atoms()])
 
     def orient_to_pai(self, flip_axis=(0.2, 0.2, 0.2)):
         coords = PCA(n_components = 3).fit_transform(self.get_coords())
@@ -175,10 +179,18 @@ class Structure(object):
             yield r
 
     def update_coords(self, coords):
-        for atom in self.structure.get_atoms():
-            atom.set_coords(coords)
+        for atom, coord in it.izip(self.structure.get_atoms(), coords):
+            atom.set_coord(coord)
 
-    def align_seq_to_struc(self, seq_num, return_residue=False):
+    def create_full_volume(self, input_shape=(96, 96, 96)):
+        truth_grid = np.zeros(list(input_shape)+[1])
+        for atom in self.get_atoms():
+            grid = self.get_grid_coord(atom, vsize=input_shape[0])
+            truth_grid[grid[0], grid[1], grid[2], 0] = 1
+        return truth_grid
+
+    def align_seq_to_struc(self, *seq_num, **kwds):
+        return_residue=kwds.get("return_residue", False)
         if self.starting_index_struc is None and self.aa is not None:
             first_struct_aa = self.structure.get_residues().next()
             self.starting_index_seq = 0
@@ -190,11 +202,23 @@ class Structure(object):
                     starting_index_seq = i
                     break
 
-        index = seq_num-self.starting_index_seq+self.starting_index_struc
-        if return_residue:
-            return self.structure[0][self.structure.get_chains.next().get_id()][index]
-        else:
-            return index
+
+        if len(seq_num) == 1 and isinstance(seq_num[0], str) and "," in seq_num[0]:
+            seq_num = map(int, seq_num[0].split(","))
+
+        mapped_resdues = []
+        for num in seq_num:
+            if num < self.starting_index_struc:
+                index = int(num)-self.starting_index_seq+self.starting_index_struc
+            else:
+                index = num
+            print num, "->", index
+            if return_residue:
+                mapped_resdues.append(self.structure[0][self.structure.get_chains().next().get_id()][index])
+            else:
+                mapped_resdues(index)
+        print
+        return mapped_resdues
 
     def get_features(self, input_shape=(96, 96, 96), residue_list=None):
         if residue_list is not None:
@@ -206,8 +230,8 @@ class Structure(object):
         truth_grid = np.zeros(list(input_shape)+[52])
         for atom in atoms:
             grid = self.get_grid_coord(atom, vsize=input_shape[0])
-            data_grid[index+rotation_num, grid[0], grid[1], grid[2], :] = self.get_features_for_atom(atom)
-            truth_grid[index+rotation_num, grid[0], grid[1], grid[2], 0] = 1
+            data_grid[grid[0], grid[1], grid[2], :] = self.get_features_for_atom(atom)
+            truth_grid[grid[0], grid[1], grid[2], 0] = 1
         yield data_grid, truth_grid
 
     def get_features_for_atom(self, atom):
