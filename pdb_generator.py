@@ -85,7 +85,7 @@ class IBISGenerator(object):
         # Generate data
         for i, index in enumerate(indexes):
             datum = self.data.iloc[i]
-            pdb_data, pdb_truth = Structure.features_from_string(datum["pdb"], datum["chain"], datum["resi"], input_shape=self.input_shape, rotations=1).next()
+            pdb_data, pdb_truth = Structure.features_from_string(datum["pdb"], datum["chain"], datum["resi"], input_shape=self.input_shape)
 
             if X is None:
                 X = np.zeros([self.batch_size]+list(pdb_data.shape))

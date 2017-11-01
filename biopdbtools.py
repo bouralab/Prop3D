@@ -88,7 +88,7 @@ class Structure(object):
             print "Canot read seq file"
 
     @staticmethod
-    def features_from_string(pdb, chain, resi, input_shape=(96,96,96), rotations=200):
+    def feature_from_string(pdb, chain, resi, input_shape=(96,96,96), grid=True, return_data=True, return_truth=True):
         """Get features
 
         Paramters
@@ -102,12 +102,23 @@ class Structure(object):
         input_shape : 3-tuple
         rotations : int
         """
+        assert rotations>=1
         s = Structure(pdb, chain).extract_chain(chain)
         s.align_to_pai()
-        binding_site = [s.align_seq_to_struc(int(r), return_residue=True) for r in resi.split(",")]
-        for rotation_num in self.rotate(rotations):
-            data_grid, truth_grid = self.get_features(input_shape=input_shape, residue_list=binding_site)
-            yield data_grid, truth_grid
+        binding_site = s.align_seq_to_struc(resi, return_residue=True)
+
+        if grid:
+            for rotation_num in self.rotate(1):
+                data_grid, truth_grid = self.get_features(input_shape=input_shape, residue_list=binding_site)
+                if return_data and return_truth:
+                    return data_grid, truth_grid
+                elif return_data:
+                    return data_grid
+                else:
+                    return truth_grid
+        else:
+            return get_features_per_atom(binding_site)
+
 
     def get_atoms(self, include_hetatms=False):
         for a in self.structure.get_atoms():
@@ -156,7 +167,7 @@ class Structure(object):
 
     def extract_chain(self, chain):
         chain = chain.upper()
-        out_path = "{}_{}.pdb".format(os.path.splitext(self.path)[0], chain)
+        out_path = "{}_{}.pdb".format(os.path.splitext(os.path.basename(self.path))[0], chain)
         if not os.path.isfile(out_path):
             writer.set_structure(self.structure)
             writer.save(out_path, select=SelectChain(chain))
@@ -220,7 +231,22 @@ class Structure(object):
         print
         return mapped_resdues
 
+    @staticmethod
+    def get_feature_names():
+        feature_names = ["C", "CT", "CA", "N", "N2", "N3", "NA", "O", "O2", "OH", "S", "SH", "Unk_atom", "C", "N", "O", "S", "Unk_element", "vdw_volume", "charge", "neg_charge", "pos_charge", "neutral_charge", "hydrophobicity", "atom_asa", "residue_asa", "residue_buried", "residue_exposed"]
+        feature_names += PDB.Polypeptide.aa3
+        feature_names += ["Unk_residue", "is_helix", "is_sheet", "Unk_SS"]
+        return feature_names
+
+    def get_features_per_atom(residue_list):
+        """Get features for eah atom, but not organized in grid"""
+        features = [self.get_features_for_atom(a) for r in residue_list for a in r]
+        return features
+
     def get_features(self, input_shape=(96, 96, 96), residue_list=None, return_data=True, return_truth=True):
+        return self.get_features_in_grid(input_shape=input_shape, residue_list=residue_list, return_data=return_data, return_truth=return_truth)
+
+    def get_features_in_grid(self, input_shape=(96, 96, 96), residue_list=None, return_data=True, return_truth=True):
         if residue_list is not None:
             atoms = [a for r in residue_list for a in r]
         else:
