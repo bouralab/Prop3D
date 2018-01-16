@@ -53,7 +53,7 @@ class SwarmJob(object):
 
     @staticmethod
     def number_of_jobs_pending():
-        num_lines = len(subprocess.check_output(["sacct", "--state", "PENDING", "--starttime", SwarmJob.start_date]).split("\n"))
+        num_lines = len(subprocess.check_output(["/usr/local/slurm/bin/sacct", "--state", "PENDING", "--starttime", SwarmJob.start_date]).split("\n"))
         return num_lines-2 if num_lines > 2 else 0
 
     @staticmethod
@@ -71,12 +71,13 @@ class SwarmJob(object):
         while not SwarmJob.can_add_job():
             time.sleep(0.1)
 
-        cmd = ["sbatch"]
+        cmd = ["/usr/local/slurm/bin/sbatch"]
 
         if hold_jid:
             cmd.append("--dependency=afterany:{}".format(",".join(hold_jid)))
 
         cmd.append(self.cmd_file)
+        
         self.job_id = subprocess.check_output(cmd)
         time.sleep(0.1)
         return self.job_id

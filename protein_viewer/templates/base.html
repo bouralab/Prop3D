@@ -1,0 +1,60 @@
+<html>
+<head>
+  <title>VoxelBrowser</title>
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='bootstrap/css/bootstrap.min.css') }}">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-select/1.12.2/css/bootstrap-select.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap-slider.css') }}">
+
+  <link href="{{ url_for('static', filename='flatui/css/flat-ui.min.css') }}" rel="stylesheet">
+
+  <script type="text/javascript" src="https://code.jquery.com/jquery-3.1.1.min.js"></script>
+
+  <script src="{{ url_for('static', filename='flatui/js/flat-ui.min.js') }}"></script>
+
+  <!-- <script src="{{ url_for('static', filename='js/bootstrap-slider.js') }}"></script> -->
+
+  {% block head %}
+  {% endblock %}
+</head>
+<body>
+<nav class="navbar navbar-inverse navbar-embossed" role="navigation">
+  <!-- navbar-default navbar-lg navbar-static-top -->
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#navbar" aria-expanded="false" aria-controls="navbar">
+            <span class="sr-only">Toggle navigation</span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>\
+          </button>
+          <a class="navbar-brand" href="">VoxelBrowser</a>
+        </div>
+        <div id="navbar" class="navbar-collapse collapse">
+          <ul class="nav navbar-nav navbar-left">
+             <li class=""><a href="">Submit</a></li>
+            <li class=""><a href="">Browse</a></li>
+            <li class=""><a href="">Help</a></li>
+            <li class=""><a href="">About</a></li>
+          </ul>
+          <ul class="nav navbar-nav navbar-right">
+            <form role="search" class="navbar-form navbar-right" action="/search" method="POST">
+              <div class="input-group">
+                <input type="text" name="search" class="form-control" aria-label="..." placeholder="Quick Load PDB ID">
+              </div>
+            </form>
+          </ul>
+        </div><!--/.nav-collapse -->
+      </div>
+</nav>
+
+{% block content %}
+{% endblock %}
+
+<!-- Latest compiled and minified JavaScript -->
+<script src="//cdnjs.cloudflare.com/ajax/libs/bootstrap-table/1.11.0/bootstrap-table.min.js"></script>
+
+</body>
+
+
+</html>

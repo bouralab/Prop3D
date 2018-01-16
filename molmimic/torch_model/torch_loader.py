@@ -2,11 +2,23 @@ import os
 import traceback
 from itertools import groupby
 
-import torch
-from torch.utils.data.dataset import Dataset
-from torch.utils.data import DataLoader
+try:
+    import torch
+    from torch.utils.data.dataset import Dataset
+    from torch.utils.data import DataLoader
+except ImportError:
+    torch = None
+    Dataset = object
+    DataLoader = None
+    
 import pandas as pd
 import numpy as np
+
+try:
+    import sparseconvnet as scn
+except:
+    #Allow module to load without scn to read data
+    scn = None
 
 from molmimic.biopdbtools import Structure, InvalidPDB
 
@@ -27,26 +39,50 @@ def dense_collate(data, batch_size=1):
 
     return batch
 
-def sparse_collate(data):
-    batch = {
-        "indices": [],
-        "data": [],
-        "truth": []
+def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
+    if scn is None or not create_tensor:
+        batch = {
+            "indices": [],
+            "data": [],
+            "truth": []
+            }
+
+        def add_sample(indices, features, truth):
+            batch["indices"].append(indices)
+            batch["data"].append(features)
+            batch["truth"].append(truth)
+
+    else:
+        inputSpatialSize = torch.LongTensor(input_shape)
+        batch = {
+            "data": scn.InputBatch(3, inputSpatialSize),
+            "truth": scn.InputBatch(3, inputSpatialSize)
         }
 
-    for d in data:
-    	if d["data"] is None:
-    		continue
+        def add_sample(indices, features, truth):
+            batch["data"].addSample()
+            batch["truth"].addSample()
+            indices = torch.LongTensor(indices)
+            try:
+                batch["data"].setLocations(indices, torch.FloatTensor(features), 0) #Use 1 to remove duplicate coords?
+                batch["truth"].setLocations(indices, torch.FloatTensor(truth), 0)
+            except AssertionError:
+                #PDB didn't fit in grid?
+                pass
+            #del features
+            #del truth
 
-        batch["indices"].append(d["indices"])
-        batch["data"].append(d["data"])
-        batch["truth"].append(d["truth"])
+    for d in data:
+    	if d["data"] is None: continue
+        add_sample(d["indices"], d["data"], d["truth"])
+
+    #print "Made batch"
+    if create_tensor:
+        batch["data"].precomputeMetadata(1)
 
     return batch
 
 class IBISDataset(Dataset):
-    __xs = []
-
     def __init__(self, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, start_index=0, end_index=None, train=True):
         self.transform = transform
         self.only_aa = only_aa
@@ -56,34 +92,34 @@ class IBISDataset(Dataset):
 
         # Open and load text file including the whole training data
         data = pd.read_table(ibis_data, sep="\t")
-        self.__xs = data.loc[(data["tax_glob_group"] == tax_glob_group) & (data["n"] >= num_representatives)]
+        self.data = data.loc[(data["tax_glob_group"] == tax_glob_group) & (data["n"] >= num_representatives)]
 
         try:
             skip = "{}_skip.tab".format(os.path.splitext(ibis_data)[0])
             with open(skip) as skip_f:
                 skip_ids = [int(l.rstrip()) for l in skip_f if l]
-            osize = self.__xs.shape[0]
-            self.__xs = self.__xs.loc[~self.__xs["unique_obs_int"].isin(skip_ids)]
-            print "Skipping {} of {}, {} remaining of {}".format(len(skip_ids), osize, self.__xs.shape[0], osize)
+            osize = self.data.shape[0]
+            self.data= self.data.loc[~self.data["unique_obs_int"].isin(skip_ids)]
+            print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", len(skip_ids), osize, self.data.shape[0], osize)
         except IOError:
             print "No Skip ID file"
             pass
 
         if 0 < start_index < 1:
-            start_index *= self.__xs.shape[0]
+            start_index *= self.data.shape[0]
 
         if end_index is None:
-            end_index = self.__xs.shape[0]
+            end_index = self.data.shape[0]
         elif end_index < 1:
-            end_index *= self.__xs.shape[0]
+            end_index *= self.data.shape[0]
 
         start_index = int(start_index)
         end_index = int(end_index)
 
-        if start_index != 0 or end_index != self.__xs.shape[0]:
-            self.__xs = self.__xs.iloc[start_index:end_index]
+        if start_index != 0 or end_index != self.data.shape[0]:
+            self.data = self.data.iloc[start_index:end_index]
 
-        self.n_samples = self.__xs.shape[0]
+        self.n_samples = self.data.shape[0]
         self.train = train
 
     @classmethod
@@ -113,11 +149,11 @@ class IBISDataset(Dataset):
         return DataLoader(self, batch_size=batch_size, \
             shuffle=shuffle, num_workers=num_workers, collate_fn=sparse_collate)
 
-    def __getitem__(self, index, verbose=False):
-        datum = self.__xs.iloc[index]
+    def __getitem__(self, index, verbose=True):
+        datum = self.data.iloc[index]
         #print "Running {} ({}.{}): {}".format(datum["unique_obs_int"], datum["pdb"], datum["chain"], ",".join(["{}{}".format(i,n) for i, n in zip(datum["resi"].split(","), datum["resn"].split(","))]))
         try:
-            (data_idx, data), (truth_idx, truth) = Structure.features_from_string(
+            inidices, data, truth = Structure.features_from_string(
                 datum["pdb"],
                 datum["chain"],
                 datum["resi"],
@@ -147,7 +183,7 @@ class IBISDataset(Dataset):
                 print >> ef, trace
             raise
 
-        print "Got data for", index
+        #print "Got data for", index
 
         data = np.nan_to_num(data)
 
@@ -157,7 +193,7 @@ class IBISDataset(Dataset):
         grid_indices = []
         grid_features = []
         grid_truth = []
-        for grid_index, sample_indices in groupby(sorted(enumerate(data_idx.tolist()), key=lambda x:x[1]), key=lambda x:x[1]):
+        for grid_index, sample_indices in groupby(sorted(enumerate(indices.tolist()), key=lambda x:x[1]), key=lambda x:x[1]):
             sample_indices, _ = zip(*sample_indices)
             sample_indices = list(sample_indices)
             # print "SAME GRIDS"
@@ -189,7 +225,7 @@ class IBISDataset(Dataset):
 
     # Override to give PyTorch size of dataset
     def __len__(self):
-        return self.__xs.shape[0]
+        return self.data.shape[0]
 
 class SphereDataset(Dataset):
     def __init__(self, shape, cnt=5, r_min=10, r_max=30, border=10, sigma=20, n_samples=1000, train=True):

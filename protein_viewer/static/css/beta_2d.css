@@ -1,0 +1,46 @@
+body {
+  font-size: 12px;
+  font-weight: 400;
+  color: #525252;
+  text-align: center;
+} 
+
+line {
+  stroke: #000;
+  stroke-width: 1.px;
+}
+
+text {
+  font-size: 8px;
+}
+
+path.chord {
+  fill-opacity: .80;
+}
+
+.title {
+  text-anchor: middle;
+  fill: #3B3B3B;
+  font-weight: 300;
+  font-size: 16px;
+}
+.titleLine {
+  stroke: #DCDCDC;
+  shape-rendering: crispEdges;
+}
+
+.title-h3 {
+    margin-top: 20px;
+    margin-bottom: 10px;
+    font-size: 24px;
+    font-weight: 500;
+  line-height: 1.1;
+  color: #3B3B3B;
+}
+
+@media (min-width: 500px) {
+  .explanation {
+  width: 50%; 
+  margin: 0 auto;
+  }
+}

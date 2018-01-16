@@ -14,6 +14,7 @@ from molmimic.biopdbtools import Structure
 
 def calc_size(ibis_data):
     max_dist = 0
+    min_dist = 100
 
     data = IBISGenerator(ibis_data, input_shape=(96,96,96,59))
 
@@ -45,9 +46,12 @@ def calc_size(ibis_data):
                 dist)
 
             max_dist = max(max_dist, dist)
+            min_dist = min(min_dist, dist)
 
         print >> data_file, "#Max distance: {}".format(max_dist)
+        print >> data_file, "#Min distance: {}".format(min_dist)
         print "Max distance: {}".format(max_dist)
+        print "Min distance: {}".format(min_dist)
 
 def plot_sizes(size_data):
     max_size = 0

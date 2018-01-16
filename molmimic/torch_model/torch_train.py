@@ -32,6 +32,28 @@ import sparseconvnet as scn
 from molmimic.torch_model.torch_model import UNet3D
 from molmimic.torch_model.torch_loader import IBISDataset
 
+import subprocess
+
+def get_gpu_memory_map():
+    """Get the current gpu usage.
+
+    Returns
+    -------
+    usage: dict
+        Keys are device ids as integers.
+        Values are memory usage as integers in MB.
+    """
+    result = subprocess.check_output(
+        [
+            'nvidia-smi', '--query-gpu=memory.used',
+            '--format=csv,nounits,noheader'
+        ])
+    # Convert lines into a dictionary
+    gpu_memory = [int(x) for x in result.strip().split('\n')]
+    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
+    return gpu_memory_map
+    #return {torch.cuda.getMemoryUsage(i) for i in xrange(torch.cuda.device_count())}
+
 class ModelStats(object):
     all_dice = {"train":[], "val":[]}
     all_accuracies = {"train":[], "val":[]}
@@ -159,7 +181,7 @@ class ModelStats(object):
         pp.close()
         plt.close(f)
 
-def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True, save_final=True, only_aa=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, train_full=False, validate_full=False):
+def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True, save_final=True, only_aa=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, train_full=False, validate_full=False, no_batch_norm=False):
     if model_prefix is None:
         model_prefix = "./molmimic_model_{}".format(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
 
@@ -196,7 +218,7 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
 
     dtype = 'torch.cuda.FloatTensor' if torch.cuda.is_available() else 'torch.FloatTensor'
 
-    model = UNet3D(nFeatures, 1)
+    model = UNet3D(nFeatures, 1, batchnorm=not no_batch_norm)
     model.type(dtype)
     #optimizer = Adam(model.parameters(), lr=initial_learning_rate)
     optimizer = SGD(model.parameters(),
@@ -227,6 +249,8 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
         print "Epoch {}/{}".format(epoch, num_epochs - 1)
         print "-" * 10
 
+        #print get_gpu_memory_map()
+
         # Each epoch has a training and validation phase
         for phase in ['train', 'val']:
             datasets[phase].epoch = epoch
@@ -245,8 +269,19 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                 #Input will be turned SparseConvNetTensor
                 print "{} Batch: {} of {}".format(phase.title(), data_iter_num, num_batches),
                 datasets[phase].batch = data_iter_num
+                #print type(data["data"]), data["data"].__class__.__name__, data["data"].__class__.__name__ == "InputBatch"
+                if data["data"].__class__.__name__ == "InputBatch":
+                    sparse_input = True
+                    inputs = data["data"]
+                    labels = data["truth"]
+                    if use_gpu:
+                        inputs = inputs.cuda().to_variable(requires_grad=True)
+                        labels = labels.cuda().to_variable()
+                    else:
+                        inputs = inputs.to_variable(requires_grad=True)
+                        labels = labels.to_variable()
 
-                if isinstance(data["data"], (list, tuple)):
+                elif isinstance(data["data"], (list, tuple)):
                     sparse_input = True
                     inputs = scn.InputBatch(3, inputSpatialSize)
                     labels = scn.InputBatch(3, inputSpatialSize)
@@ -266,7 +301,9 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                             #PDB didn't fit in grid?
                             continue
 
-                    inputs.precomputeMetadata(3)
+                    del data
+
+                    inputs.precomputeMetadata(1)
 
                     if use_gpu:
                         inputs = inputs.cuda().to_variable(requires_grad=True)
@@ -274,15 +311,22 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                     else:
                         inputs = inputs.to_variable(requires_grad=True)
                         labels = labels.to_variable()
+
                 elif isinstance(data["data"], torch.FloatTensor):
                     #Input is dense
+                    print "Input is Dense"
                     sparse_input = False
-                    inputs = Variable(data["data"], requires_grad=True)
-                    inputs = scn.DenseToSparse(3)(inputs)
-                    labels = Variable(data["truth"])
                     if use_gpu:
                         inputs = inputs.cuda()
                         labels = labels.cuda()
+                    inputs = Variable(data["data"], requires_grad=True)
+                    inputs = scn.DenseToSparse(3)(inputs)
+                    try:
+                        inputs = inputs.cuda().to_variable(requires_grad=True)
+                    except:
+                        pass
+                    labels = Variable(data["truth"])
+                    
                 else:
                     raise RuntimeError("Invalid data from dataset")
 
@@ -290,19 +334,21 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                 optimizer.zero_grad()
 
                 # forward
+                #print inputs
                 outputs = model(inputs)
 
                 if sparse_input:
                     loss = criterion(outputs.features, labels.features)
 
                     if math.isnan(loss.data[0]):
+                        print "Loss is Nan?"
                         import pdb; pdb. set_trace()
 
                     stats.update(outputs.features.data, labels.features.data, loss.data[0])
                 else:
                     outputs = scn.SparseToDense(3, 1)(outputs)
-                    loss = criterion(outputs, labels)
-                    stats.update(outputs.data, labels.data, loss.data[0])
+                    loss = criterion(outputs.cpu(), labels.cpu())
+                    stats.update(outputs.data.cpu().view(-1), labels.data.cpu().view(-1), loss.data[0])
 
                 # backward + optimize only if in training phase
                 if phase == 'train':
@@ -325,6 +371,10 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
             if check_point:
                 torch.save(epoch, check_point_epoch_file)
                 torch.save(model.state_dict(), check_point_model_file)
+
+            model.set_log_level(1)
+
+            #print get_gpu_memory_map()
 
     stats.plot_final()
 
@@ -349,7 +399,13 @@ class DiceLoss(_Loss):
         tflat = target.view(-1)
         intersection = (iflat * tflat).sum()
 
+        #print iflat
+        #print tflat
+        #print intersection
+
         dice = ((2. * intersection + self.smooth) / ((iflat.sum() + tflat.sum() + self.smooth)))
+
+
 
         return dice
 
@@ -382,7 +438,7 @@ def parse_args():
         "--shape",
         type=int,
         nargs=3,
-        default=(256,256,256))
+        default=(512,512,512)) #(256,256,256))
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -428,6 +484,12 @@ def parse_args():
         default=False,
         action="store_true",
         help="Validate the network using full protein rather than just the binding site"
+    )
+    parser.add_argument(
+        "--no-batch-norm",
+        default=False,
+        action="store_true",
+        help="Do not use BatchNorm after each conv layer"
     )
 
     gpus = parser.add_mutually_exclusive_group()
@@ -480,5 +542,6 @@ if __name__ == "__main__":
         learning_rate_epochs  = args.learning_rate_epochs,
         data_split            = args.data_split,
         train_full            = args.train_full,
-        validate_full         = args.validate_full
+        validate_full         = args.validate_full,
+        no_batch_norm         = args.no_batch_norm
     )
