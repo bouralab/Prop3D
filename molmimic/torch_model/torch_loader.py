@@ -62,10 +62,10 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
         def add_sample(indices, features, truth):
             batch["data"].addSample()
             batch["truth"].addSample()
-            indices = torch.LongTensor(indices)
+            indices = torch.from_numpy(indices)
             try:
-                batch["data"].setLocations(indices, torch.FloatTensor(features), 0) #Use 1 to remove duplicate coords?
-                batch["truth"].setLocations(indices, torch.FloatTensor(truth), 0)
+                batch["data"].setLocations(indices, torch.from_numpy(features), 0) #Use 1 to remove duplicate coords?
+                batch["truth"].setLocations(indices, torch.from_numpy(truth), 0)
             except AssertionError:
                 #PDB didn't fit in grid?
                 pass
@@ -83,9 +83,11 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
     return batch
 
 class IBISDataset(Dataset):
-    def __init__(self, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, start_index=0, end_index=None, train=True):
+    def __init__(self, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, only_atom=False, expand_atom=False, start_index=0, end_index=None, train=True):
         self.transform = transform
         self.only_aa = only_aa
+        self.only_atom = only_atom
+        self.expand_atom = expand_atom
         self.input_shape = input_shape
         self.epoch = None
         self.batch = None
@@ -123,7 +125,7 @@ class IBISDataset(Dataset):
         self.train = train
 
     @classmethod
-    def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, train_full=False, validate_full=False):
+    def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, only_atom=False, expand_atom=False, train_full=False, validate_full=False):
         print "Train full", train_full, "Validate full", validate_full
         train = cls(
             ibis_data,
@@ -133,6 +135,8 @@ class IBISDataset(Dataset):
             num_representatives=num_representatives,
             end_index=data_split,
             only_aa=only_aa,
+            only_atom=only_atom,
+            expand_atom=expand_atom,
             train=train_full)
         validate = cls(
             ibis_data,
@@ -142,6 +146,8 @@ class IBISDataset(Dataset):
             num_representatives=num_representatives,
             start_index=data_split,
             only_aa=only_aa,
+            expand_atom=expand_atom,
+            only_atom=only_atom,
             train=validate_full)
         return {"train":train, "val":validate}
 
@@ -153,7 +159,7 @@ class IBISDataset(Dataset):
         datum = self.data.iloc[index]
         #print "Running {} ({}.{}): {}".format(datum["unique_obs_int"], datum["pdb"], datum["chain"], ",".join(["{}{}".format(i,n) for i, n in zip(datum["resi"].split(","), datum["resn"].split(","))]))
         try:
-            inidices, data, truth = Structure.features_from_string(
+            indices, data, truth = Structure.features_from_string(
                 datum["pdb"],
                 datum["chain"],
                 datum["resi"],
@@ -161,7 +167,8 @@ class IBISDataset(Dataset):
                 input_shape=self.input_shape,
                 rotate=self.transform,
                 only_aa=self.only_aa,
-                expand_features=False,
+                only_atom=self.only_atom,
+                expand_atom=self.expand_atom,
                 include_full_protein=self.train)
         except (KeyboardInterrupt, SystemExit):
             raise
@@ -184,41 +191,40 @@ class IBISDataset(Dataset):
             raise
 
         #print "Got data for", index
-
-        data = np.nan_to_num(data)
+        #data = np.nan_to_num(data)
 
         #print truth
         #print truth.shape
 
-        grid_indices = []
-        grid_features = []
-        grid_truth = []
-        for grid_index, sample_indices in groupby(sorted(enumerate(indices.tolist()), key=lambda x:x[1]), key=lambda x:x[1]):
-            sample_indices, _ = zip(*sample_indices)
-            sample_indices = list(sample_indices)
-            # print "SAME GRIDS"
-            #print data[sample_indices].shape
-            # features = np.sum(data[sample_indices], axis=0)
-            # #assert np.argmax(features) < data[sample_indices].shape[1]
-            # features = np.eye(1, 21, np.argmax(features))[0].tolist() #One-hot
-            # grid_indices.append(grid_index)
-            # grid_features.append(features)
-            # print "NEW FEATURES"
-            # print features
+        # grid_indices = []
+        # grid_features = []
+        # grid_truth = []
+        # for grid_index, sample_indices in groupby(sorted(enumerate(indices.tolist()), key=lambda x:x[1]), key=lambda x:x[1]):
+        #     sample_indices, _ = zip(*sample_indices)
+        #     sample_indices = list(sample_indices)
+        #     # print "SAME GRIDS"
+        #     #print data[sample_indices].shape
+        #     # features = np.sum(data[sample_indices], axis=0)
+        #     # #assert np.argmax(features) < data[sample_indices].shape[1]
+        #     # features = np.eye(1, 21, np.argmax(features))[0].tolist() #One-hot
+        #     # grid_indices.append(grid_index)
+        #     # grid_features.append(features)
+        #     # print "NEW FEATURES"
+        #     # print features
 
-            if verbose and len(sample_indices) > 1:
-                print "More than one atom per voxel in", datum["pdb"], datum["chain"], datum["unique_obs_int"]
-                print "   ", len(sample_indices), "at", grid_index, "but contain the same residue" if data[sample_indices[0]].tolist()==data[sample_indices[1]].tolist() else "but do not contain the same residue"
-                print "   Using the first found atom"
+        #     if verbose and len(sample_indices) > 1:
+        #         print "More than one atom per voxel in", datum["pdb"], datum["chain"], datum["unique_obs_int"]
+        #         print "   ", len(sample_indices), "at", grid_index, "but contain the same residue" if data[sample_indices[0]].tolist()==data[sample_indices[1]].tolist() else "but do not contain the same residue"
+        #         print "   Using the first found atom"
 
-            grid_indices.append(grid_index)
-            grid_features.append(data[sample_indices[0]].tolist())
-            grid_truth.append(truth[sample_indices[0]].tolist())
+        #     grid_indices.append(grid_index)
+        #     grid_features.append(data[sample_indices[0]].tolist())
+        #     grid_truth.append(truth[sample_indices[0]].tolist())
 
         sample = {
-            "indices": grid_indices,
-            "data": grid_features,
-            "truth": grid_truth #np.ones((len(grid_indices), 1), dtype=int).tolist()
+            "indices": indices,
+            "data": data,
+            "truth": truth #np.ones((len(grid_indices), 1), dtype=int).tolist()
             }
 
         return sample

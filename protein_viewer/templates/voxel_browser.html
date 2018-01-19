@@ -33,7 +33,7 @@
         <input type="checkbox" checked data-toggle="switch" data-on-color="default" data-off-color="primary" id="expand_atom" /></h4>
       </div>
       <div class="col-xs-6">
-        <div id="voxel_browser" class="vertical-align:top;"></div>
+        <div id="voxel_browser" class="width:800px;height:800px;vertical-align:top;"></div>
         <!--<svg id="voxel_browser" width="316" height="500" viewbox="0 0 316 500" style"display: block; margin: auto; text-align:center;" preserveAspectRatio="xMidYMin"></svg>-->
       </div>
       <div class="col-xs-3">
@@ -50,10 +50,34 @@
   </div>
 </div>
 <script src="https://d3js.org/d3.v4.min.js"></script>
-<script src="https://unpkg.com/d3-3d@0.0.7/build/d3-3d.min.js"></script>
+<script src="{{ url_for('static', filename='js/three.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/TrackballControls.js') }}"></script>
 <script type="text/javascript">
-var origin = [0, 0], scale = 2, cubesData = [], xGrid_data = [], yLine=[], alpha = 0, beta = 0, startAngle = Math.PI/6;
-var svg, cubes3D, grid3d, cubesGroup, color_type, mx, my, mouseX, mouseY, voxel_slider;
+var origin = [0, 0], scale = 2, cubesData = [], xGrid_data = [], yLine=[], alpha = 0, beta = 0, startAngle = Math.PI/6, objects = [], isMouseDown=false;
+var svg, cubes3D, grid3d, cubesGroup, color_type, mx, my, mouseX, mouseY, voxel_slider, voxel_size_value, volume_value, scene, camera, renderer, voxel_with_color, voxelGeo, raycaster, mouse;
+
+var colors = [
+  "#1f77b4",
+  "#aec7e8",
+  "#ff7f0e",
+  "#ffbb78",
+  "#2ca02c",
+  "#98df8a",
+  "#d62728",
+  "#ff9896",
+  "#9467bd",
+  "#c5b0d5",
+  "#8c564b",
+  "#c49c94",
+  "#e377c2",
+  "#f7b6d2",
+  "#7f7f7f",
+  "#c7c7c7",
+  "#bcbd22",
+  "#dbdb8d",
+  "#17becf",
+  "#9edae5"
+]
 
 $(function() {
 
@@ -68,7 +92,7 @@ $(function() {
         range: "min"
       }).on("change", changeVoxelSize)
     }
-    var voxel_size_value = 0.5;
+    voxel_size_value = 0.5;
 
     var $volslider = $("#volume_slider");
     if ($volslider.length > 0) {
@@ -82,109 +106,83 @@ $(function() {
       })
       //.addSliderSegments($volslider.slider("option").max);
     }
-    var volume_value = 256.0;
+    volume_value = 256.0;
 
-    $('#expand_atom').bootstrapSwitch({onSwitchChange:function(){
+    //$('#expand_atom').bootstrapSwitch({onSwitchChange:change_expand_atom});
 
-    }});
+    camera = new THREE.PerspectiveCamera( 75, 1, 0.1, 1000 );
+    camera.position.set(256,256,256 );
+    camera.lookAt( new THREE.Vector3() );
 
-    // for(var z = 0; z < 512; z++){
-    //     for(var x = 0; x < 512; x++){
-    //         xGrid_data.push([{x:x, y:0, z:z}]);
-    //     }
-    // }
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color( 0xf0f0f0 );
+    voxelGeo = new THREE.BoxGeometry(1,1,1);
+    voxel_with_color = [];
+    $.each(colors, function(i, color){
+      voxel_with_color.push(new THREE.MeshBasicMaterial({color:color}));
+    })
 
-    var key = function(d){ return d.id; };
+    raycaster = new THREE.Raycaster();
+		mouse = new THREE.Vector2();
+		var geometry = new THREE.PlaneBufferGeometry( 1000, 1000 );
+		geometry.rotateX( - Math.PI / 2 );
+		plane = new THREE.Mesh( geometry, new THREE.MeshBasicMaterial( { visible: false } ) );
+		scene.add( plane );
+		objects.push( plane );
 
-    // grid3d = d3._3d()
-    //         .shape('GRID', 512)
-    //         .origin(origin)
-    //         // .x(function(d){ return d.x; })
-    //         // .y(function(d){ return d.y; })
-    //         // .z(function(d){ return d.z; })
-    //         //.rotateY( startAngle)
-    //         //.rotateX(-startAngle)
-    //         .scale(scale);
+    // var gridHelper = new THREE.GridHelper(512,256);
+    // scene.add( gridHelper );
+    var geometry = new THREE.Geometry();
+    geometry.vertices.push( new THREE.Vertex( new THREE.Vector3( 0, 0, 0 ) ) );
+    geometry.vertices.push( new THREE.Vertex( new THREE.Vector3( 256, 0, 0 ) ) );
 
-    cubes3D = d3._3d()
-        .shape('CUBE')
-        .x(function(d){ return d.x; })
-        .y(function(d){ return d.y; })
-        .z(function(d){ return d.z; })
-        .rotateY( startAngle)
-        .rotateX(-startAngle)
-        .origin(origin)
-        .scale(scale);
+    linesMaterial = new THREE.LineColorMaterial( 0x000000, 0.2 );
 
-    // var yScale3d = d3._3d()
-    //     .shape('LINE_STRIP')
-    //     .origin(origin)
-    //     //rotateY( startAngle)
-    //     //.rotateX(-startAngle)
-    //     .scale(scale);
+    for ( var i = 0; i < 128; i ++ ) {
 
-    svg = d3.select("div#voxel_browser")
-       .append("div")
-       .classed("svg-container", true) //container class to make it responsive
-       .append("svg")
-       //responsive SVG needs these 2 attributes and no width and height attr
-       .attr("preserveAspectRatio", "xMinYMin meet")
-       .attr("viewBox", "0 0 600 400")
-       //class to make it responsive
-       .classed("svg-content-responsive", true)
-       //.attr("width", "100%")
-       //.attr("height", "100%")
-       .call(d3.zoom().on("zoom", function () {
-              svg.attr("transform", d3.event.transform)
-        }));
+      var line = new THREE.Line( geometry, linesMaterial );
+      line.position.z = ( i * 2 ) - 256;
+      scene.addObject( line );
 
-    console.log(svg)
+      var line = new THREE.Line( geometry, linesMaterial );
+      line.position.x = ( i * 2 ) - 256;
+      line.rotation.y = 90 * Math.PI / 180;
+      scene.addObject( line );
 
-   /* ----------- GRID ----------- */
+    }
 
-    // var xGrid = svg.selectAll('path.grid').data(xGrid_data, key);
-    // xGrid.enter()
-    //      .append('path')
-    //      .attr('class', 'grid')
-    //      .attr('fill-opacity', 0.9)
-    //      .classed('_3d', true)
-    //      .merge(xGrid)
-    //      .attr('stroke', 'black')
-    //      .attr('stroke-width', 0.3)
-    //      .attr('fill', function(d){ return 'lightgrey'; })
-    //      .attr('fill-opacity', 0.9)
-    //      .attr('d', grid3d.draw);
-    // xGrid.exit().remove();
+    // Lights
+  	var ambientLight = new THREE.AmbientLight( 0x606060 );
+  	scene.add( ambientLight );
 
-    /* ----------- y-Scale Text ----------- */
+  	var directionalLight = new THREE.DirectionalLight( 0xffffff );
+  	directionalLight.position.set( 1, 0.75, 0.5 ).normalize();
+  	scene.add( directionalLight );
 
-    // d3.range(0, 512, 1).forEach(function(d){ yLine.push([0, -d, 0]); });
+  	renderer = new THREE.WebGLRenderer( { antialias: true } );
+  	renderer.setPixelRatio( window.devicePixelRatio );
+  	renderer.setSize(800,800);// $("#voxel_browser").innerWidth, $("#voxel_browser").innerHeight );
+  	$("#voxel_browser").append( renderer.domElement );
 
-    // var yText = svg.selectAll('text.yText').data(yLine[0]);
+    // var controls = new THREE.TrackballControls( camera );
+    // controls.rotateSpeed = 3.6;
+    // controls.zoomSpeed = 0.8;
+    // controls.panSpeed = 1;
 
-    // yText
-    //     .enter()
-    //     .append('text')
-    //     .attr('class', '_3d yText')
-    //     .attr('dx', '.3em')
-    //     .merge(yText)
-    //     .each(function(d){
-    //         d.centroid = {x: d.rotated.x, y: d.rotated.y, z: d.rotated.z};
-    //     })
-    //     .attr('x', function(d){ return d.x; })
-    //     .attr('y', function(d){ return d.y; })
-    //     .text(function(d){ return d[1] <= 0 ? d[1] : ''; });
+    // controls.noZoom = false;
+    // controls.noPan = false;
 
-    // yText.exit().remove();
+    // controls.staticMoving = false;
+    // controls.dynamicDampingFactor = 0.12;
 
-    cubesGroup = svg.append('g').attr('class', 'cubes')
-    svg.call(d3.drag().on('drag', dragged).on('start', dragStart).on('end', dragEnd)).append('g');
+    // controls.enabled = true;
 
-    draw_voxels("{{url_for('get_protein')}}?pdb={{request.args.get('pdb')}}&chain={{request.args.get('chain')}}")
+    // controls.addEventListener( 'change', render );
 
-    voxel_slider = $('#voxel_slider').slider()
-		    .on('slide', changeVoxelSize)
-		    .data('slider');
+    document.addEventListener( 'mousewheel', onDocumentMouseWheel, false );
+    document.addEventListener( 'mousewheel', onDocumentMouseWheel, false );
+
+    draw_voxels()
 
     $('#feature_table').bootstrapTable({
       height:750,
@@ -211,130 +209,119 @@ HIS pale blue [130,130,210] 8282D2
 PRO flesh [220,150,130] DC9682
 */
 
+function onDocumentMouseDown( event ) {
+
+        event.preventDefault();
+
+        isMouseDown = true;
+        mouse.x = event.clientX;
+        mouse.y = event.clientY;
+}
+
+// function onDocumentMouseDown( event ) {
+//     event.preventDefault();
+//     mouse.x = ( event.clientX / renderer.domElement.clientWidth ) * 2 - 1;
+//     mouse.y = - ( event.clientY / renderer.domElement.clientHeight ) * 2 + 1;
+//     raycaster.setFromCamera( mouse, camera );
+//     var intersects = raycaster.intersectObjects( objects );
+//     if ( intersects.length > 0 ) {
+//         //intersects[ 0 ].object.material.color.set('red');
+//         //intersects[ 0 ].object.geometry.scale(1.1,1.1,1.1);
+//         if (selected === 0) {
+//             selected = 1;
+//             selectedObject = intersects[ 0 ].object;
+//             selectedObject.material.color.set('red');
+//             console.log(selectedObject.position.x);
+//         } else {
+//             selected = 0;
+//             var geometry = new THREE.Geometry();
+//             geometry.vertices.push(intersects[ 0 ].object.position);
+//             geometry.vertices.push(selectedObject.position);
+//             var line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0x0000ff }));
+//             scene.add(line);
+
+//             selectedObject.material.color.set('black');
+//         }
+
+//     }
+// }
+
+function onDocumentMouseMove( event ) {
+
+    event.preventDefault();
+
+    if ( isMouseDown ) {
+
+        theta = - ( ( event.clientX - onMouseDownPosition.x ) * 0.5 )
+                + onMouseDownTheta;
+        phi = ( ( event.clientY - onMouseDownPosition.y ) * 0.5 )
+              + onMouseDownPhi;
+
+        phi = Math.min( 180, Math.max( 0, phi ) );
+
+        camera.position.x = radious * Math.sin( theta * Math.PI / 360 )
+                            * Math.cos( phi * Math.PI / 360 );
+        camera.position.y = radious * Math.sin( phi * Math.PI / 360 );
+        camera.position.z = radious * Math.cos( theta * Math.PI / 360 )
+                            * Math.cos( phi * Math.PI / 360 );
+        camera.updateMatrix();
+
+    }
+
+    mouse3D = projector.unprojectVector(
+        new THREE.Vector3(
+            ( event.clientX / renderer.domElement.width ) * 2 - 1,
+            - ( event.clientY / renderer.domElement.height ) * 2 + 1,
+            0.5
+        ),
+        camera
+    );
+    ray.direction = mouse3D.subSelf( camera.position ).normalize();
+
+    interact();
+    render();
+
+}
+
+function onWindowResize() {        
+    camera.left = window.innerWidth / - 2;
+    camera.right = window.innerWidth / 2;
+    camera.top = window.innerHeight / 2;
+    camera.bottom = window.innerHeight / - 2;
+    camera.aspect = window.innerWidth / window.innerHeight;        
+
+    renderer.setSize( window.innerWidth, window.innerHeight );
+}
+
+function onDocumentMouseWheel( event ) {
+    console.log("scroll");
+    var fovMAX = 160;
+    var fovMIN = 1;
+
+    camera.fov -= event.wheelDeltaY * 0.05;
+    camera.fov = Math.max( Math.min( camera.fov, fovMAX ), fovMIN );
+    camera.updateProjectionMatrix(); //projectionMatrix = new THREE.Matrix4().makePerspective(camera.fov, 1.0, camera.near, camera.far);
+    render();
+}
+
 function draw_voxels(){
   var json_file = get_protein_url();
   d3.json(json_file, function(data) {
-    cubesData = [];
-    color_type = data["color_type"];
-    var cnt = 0;
     $.each(data["indices"], function(i, coord){
-      var _cube = makeCube(coord[0], coord[1], coord[2])
-      _cube.id = 'cube_' + cnt++;
-      _cube.color = data["colors"][i];
-      cubesData.push(_cube);
+      var voxel = new THREE.Mesh( voxelGeo, voxel_with_color[data["colors"][i]] );
+			voxel.position.copy(new THREE.Vector3(coord[0], coord[1], coord[2]));
+			//voxel.position.divideScalar( 50 ).floor().multiplyScalar( 50 ).addScalar( 25 );
+			scene.add( voxel );
+			objects.push( voxel );
     });
-    console.log(cubesData);
-    processData(cubes3D(cubesData), 1000, data["color_type"]);
+
+    render();
     console.log("done drawing voxels");
   });
 }
 
-// d3.select('#voxel_browser').append("rect")
-//     .attr("width", "100%")
-//     .attr("height", "100%")
-//     .attr("fill", "pink");
-
-
-function processData(data, tt, color_type){
-    if(color_type=="category"){
-      var color = d3.scaleOrdinal(d3.schemeCategory20);
-    }
-    else{
-      var color = d3.scaleLinear().domain([0,1])
-        .interpolate(d3.interpolateHcl)
-        .range([d3.rgb("#08306b"), d3.rgb('#a50f15')]);
-    }
-
-    /* --------- CUBES ---------*/
-
-    var cubes = cubesGroup.selectAll('g.cube').data(data, function(d){ return d.id });
-
-    var ce = cubes
-        .enter()
-        .append('g')
-        .attr('class', 'cube')
-        .attr('fill', function(d){ return color(d.color); })
-        .attr('stroke', function(d){ return color(d.color); })
-        .on("click", clickCube)
-        .merge(cubes)
-        .sort(cubes3D.sort);
-
-    cubes.exit().remove();
-
-    /* --------- FACES ---------*/
-
-    var faces = cubes.merge(ce).selectAll('path.face').data(function(d){ return d.faces; }, function(d){ return d.face; });
-
-    faces.enter()
-        .append('path')
-        .attr('class', 'face')
-        .attr('fill-opacity', 0.6)
-        .classed('_3d', true)
-        .merge(faces)
-        .transition().duration(tt)
-        .attr('d', cubes3D.draw);
-
-    faces.exit().remove();
-
-
-    /* --------- TEXT ---------*/
-
-    // var texts = cubes.merge(ce).selectAll('text.text').data(function(d){
-    //     var _t = d.faces.filter(function(d){
-    //         return d.face === 'top';
-    //     });
-    //     return [{height: d.height, centroid: _t[0].centroid}];
-    // });
-
-    // texts
-    //     .enter()
-    //     .append('text')
-    //     .attr('class', 'text')
-    //     .attr('dy', '-.7em')
-    //     .attr('text-anchor', 'middle')
-    //     .attr('font-family', 'sans-serif')
-    //     .attr('font-weight', 'bolder')
-    //     .attr('x', function(d){ return origin[0] + scale * d.centroid.x })
-    //     .attr('y', function(d){ return origin[1] + scale * d.centroid.y })
-    //     .classed('_3d', true)
-    //     .merge(texts)
-    //     .transition().duration(tt)
-    //     .attr('fill', 'black')
-    //     .attr('stroke', 'none')
-    //     .attr('x', function(d){ return origin[0] + scale * d.centroid.x })
-    //     .attr('y', function(d){ return origin[1] + scale * d.centroid.y })
-    //     .tween('text', function(d){
-    //         var that = d3.select(this);
-    //         var i = d3.interpolateNumber(+that.text(), Math.abs(d.height));
-    //         return function(t){
-    //             that.text(i(t).toFixed(1));
-    //         };
-    //     });
-
-    // texts.exit().remove();
-
-    /* --------- SORT TEXT & FACES ---------*/
-
-    ce.selectAll('._3d').sort(d3._3d().sort);
-
-}
-
-function dragStart(){
-    mx = d3.event.x;
-    my = d3.event.y;
-}
-
-function dragged(){
-    mouseX = mouseX || 0;
-    mouseY = mouseY || 0;
-    beta   = (d3.event.x - mx + mouseX) * Math.PI / 230 ;
-    alpha  = (d3.event.y - my + mouseY) * Math.PI / 230  * (-1);
-    processData(cubes3D.rotateY(beta + startAngle).rotateX(alpha - startAngle)(cubesData), 0, color_type);
-}
-
-function dragEnd(){
-    mouseX = d3.event.x - mx + mouseX;
-    mouseY = d3.event.y - my + mouseY;
+function render() {
+  renderer.render( scene, camera );
 }
 
 function clickCube(cube){
@@ -351,19 +338,6 @@ function clickCube(cube){
 
         $('#feature_table').bootstrapTable('refresh', {url: "{{url_for('get_atom_features')}}?atom_serial="+atom_serial});
     });
-}
-
-function makeCube(x, y, z){
-    return [
-        {x: x,   y: y,   z: z},   // FRONT TOP LEFT
-        {x: x,   y: y+1, z: z},   // FRONT BOTTOM LEFT
-        {x: x+1, y: y+1, z: z},   // FRONT BOTTOM RIGHT
-        {x: x+1, y: y,   z: z},   // FRONT TOP RIGHT
-        {x: x,   y: y,   z: z+1}, // BACK  TOP LEFT
-        {x: x,   y: y+1, z: z+1}, // BACK  BOTTOM LEFT
-        {x: x+1, y: y+1, z: z+1}, // BACK  BOTTOM RIGHT
-        {x: x+1, y: y,   z: z+1}, // BACK  TOP RIGHT
-    ];
 }
 
 function changeVoxelSize(){
