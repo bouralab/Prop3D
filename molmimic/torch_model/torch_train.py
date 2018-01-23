@@ -181,7 +181,7 @@ class ModelStats(object):
         pp.close()
         plt.close(f)
 
-def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True, save_final=True, only_aa=False, only_atom=False, expand_atom=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, train_full=False, validate_full=False, no_batch_norm=False):
+def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True, save_final=True, only_aa=False, only_atom=False, expand_atom=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, train_full=False, validate_full=False, course_grained=False, no_batch_norm=False):
     if model_prefix is None:
         model_prefix = "./molmimic_model_{}".format(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
 
@@ -206,7 +206,8 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
             expand_atom=expand_atom,
             data_split=data_split,
             train_full=train_full,
-            validate_full=validate_full)
+            validate_full=validate_full,
+            course_grained=course_grained)
         if only_atom:
         	nFeatures = 5
         elif only_aa:
@@ -333,7 +334,7 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                     except:
                         pass
                     labels = Variable(data["truth"])
-                    
+
                 else:
                     raise RuntimeError("Invalid data from dataset")
 
@@ -503,6 +504,12 @@ def parse_args():
         help="Validate the network using full protein rather than just the binding site"
     )
     parser.add_argument(
+        "--course-grained",
+        default=False,
+        action="store_true",
+        help="Validate the network using full protein rather than just the binding site"
+    )
+    parser.add_argument(
         "--no-batch-norm",
         default=False,
         action="store_true",
@@ -562,5 +569,6 @@ if __name__ == "__main__":
         data_split            = args.data_split,
         train_full            = args.train_full,
         validate_full         = args.validate_full,
+        course_grained        = args.course_grained,
         no_batch_norm         = args.no_batch_norm
     )

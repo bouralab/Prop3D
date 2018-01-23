@@ -10,7 +10,7 @@ except ImportError:
     torch = None
     Dataset = object
     DataLoader = None
-    
+
 import pandas as pd
 import numpy as np
 
@@ -83,10 +83,11 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
     return batch
 
 class IBISDataset(Dataset):
-    def __init__(self, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, only_atom=False, expand_atom=False, start_index=0, end_index=None, train=True):
+    def __init__(self, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, only_atom=False, course_grained=False, expand_atom=False, start_index=0, end_index=None, train=True):
         self.transform = transform
         self.only_aa = only_aa
         self.only_atom = only_atom
+        self.course_grained = course_grained
         self.expand_atom = expand_atom
         self.input_shape = input_shape
         self.epoch = None
@@ -125,7 +126,7 @@ class IBISDataset(Dataset):
         self.train = train
 
     @classmethod
-    def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, only_atom=False, expand_atom=False, train_full=False, validate_full=False):
+    def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, only_atom=False, course_grained=False, expand_atom=False, train_full=False, validate_full=False):
         print "Train full", train_full, "Validate full", validate_full
         train = cls(
             ibis_data,
@@ -136,6 +137,7 @@ class IBISDataset(Dataset):
             end_index=data_split,
             only_aa=only_aa,
             only_atom=only_atom,
+            course_grained=course_grained,
             expand_atom=expand_atom,
             train=train_full)
         validate = cls(
@@ -146,6 +148,7 @@ class IBISDataset(Dataset):
             num_representatives=num_representatives,
             start_index=data_split,
             only_aa=only_aa,
+            course_grained=course_grained,
             expand_atom=expand_atom,
             only_atom=only_atom,
             train=validate_full)
@@ -157,6 +160,9 @@ class IBISDataset(Dataset):
 
     def __getitem__(self, index, verbose=True):
         datum = self.data.iloc[index]
+        #datum = self.data.loc[(self.data["pdb"]=="1JY3")&(self.data["chain"]=="Q")].iloc[0]
+        print datum
+
         #print "Running {} ({}.{}): {}".format(datum["unique_obs_int"], datum["pdb"], datum["chain"], ",".join(["{}{}".format(i,n) for i, n in zip(datum["resi"].split(","), datum["resn"].split(","))]))
         try:
             indices, data, truth = Structure.features_from_string(
@@ -168,6 +174,7 @@ class IBISDataset(Dataset):
                 rotate=self.transform,
                 only_aa=self.only_aa,
                 only_atom=self.only_atom,
+                course_grained=self.course_grained,
                 expand_atom=self.expand_atom,
                 include_full_protein=self.train)
         except (KeyboardInterrupt, SystemExit):

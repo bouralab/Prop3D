@@ -126,15 +126,15 @@ class SelectChain(PDB.Select):
     def accept_chain(self, chain):
         return chain.get_id() == self.chain
 
-    # def accept_residue(self, residue):
-    #     """Remove HETATMS"""
-    #     hetatm_flag, resseq, icode = residue.get_id()
-    #     return hetatm_flag == " "
+    def accept_residue(self, residue):
+        """Remove HETATMS"""
+        hetatm_flag, resseq, icode = residue.get_id()
+        return hetatm_flag == " " or residue.get_resname() != "HOH"
 
     def accept_atom(self, atom):
         """Remove hydrogens"""
         name = atom.get_id()
-        return not _hydrogen.match(name)
+        return not _hydrogen.match(name) and atom.altloc == " "
 
 def extract_chain(structure, chain, pdb):
     chain = chain.upper()
@@ -148,7 +148,7 @@ def extract_chain(structure, chain, pdb):
 class Structure(object):
     nFeatures = 59
 
-    def __init__(self, pdb, chain, path=None, id=None, snapshot=True, input_format="pdb", force_feature_calculation=False):
+    def __init__(self, pdb, chain, path=None, id=None, snapshot=True, course_grained=True, input_format="pdb", force_feature_calculation=False):
         if path is None and not os.path.isfile(pdb) and len(pdb) == 4:
             path = "{}/pdb/{}/pdb{}.ent.gz".format(os.environ.get("PDB_SNAPSHOT", "/pdb"), pdb[1:3].lower(), pdb.lower())
 
@@ -226,8 +226,9 @@ class Structure(object):
         self.starting_index_seq = None
         self.starting_index_struc = None
         self.volume = 256
-        self.voxel_size = 0.5
         self.id = "{}_{}{}".format(self.pdb, self.chain, "_{}".format(id) if id else "")
+        self.course_grained = course_grained
+        self.nFeatures = 59 if not course_grained else 36
 
         #Creates self.voxels
         self.set_voxel_size(0.5)
@@ -265,7 +266,7 @@ class Structure(object):
         #     print "Canot read seq file:", "{}/sequences/pdb_seqres.txt".format(os.environ.get("PDB_SNAPSHOT", "/pdb"))
 
     @staticmethod
-    def features_from_string(pdb, chain, resi=None, id=None, input_shape=(96,96,96), batch_index=None, only_aa=False, only_atom=False, grid=True, return_data=True, return_truth=True, rotate=True, force_feature_calculation=False, expand_atom=True, include_full_protein=False):
+    def features_from_string(pdb, chain, resi=None, id=None, input_shape=(96,96,96), batch_index=None, only_aa=False, only_atom=False, course_grained=False, grid=True, return_data=True, return_truth=True, rotate=True, force_feature_calculation=False, expand_atom=True, include_full_protein=False):
         """Get features
 
         Paramters
@@ -279,7 +280,12 @@ class Structure(object):
         input_shape : 3-tuple
         rotations : int
         """
-        s = Structure(pdb, chain, id=id, force_feature_calculation=force_feature_calculation)
+        s = Structure(
+            pdb,
+            chain,
+            id=id,
+            course_grained=course_grained,
+            force_feature_calculation=force_feature_calculation)
         s.orient_to_pai()
         if resi:
             binding_site = s.align_seq_to_struc(resi, return_residue=True)
@@ -536,7 +542,13 @@ class Structure(object):
         #     expand_atom=expand_atom,
         #     include_full_protein=include_full_protein,
         #     voxel_size=voxel_size)
-        return self.map_to_voxel_space(
+        if self.course_grained:
+            return self.map_residues_to_voxel_space(
+                binding_site_residues=residue_list,
+                include_full_protein=include_full_protein,
+                only_aa=only_aa
+            )
+        return self.map_atoms_to_voxel_space(
             expand_atom=expand_atom,
             binding_site_residues=residue_list,
             include_full_protein=include_full_protein,
@@ -550,7 +562,7 @@ class Structure(object):
         if not sparse:
             raise RuntimeError("Dense gris not supported; Too much memory")
 
-        exclude_atoms = ["N", "C", "O"] #Ignore backbone
+        exclude_atoms = None #["N", "C", "O"] #Ignore backbone
 
         if residue_list is not None:
             if not include_full_protein:
@@ -635,12 +647,12 @@ class Structure(object):
 
     def get_neighbors(self, atom, radius=2.):
         if self.kdtree is None:
-            self.kdtree = NeighborSearch(self.get_atoms(exclude_atoms=["N", "C", "O"]))
+            self.kdtree = NeighborSearch(self.get_atoms())
 
         neighbors = self.kdtree.search(atom.get_coord(), radius)
         return neighbors
 
-    def map_to_voxel_space(self, expand_atom=True, binding_site_residues=None, include_full_protein=False, only_aa=False, only_atom=False):
+    def map_atoms_to_voxel_space(self, expand_atom=True, binding_site_residues=None, include_full_protein=False, only_aa=False, only_atom=False):
         """Map atoms to sparse voxel space.
 
         Parameters
@@ -662,7 +674,7 @@ class Structure(object):
         indices : np.array((nVoxels,3))
         data : np.array((nVoxels,nFeatures))
         """
-        exclude_atoms = ["N", "C", "O"] #Ignore backbone
+        exclude_atoms = None #["N", "C", "O"] #Ignore backbone
 
         if binding_site_residues is not None:
             if not include_full_protein:
@@ -691,7 +703,7 @@ class Structure(object):
             atom_points = lambda a: [self.get_grid_coord(a)]
 
         data_voxels = defaultdict(lambda: np.zeros(nFeatures))
-        truth_voxels = defaultdict(lambda: np.ones(1))
+        truth_voxels = defaultdict(lambda: np.zeros(1))
 
         for atom in atoms:
             atom_sphere = atom_points(atom)
@@ -708,6 +720,47 @@ class Structure(object):
         else:
             truth = np.array([truth_voxels[grid] for grid in data_voxels.keys()])
             return np.array(data_voxels.keys()), np.array(data_voxels.values()), truth
+
+    def map_residues_to_voxel_space(self, binding_site_residues=None, include_full_protein=False, only_aa=False):
+        if binding_site_residues is not None:
+            if not include_full_protein:
+                residues = binding_site_residues
+                binding_site_residues = [r.get_id() for r in residues]
+            else:
+                residues = self.structure.get_residues()
+                binding_site_residues = [r.get_id()[1] for r in binding_site_residues]
+        else:
+            residues = self.structure.get_residues()
+            binding_site_residues = []
+
+        if only_aa:
+            nFeatures = 21
+        else:
+            nFeatures = 36
+
+        data_voxels = {}
+        truth_voxels = {}
+        voxel_coords = {}
+
+        for residue in residues:
+            grid, coord = self.get_grid_coord_for_residue(residue)
+            grid = tuple(grid.tolist())
+            if grid in data_voxels:
+                print "Ignoring {}.{} {} {} becuase it falls in grid {} with {}".format(
+                    self.pdb,
+                    self.chain,
+                    residue.get_resname(),
+                    residue.get_id()[1],
+                    grid,
+                    voxel_coords[grid]
+                )
+
+                assert 0
+                #voxel_coords[grid]
+            else:
+                data_voxels[grid] = self.get_features_for_residue(residue, only_aa=only_aa)
+                truth_voxels[grid] = [int(residue.get_id()[1] in binding_site_residues)]
+                voxel_coords[grid] = (residue.get_resname(), residue.get_id()[1], coord)
 
 
     def voxel_set_insection_and_difference(self, atom1, atom2):
@@ -743,7 +796,7 @@ class Structure(object):
         elif only_atom:
             return self.get_element_type(atom)
         elif only_aa:
-            return self.get_residue(atom, one_hot=True)
+            return self.get_residue(atom)
         else:
             features = np.zeros(Structure.nFeatures)
 
@@ -765,10 +818,36 @@ class Structure(object):
             #mobility              = None
             features[31:35] = self.get_accessible_surface_area(atom)
 
-            features[35:56] = self.get_residue(atom, one_hot=True)
+            features[35:56] = self.get_residue(atom)
             # residue_class1        = self.get_residue_class2(atom, one_hot=True)
             # residue_class2        = self.get_residue_class2(atom, one_hot=True)
             features[56:59]  = self.get_ss(atom)
+
+            if self.feature_file:
+                self.precalc_features[atom.serial_number-1] = features
+
+            return features
+
+    def get_features_for_residue(self, residue, only_aa=False, preload=False):
+        """Calculate FEATUREs"""
+        if not self.feature_file and preload:
+            print "preload features"
+            features = self.precalc_features[atom.serial_number-1]
+            if only_aa:
+                return features[15:36]
+            else:
+                return features
+        elif only_aa:
+            return self.get_residue(residue)
+        else:
+            features = np.zeros(Structure.nFeatures)
+
+            features[0:4] = self.get_charge(residue)
+            features[4:8] = self.get_concavity(residue)
+            features[8:12] = self.get_hydrophobicity(residue)
+            features[12:15] = self.get_accessible_surface_area(residue)
+            features[15:36] = self.get_residue(residue)
+            features[36:39]  = self.get_ss(residue)
 
             if self.feature_file:
                 self.precalc_features[atom.serial_number-1] = features
@@ -818,7 +897,21 @@ class Structure(object):
     def get_vdw(self, atom):
         return np.array([vdw.get(atom.get_name().strip()[0], 0.0)])
 
-    def get_charge(self, atom):
+    def get_charge(self, atom_or_residue):
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            atom = atom_or_residue
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            residue = atom_or_residue
+            charge_value = np.sum([self.get_charge(a)[0] for a in residue])
+            charge = np.zeros(4)
+            charge[0] = charge_value
+            charge[1] = float(charge_value < 0)
+            charge[2] = float(charge_value > 0)
+            charge[3] = float(charge_value == 0)
+            return charge
+        else:
+            raise RuntimeErorr("Input must be Atom or Residue")
+
         pqr = self._get_pqr()
         atom_id = atom.get_full_id()[3:5]
 
@@ -834,7 +927,22 @@ class Structure(object):
         charge[3] = float(charge_value == 0)
         return charge
 
-    def get_concavity(self, atom):
+    def get_concavity(self, atom_or_residue):
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            atom = atom_or_residue
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            residue = atom_or_residue
+            concavity_value = np.mean([self.get_concavity(a)[0] for a in residue])
+            #concave, convex, or both
+            concavity = np.zeros(4)
+            concavity[0] = concavity_value
+            concavity[1] = float(concavity_value <= 2)
+            concavity[2] = float(concavity_value > 5)
+            concavity[3] = float(2 < concavity_value <= 5)
+            return concavity
+        else:
+            raise RuntimeErorr("Input must be Atom or Residue")
+
         cx = self._get_cx()
         concavity_value = cx.get(atom.serial_number, np.NaN)
         #concave, convex, or both
@@ -845,17 +953,24 @@ class Structure(object):
         concavity[3] = float(2 < concavity_value <= 5)
         return concavity
 
-    def get_hydrophobicity(self, atom, scale="kd"):
+    def get_hydrophobicity(self, atom_or_residue, scale="kd"):
         assert scale in hydrophobicity_scales.keys()
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            residue = atom_or_residue.get_parent()
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            residue = atom_or_residue
+        else:
+            raise RuntimeErorr("Input must be Atom or Residue")
+
         hydrophobicity = np.zeros(4)
         try:
-            hydrophobicity_value = hydrophobicity_scales[scale][PDB.Polypeptide.three_to_one(atom.get_parent().get_resname())]
+            resname = PDB.Polypeptide.three_to_one(residue.get_resname())
 
+            hydrophobicity_value = hydrophobicity_scales[scale][resname]
             hydrophobicity[0] = hydrophobicity_value
             hydrophobicity[1] = float(hydrophobicity_value < 0)
             hydrophobicity[2] = float(hydrophobicity_value > 0)
             hydrophobicity[3] = float(hydrophobicity_value == 0)
-
         except KeyError:
             hydrophobicity[0] = np.NaN
             hydrophobicity[1] = np.NaN
@@ -864,57 +979,96 @@ class Structure(object):
 
         return hydrophobicity
 
-    def get_accessible_surface_area(self, atom):
-        try:
-            sasa, sasa_struct = self._get_sasa()
-            selection = "sele, chain {} and resi {} and name {}".format(self.chain, atom.get_parent().get_id()[1], atom.get_id()[0])
-            with silence_stdout(), silence_stderr():
-                selections = freesasa.selectArea([selection], sasa_struct, sasa)
-                atom_area = selections["sele"]
-        except (KeyError, AssertionError, AttributeError, TypeError):
-            atom_area = np.NaN
+    def get_accessible_surface_area(self, atom_or_residue):
+        """Returns the ASA value from freesasa (if inout is Atom) and the DSSP
+        value (if input is Atom or Residue)
 
-        dssp = self._get_dssp()
-        try:
-            residue_area = dssp[atom.get_full_id()[2:4]][3]
-        except (KeyError, AssertionError, AttributeError, TypeError):
+        Returns
+        -------
+        If input is residue a 3-vector is returned, otherwise a 4-vector is returned
+        """
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            is_atom = True
+            residue = atom_or_residue.get_parent()
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            is_atom = False
+            residue = atom_or_residue
+        else:
+            raise RuntimeErorr("Input must be Atom or Residue")
+
+        if is_atom:
             try:
-                #Remove HETATMs
-                residue_area = dssp[(atom.get_full_id()[2], (' ', atom.get_full_id()[3][1], ' '))][3]
-                if residue_area == "NA":
-                    residue_area = np.NaN
+                sasa, sasa_struct = self._get_sasa()
+                selection = "sele, chain {} and resi {} and name {}".format(self.chain, atom.get_parent().get_id()[1], atom.get_id()[0])
+                with silence_stdout(), silence_stderr():
+                    selections = freesasa.selectArea([selection], sasa_struct, sasa)
+                    atom_area = selections["sele"]
             except (KeyError, AssertionError, AttributeError, TypeError):
-                residue_area = np.NaN
+                atom_area = np.NaN
+        else:
+            dssp = self._get_dssp()
+            try:
+                #("1abc", 0, "A", (" ", 10, "A"), (self.name, self.altloc))
+                residue_area = dssp[residue.get_full_id()[2:]][3]
+            except (KeyError, AssertionError, AttributeError, TypeError):
+                try:
+                    #Remove HETATMs
+                    residue_area = dssp[(residue.get_full_id()[2], (' ', residue.get_full_id()[3][1], ' '))][3]
+                    if residue_area == "NA":
+                        residue_area = np.NaN
+                except (KeyError, AssertionError, AttributeError, TypeError):
+                    residue_area = np.NaN
 
-        asa = np.zeros(4)
-        asa[0] = atom_area
-        asa[1] = residue_area
-        asa[2] = float(residue_area < 0.2)
-        asa[3] = float(residue_area >= 0.2)
+        if is_atom:
+            asa = np.zeros(4)
+            asa[0] = atom_area
+            asa[1] = residue_area
+            asa[2] = float(residue_area < 0.2)
+            asa[3] = float(residue_area >= 0.2)
+        else:
+            asa = np.zeros(3)
+            asa[0] = residue_area
+            asa[1] = float(residue_area < 0.2)
+            asa[2] = float(residue_area >= 0.2)
         return asa
 
-    def get_residue(self, atom, one_hot=False):
-        """ADD:
-        RESIDUE_NAME_IS_HOH
+    def get_residue(self, atom_or_residue):
         """
-        if one_hot:
-            residue = [0.]*(len(PDB.Polypeptide.aa1)+1) #one hot residue
-            try:
-                residue[PDB.Polypeptide.three_to_index(atom.get_parent().get_resname())] = 1.
-            except (ValueError, KeyError) as e:
-                residue[-1] = 1.
-            return residue
+        """
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            is_atom = True
+            residue = atom_or_residue.get_parent()
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            is_atom = False
+            residue = atom_or_residue
         else:
-            return atom.get_parent().get_resname()
+            raise RuntimeErorr("Input must be Atom or Residue")
 
-    def get_ss(self, atom):
+        residues = [0.]*(len(PDB.Polypeptide.aa1)+1) #one hot residue
+
+        try:
+            residues[PDB.Polypeptide.three_to_index(residue.get_resname())] = 1.
+        except (ValueError, KeyError) as e:
+            residues[-1] = 1.
+        return residues
+
+    def get_ss(self, atom_or_residue):
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            is_atom = True
+            residue = atom_or_residue.get_parent()
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            is_atom = False
+            residue = atom_or_residue
+        else:
+            raise RuntimeErorr("Input must be Atom or Residue")
+
         dssp = self._get_dssp()
         try:
-            atom_ss = dssp[atom.get_full_id()[2:4]][2]
+            atom_ss = dssp[residue.get_full_id()[2:]][2]
         except (KeyError, AssertionError, AttributeError, TypeError):
             try:
                 #Remove HETATMs
-                atom_ss = dssp[(atom.get_full_id()[2], (' ', atom.get_full_id()[3][1], ' '))][2]
+                atom_ss = dssp[(residue.get_full_id()[2], (' ', residue.get_full_id()[3][1], ' '))][2]
             except (KeyError, AssertionError, AttributeError, TypeError):
                 atom_ss = "X"
 
@@ -924,7 +1078,7 @@ class Structure(object):
         ss[2] = float(atom_ss not in "GHITBE")
         return ss
 
-    def get_grid_coord(self, atom, vsize=96, max_radius=40, homothetic_transformation=False, round=False, voxel_size=None):
+    def get_grid_coord_for_atom(self, atom, vsize=96, max_radius=40, homothetic_transformation=False, round=False, voxel_size=None):
         """Convert atom cartesian coordiantes to voxel space using a homothetic transformation
         """
         if voxel_size is not None and voxel_size != self.voxel_size:
@@ -961,13 +1115,28 @@ class Structure(object):
         #print "voxel:", rounded
         return voxel
 
+    def get_grid_coord_for_residue(self, residue, round=False):
+        coord = residue["CA"].get_coord() #np.mean([a.get_coord() for a in residue], axis=0)
+        coord += [self.volume/2]*3
+        if round:
+            coord = np.around(coord)
+        #print residue.get_resname(), coord,
+        voxel = np.digitize(coord, self.voxels)
+        #print voxel
+        return voxel, coord
+
     def set_volume(self, volume):
         self.volume = volume
 
-    def set_voxel_size(self, voxel_size):
-        self.voxel_size = voxel_size
-        self.voxels = np.arange(0, self.volume, voxel_size)
-        make_atom_spheres(voxel_size)
+    def set_voxel_size(self, voxel_size=None):
+        if not self.course_grained:
+            assert voxel_size is not None
+            self.voxel_size = voxel_size
+        else:
+            self.voxel_size = 3.43
+        self.voxels = np.arange(0, self.volume, self.voxel_size)
+        make_atom_spheres(self.voxel_size)
+
 
         #np.multiply((vsize/2.)-1)/float(max_radius), coords)
 
