@@ -181,7 +181,7 @@ class ModelStats(object):
         pp.close()
         plt.close(f)
 
-def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True, save_final=True, only_aa=False, only_atom=False, expand_atom=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, train_full=False, validate_full=False, course_grained=False, no_batch_norm=False):
+def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True, save_final=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, train_full=False, validate_full=False, course_grained=False, no_batch_norm=False):
     if model_prefix is None:
         model_prefix = "./molmimic_model_{}".format(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
 
@@ -203,17 +203,15 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
             input_shape=input_shape,
             only_aa=only_aa,
             only_atom=only_atom,
+            non_geom_features=non_geom_features,
+            use_deepsite_features=use_deepsite_features,
             expand_atom=expand_atom,
             data_split=data_split,
             train_full=train_full,
             validate_full=validate_full,
             course_grained=course_grained)
-        if only_atom:
-        	nFeatures = 5
-        elif only_aa:
-        	nFeatures = 21
-        else:
-        	nFeatures = 59
+        nFeatures = datasets["train"].get_number_of_features()
+
         validation_batch_size = batch_size
     else:
         raise RuntimeError("Invalid training data")
@@ -278,6 +276,7 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                 print "{} Batch: {} of {}".format(phase.title(), data_iter_num, num_batches),
                 datasets[phase].batch = data_iter_num
                 #print type(data["data"]), data["data"].__class__.__name__, data["data"].__class__.__name__ == "InputBatch"
+                scaling = data.get("scaling", 1.0)
                 if data["data"].__class__.__name__ == "InputBatch":
                     sparse_input = True
                     inputs = data["data"]
@@ -343,10 +342,14 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
 
                 # forward
                 #print inputs
-                outputs = model(inputs)
+                try:
+                    outputs = model(inputs)
+                except AssertionError:
+                    print nFeatures, inputs
+                    raise
 
                 if sparse_input:
-                    loss = criterion(outputs.features, labels.features)
+                    loss = criterion(outputs.features, labels.features, scaling)
 
                     if math.isnan(loss.data[0]):
                         print "Loss is Nan?"
@@ -380,7 +383,7 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                 torch.save(epoch, check_point_epoch_file)
                 torch.save(model.state_dict(), check_point_model_file)
 
-            model.set_log_level(1)
+            #model.set_log_level(1)
 
             #print get_gpu_memory_map()
 
@@ -399,21 +402,18 @@ class DiceLoss(_Loss):
         super(DiceLoss, self).__init__(size_average)
         self.smooth = smooth
 
-    def forward(self, input, target):
-        return -self.dice_coef(input, target)
+    def forward(self, input, target, scaling=1.0):
+        return -self.dice_coef(input, target, scaling)
 
-    def dice_coef(self, input, target):
+    def dice_coef(self, input, target, scaling):
         iflat = input.view(-1)
         tflat = target.view(-1)
         intersection = (iflat * tflat).sum()
 
-        #print iflat
-        #print tflat
-        #print intersection
-
+        #Do per batch
         dice = ((2. * intersection + self.smooth) / ((iflat.sum() + tflat.sum() + self.smooth)))
 
-
+        dice /= float(scaling)
 
         return dice
 
@@ -487,6 +487,16 @@ def parse_args():
         action="store_true",
         help="Only use one feature: atom type (5 features since atom is one hot encoded). Else use all 59 features.")
     parser.add_argument(
+        "--non-geom-features",
+        default=False,
+        action="store_true",
+        help="Only use non geometric features")
+    parser.add_argument(
+        "--use_deepsite_features",
+        default=False,
+        action="store_true",
+        help="Only use DeepSite features")
+    parser.add_argument(
         "--expand-atom",
         default=False,
         action="store_true",
@@ -557,6 +567,8 @@ if __name__ == "__main__":
         input_shape           = args.shape,
         only_aa               = args.only_aa,
         only_atom             = args.only_atom,
+        non_geom_features     = args.non_geom_features,
+        use_deepsite_features = args.use_deepsite_features,
         num_workers           = args.num_cpus,
         expand_atom           = args.expand_atom,
         num_epochs            = args.epochs,

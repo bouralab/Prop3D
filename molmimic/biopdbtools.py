@@ -14,6 +14,7 @@ from scipy.interpolate import RegularGridInterpolator
 from Bio import PDB
 from Bio import SeqIO
 from Bio.PDB.NeighborSearch import NeighborSearch
+
 try:
     from pdb2pqr import mainCommand
 except ImportError:
@@ -24,9 +25,18 @@ except ImportError:
     freesasa = None
 
 import h5py
+try:
+    import pybel
+except ImportError:
+    pybabel = None
 
 from util import silence_stdout, silence_stderr
 from map_residues import map_residues
+
+try:
+    from numba import jit
+except ImportError:
+    jit = lambda x: x
 
 import warnings
 warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
@@ -103,7 +113,6 @@ def make_atom_spheres(voxel_size=0.25, default_radius=2):
 
 maxASA = {"A": 129.0, "R": 274.0, "N": 195.0, "D": 193.0, "C": 167.0, "E": 223.0, "Q": 225.0, "G": 104.0, "H": 224.0, "I": 197.0, "K": 201.0, "L": 236.0, "M": 224.0, "F": 240.0, "P": 159.0, "S": 155.0, "T": 172.0, "W": 285.0, "Y": 263.0, "V": 174.0}
 
-#REMOVE HARD CODED PATH
 obsolete_pdbs = pd.read_table(os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "obsolete.dat"), delim_whitespace=True, skiprows=1, names=["status", "data", "old", "new"], header=None,)
 
 pdbparser = PDB.PDBParser()
@@ -116,8 +125,10 @@ class InvalidPDB(RuntimeError):
 
 class SelectChain(PDB.Select):
     """ Only accept the specified chain and remove hydruogens and hetatms when saving. """
-    def __init__(self, chain):
+    def __init__(self, chain, altloc=" ", filter_everything=True):
         self.chain = chain
+        self.altloc = altloc
+        self.filter_everything = filter_everything
 
     def accept_model(self, model):
         # model - only keep model 0
@@ -129,26 +140,33 @@ class SelectChain(PDB.Select):
     def accept_residue(self, residue):
         """Remove HETATMS"""
         hetatm_flag, resseq, icode = residue.get_id()
-        return hetatm_flag == " " or residue.get_resname() != "HOH"
+        return not self.filter_everything or (hetatm_flag == " " and residue.get_resname() in PDB.Polypeptide.aa3)
 
     def accept_atom(self, atom):
         """Remove hydrogens"""
         name = atom.get_id()
-        return not _hydrogen.match(name) and atom.altloc == " "
+        return not self.filter_everything or (not _hydrogen.match(name) and atom.altloc == self.altloc)
 
-def extract_chain(structure, chain, pdb):
+def extract_chain(structure, chain, pdb, write_to_stdout=False):
     chain = chain.upper()
     chain_pdb = StringIO()
+    altloc = sorted(set([a.altloc for a in structure[0][chain].get_atoms()]))[0]
     writer.set_structure(structure)
-    writer.save(chain_pdb, select=SelectChain(chain))
+    writer.save(chain_pdb, select=SelectChain(chain, altloc=altloc))
     chain_pdb.seek(0)
+    if write_to_stdout:
+        print chain_pdb.read()
+        print "Using altloc", altloc
+        orig = StringIO()
+        writer.set_structure(structure)
+        writer.save(orig, select=SelectChain(chain, filter_everything=False))
+        orig.seek(0)
+        print orig.read()
     new_structure = pdbparser.get_structure(pdb, chain_pdb)
     return new_structure
 
 class Structure(object):
-    nFeatures = 59
-
-    def __init__(self, pdb, chain, path=None, id=None, snapshot=True, course_grained=True, input_format="pdb", force_feature_calculation=False):
+    def __init__(self, pdb, chain, path=None, id=None, snapshot=True, course_grained=True, voxel_size=1.0, input_format="pdb", force_feature_calculation=False):
         if path is None and not os.path.isfile(pdb) and len(pdb) == 4:
             path = "{}/pdb/{}/pdb{}.ent.gz".format(os.environ.get("PDB_SNAPSHOT", "/pdb"), pdb[1:3].lower(), pdb.lower())
 
@@ -202,13 +220,25 @@ class Structure(object):
             raise InvalidPDB("Invalid PDB id or file: {} (path={})".format(pdb, path))
 
         self.chain = chain.split("_", 1)[0]
+        self._structure = self.structure
         self.structure = extract_chain(self.structure, self.chain, pdb)
+
 
         # self.nResidues = sum(1 for _ in self.structure.get_residues())
         # if self.nResidues > 500:
         #     raise InvalidPDB("{}.{} (residue count > 500)".format(pdb, self.chain))
+        try:
+            only_chain = self.structure[0].get_chains().next()
+        except (KeyError, StopIteration):
+            print pdb, self.chain
+            print self.structure
+            for m in self.structure.get_models():
+                print m
+                for c in m.get_chains():
+                    print "   ", chain
+            extract_chain(self._structure, self.chain, pdb, write_to_stdout=True)
+            raise
 
-        only_chain = self.structure[0].get_chains().next()
         if self.chain != only_chain.get_id():
             #Reset chain if Bio.PDB changes name after extraction
             self.chain = only_chain.get_id()
@@ -228,35 +258,35 @@ class Structure(object):
         self.volume = 256
         self.id = "{}_{}{}".format(self.pdb, self.chain, "_{}".format(id) if id else "")
         self.course_grained = course_grained
-        self.nFeatures = 59 if not course_grained else 36
+        self.nFeatures = Structure.number_of_features(course_grained=course_grained)
 
         #Creates self.voxels
-        self.set_voxel_size(0.5)
+        self.set_voxel_size(voxel_size) #0.5
 
-        precalc_features_path = os.environ.get("MOLMIMIC_FEATURES", os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "features2"))
+        precalc_features_path = os.environ.get("MOLMIMIC_FEATURES", os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "features2", "residue" if self.course_grained else "atom"))
         precalc_features_path = os.path.join(precalc_features_path, "{}.h5".format(self.id))
 
+        if course_grained:
+            shape = max([r.get_id()[1] for r in self.structure.get_residues()])
+        else:
+            shape = max([a.serial_number for a in self.structure.get_atoms()])
+
+        #print "There are {} {}".format(shape, "residues" if course_grained else "atoms")
+
         if force_feature_calculation or not os.path.isfile(precalc_features_path):
-            last_atom = None
-            for last_atom in self.structure.get_atoms():
-                pass
-            if last_atom is None:
-                raise InvalidPDB(pdb)
             self.feature_file = h5py.File(precalc_features_path, 'w')
-            self.precalc_features = self.feature_file.create_dataset('features', dtype='f', shape=(last_atom.serial_number, Structure.nFeatures), fillvalue=0., compression='gzip', compression_opts=9)
+            self.precalc_features = self.feature_file.create_dataset('features', dtype='f', shape=(shape, self.nFeatures), fillvalue=0., compression='gzip', compression_opts=9)
         else:
             try:
                 self.precalc_features = h5py.File(precalc_features_path, 'r')["features"]
                 self.feature_file = None
             except IOError:
-                last_atom = None
-                for last_atom in self.structure.get_atoms():
-                    pass
-                if last_atom is None:
-                    raise InvalidPDB(pdb)
-                self.feature_file = h5py.File(precalc_features_path, 'w')
-                self.precalc_features = self.feature_file.create_dataset('features', dtype='f', shape=(last_atom.serial_number, Structure.nFeatures), fillvalue=0., compression='gzip', compression_opts=9)
-
+                try:
+                    self.feature_file = h5py.File(precalc_features_path, 'w')
+                    self.precalc_features = self.feature_file.create_dataset('features', dtype='f', shape=(shape, self.nFeatures), fillvalue=0., compression='gzip', compression_opts=9)
+                except IOError:
+                    self.feature_file = None
+                    self.precalc_features = None
 
         # try:
         #     aa = SeqIO.index(os.path.join(os.environ.get("PDB_SNAPSHOT", "/pdb")), "sequences", "pdb_seqres.txt")
@@ -266,7 +296,28 @@ class Structure(object):
         #     print "Canot read seq file:", "{}/sequences/pdb_seqres.txt".format(os.environ.get("PDB_SNAPSHOT", "/pdb"))
 
     @staticmethod
-    def features_from_string(pdb, chain, resi=None, id=None, input_shape=(96,96,96), batch_index=None, only_aa=False, only_atom=False, course_grained=False, grid=True, return_data=True, return_truth=True, rotate=True, force_feature_calculation=False, expand_atom=True, include_full_protein=False):
+    def number_of_features(only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False):
+        if course_grained:
+            if non_geom_features:
+                return 29
+            elif only_aa:
+                return 21
+            else:
+                return 39
+        else:
+            if non_geom_features:
+                return 13
+            elif only_atom:
+                return 5
+            elif only_aa:
+                return 21
+            elif use_deepsite_features:
+                return 8
+            else:
+                return 65
+
+    @staticmethod
+    def features_from_string(pdb, chain, resi=None, id=None, input_shape=(96,96,96), batch_index=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, grid=True, return_data=True, return_truth=True, rotate=True, force_feature_calculation=False, expand_atom=False, include_full_protein=False):
         """Get features
 
         Paramters
@@ -301,6 +352,7 @@ class Structure(object):
                 batch_index=batch_index,
                 only_aa=only_aa,
                 only_atom=only_atom,
+                use_deepsite_features=use_deepsite_features,
                 expand_atom=expand_atom,
                 include_full_protein=include_full_protein)
         else:
@@ -310,7 +362,6 @@ class Structure(object):
             s.feature_file.close()
 
         return features
-
 
     def get_atoms(self, include_hetatms=False, exclude_atoms=None):
         # for a in self.structure.get_atoms():
@@ -457,6 +508,40 @@ class Structure(object):
 
         return self.cx
 
+    def get_autodock_features(self, atom):
+        """Modified from pybel write PDBQT c++"""
+        if not hasattr(self, "autodock_features"):
+            mol = pybel.readstring("pdb", self.save_pdb(file_like=True).read())
+            mol.addh()
+
+            pdbqt = mol.write("pdbqt")
+            self.autodock_features = {} #defaultdict(lambda: ("  ", False)
+            for atom_index in xrange(mol.OBMol.NumAtoms()):
+                a = mol.OBMol.GetAtom(atom_index + 1)
+                if a.IsHydrogen():
+                    continue
+                #Ignore Hyfrogens for now
+                # if atom.IsHydrogen():
+                #     autodock_name ='HD'
+                if a.IsCarbon() and a.IsAromatic():
+                    element = 'A'
+                elif a.IsOxygen():
+                    element = 'OA'
+                elif a.IsNitrogen() and a.IsHbondAcceptor():
+                    element = 'NA'
+                elif a.IsSulfur() and a.IsHbondAcceptor():
+                    element ='SA'
+                else:
+                    element = "".join([c for c in a.GetType() if c.isalnum()])
+
+                #id = (a.GetResidue().GetChain(), a.GetResidue().GetNum(), a.GetType())
+                #print id, a.GetIdx()
+                self.autodock_features[a.GetIdx()] = (element, a.IsHbondDonor())
+
+        #id = (atom.get_parent().get_parent().get_id(), atom.get_parent().get_id()[1], atom.get_name().strip())
+        #print id, atom.serial_number
+        return self.autodock_features[atom.serial_number]
+
     def _mean_coord(self):
         if not self.mean_coord_updated:
             self.mean_coord = np.mean(self.get_coords(), axis=0)
@@ -531,7 +616,7 @@ class Structure(object):
         features = [self.get_features_for_atom(a) for r in residue_list for a in r]
         return features
 
-    def get_features(self, input_shape=(96, 96, 96), residue_list=None, batch_index=None, return_data=True, return_truth=True, only_aa=False, only_atom=False, expand_atom=True, include_full_protein=False, voxel_size=0.5):
+    def get_features(self, input_shape=(96, 96, 96), residue_list=None, batch_index=None, return_data=True, return_truth=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, include_full_protein=False, voxel_size=0.5):
         # return self.get_features_in_grid(
         #     input_shape=input_shape,
         #     residue_list=residue_list,
@@ -546,14 +631,17 @@ class Structure(object):
             return self.map_residues_to_voxel_space(
                 binding_site_residues=residue_list,
                 include_full_protein=include_full_protein,
-                only_aa=only_aa
+                only_aa=only_aa,
+                non_geom_features=non_geom_features
             )
         return self.map_atoms_to_voxel_space(
             expand_atom=expand_atom,
             binding_site_residues=residue_list,
             include_full_protein=include_full_protein,
             only_aa=only_aa,
-            only_atom=only_atom)
+            only_atom=only_atom,
+            use_deepsite_features=use_deepsite_features,
+            non_geom_features=non_geom_features)
 
     def get_features_in_grid(self, input_shape=(96, 96, 96), sparse=True, residue_list=None, batch_index=None, return_data=True, return_truth=True, only_aa=False, expand_atom=True, include_full_protein=False, voxel_size=0.5):
         if return_truth and residue_list is None:
@@ -639,7 +727,7 @@ class Structure(object):
 
         coord = atom.get_coord()
         coord += [self.volume/2]*3
-        center = np.digitize(coord, self.voxels)
+        center = np.digitize(coord, self.voxels)-1
 
         atom_sphere = np.rint(atom_sphere_origin+center).astype("int64")
 
@@ -652,7 +740,7 @@ class Structure(object):
         neighbors = self.kdtree.search(atom.get_coord(), radius)
         return neighbors
 
-    def map_atoms_to_voxel_space(self, expand_atom=True, binding_site_residues=None, include_full_protein=False, only_aa=False, only_atom=False):
+    def map_atoms_to_voxel_space(self, expand_atom=False, binding_site_residues=None, include_full_protein=False, only_aa=False, only_atom=False, use_deepsite_features=False, non_geom_features=False):
         """Map atoms to sparse voxel space.
 
         Parameters
@@ -690,30 +778,45 @@ class Structure(object):
             nAtoms = len(atoms)
             binding_site_atoms = []
 
-        if only_atom:
-            nFeatures = 5
-        elif only_aa:
-            nFeatures = 21
-        else:
-            nFeatures = Structure.nFeatures
+
+        nFeatures = Structure.number_of_features(
+            only_aa=only_aa,
+            only_atom=only_atom,
+            non_geom_features=non_geom_features,
+            use_deepsite_features=use_deepsite_features,
+            course_grained=self.course_grained)
+
+        #assert nFeatures == 8, nFeatures
 
         if expand_atom:
             atom_points = self.expand_atom
         else:
-            atom_points = lambda a: [self.get_grid_coord(a)]
+            atom_points = lambda a: [self.get_grid_coord_for_atom(a)]
 
         data_voxels = defaultdict(lambda: np.zeros(nFeatures))
         truth_voxels = defaultdict(lambda: np.zeros(1))
 
         for atom in atoms:
+            print "Getting grid..."
             atom_sphere = atom_points(atom)
-            features = self.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom)
-            truth = int(atom.get_serial_number() in binding_site_atoms)
+            print "Finished getting grid...", atom_sphere
+
+            print "Getting features..."
+            features = self.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features)
+            print "Finished getting features..."
+
+            truth = np.array([int(atom.get_serial_number() in binding_site_atoms)])
 
             for atom_grid in atom_sphere:
                 atom_grid = tuple(atom_grid.tolist())
-                data_voxels[atom_grid] += features
-                truth_voxels[atom_grid] = np.array([truth])
+                try:
+                    data_voxels[atom_grid] += features
+                except ValueError:
+                    print nFeatures, data_voxels[atom_grid].shape, features.shape
+                    raise
+                truth_voxels[atom_grid] = truth
+
+        #print "Num true:", np.sum(truth_voxels.values())
 
         if binding_site_residues is None:
             return np.array(data_voxels.keys()), np.array(data_voxels.values())
@@ -721,7 +824,7 @@ class Structure(object):
             truth = np.array([truth_voxels[grid] for grid in data_voxels.keys()])
             return np.array(data_voxels.keys()), np.array(data_voxels.values()), truth
 
-    def map_residues_to_voxel_space(self, binding_site_residues=None, include_full_protein=False, only_aa=False):
+    def map_residues_to_voxel_space(self, binding_site_residues=None, include_full_protein=False, non_geom_features=True, only_aa=False):
         if binding_site_residues is not None:
             if not include_full_protein:
                 residues = binding_site_residues
@@ -733,10 +836,10 @@ class Structure(object):
             residues = self.structure.get_residues()
             binding_site_residues = []
 
-        if only_aa:
-            nFeatures = 21
-        else:
-            nFeatures = 36
+        nFeatures = Structure.number_of_features(
+            only_aa=only_aa,
+            non_geom_features=non_geom_features,
+            course_grained=self.course_grained)
 
         data_voxels = {}
         truth_voxels = {}
@@ -746,21 +849,37 @@ class Structure(object):
             grid, coord = self.get_grid_coord_for_residue(residue)
             grid = tuple(grid.tolist())
             if grid in data_voxels:
-                print "Ignoring {}.{} {} {} becuase it falls in grid {} with {}".format(
-                    self.pdb,
-                    self.chain,
-                    residue.get_resname(),
-                    residue.get_id()[1],
-                    grid,
-                    voxel_coords[grid]
-                )
+                diff = coord-voxel_coords[grid][2]
+                dist = np.sqrt(np.dot(diff, diff))
+                direction = np.sign(diff)
+                next_grid = tuple((np.array(grid)+direction).astype(int).tolist())
+                if next_grid not in data_voxels:
+                    print "Using next grid:", next_grid
+                    data_voxels[next_grid] = self.get_features_for_residue(residue, only_aa=only_aa)
+                    truth_voxels[next_grid] = [int(residue.get_id()[1] in binding_site_residues)]
+                    voxel_coords[next_grid] = (residue.get_resname(), residue.get_id()[1], coord)
+                else:
+                    print "Ignoring {}.{} {} {} becuase it falls in grid {} with {}".format(
+                        self.pdb,
+                        self.chain,
+                        residue.get_resname(),
+                        residue.get_id()[1],
+                        grid,
+                        voxel_coords[grid]
+                    )
+                    print "   Next grid {} is also taken".format(next_grid)
 
-                assert 0
-                #voxel_coords[grid]
+
             else:
                 data_voxels[grid] = self.get_features_for_residue(residue, only_aa=only_aa)
                 truth_voxels[grid] = [int(residue.get_id()[1] in binding_site_residues)]
                 voxel_coords[grid] = (residue.get_resname(), residue.get_id()[1], coord)
+
+        if binding_site_residues is None:
+            return np.array(data_voxels.keys()), np.array(data_voxels.values())
+        else:
+            truth = np.array([truth_voxels[grid] for grid in data_voxels.keys()])
+            return np.array(data_voxels.keys()), np.array(data_voxels.values()), truth
 
 
     def voxel_set_insection_and_difference(self, atom1, atom2):
@@ -782,27 +901,45 @@ class Structure(object):
 
         return intersection, onlyA, onlyB
 
-    def get_features_for_atom(self, atom, only_aa=False, only_atom=False, preload=False):
+    def get_features_for_atom(self, atom, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, preload=True):
         """Calculate FEATUREs"""
         if not self.feature_file and preload:
-            print "preload features"
+            #print "preload features"
             features = self.precalc_features[atom.serial_number-1]
+            if use_deepsite_features:
+                print features[59:65]
+                print features[20:22]
+                print features.shape
+                return np.concatenate((
+                    features[59:65],
+                    features[20:22]))
             if only_atom:
                 return features[13:18]
             elif only_aa:
                 return features[35:56]
+            elif non_geom_features:
+                return np.concatenate((
+                    features[13:18],
+                    features[19:23],
+                    features[27:31]))
             else:
                 return features
+        elif use_deepsite_features:
+            return self.get_deepsite_features(atom)
         elif only_atom:
             return self.get_element_type(atom)
         elif only_aa:
             return self.get_residue(atom)
+        elif non_geom_features:
+            features = np.zeros(13)
+            features[0:5] = self.get_element_type(atom)
+            features[5:9] = self.get_charge(atom)
+            features[9:13] = self.get_hydrophobicity(atom)
         else:
-            features = np.zeros(Structure.nFeatures)
+            features = np.zeros(self.nFeatures)
 
             #atom_type
             features[0:13]  = self.get_atom_type(atom)
-            #partial_charge        = None
             features[13:18] = self.get_element_type(atom)
             #hydroxyl              = None
             #amide                 = None
@@ -812,35 +949,47 @@ class Structure(object):
             #peptide               = None
             features[18:19] = self.get_vdw(atom)
             features[19:23] = self.get_charge(atom)
-            #charge_with_his       = None
             features[23:27] = self.get_concavity(atom)
             features[27:31] = self.get_hydrophobicity(atom)
-            #mobility              = None
             features[31:35] = self.get_accessible_surface_area(atom)
-
             features[35:56] = self.get_residue(atom)
-            # residue_class1        = self.get_residue_class2(atom, one_hot=True)
-            # residue_class2        = self.get_residue_class2(atom, one_hot=True)
-            features[56:59]  = self.get_ss(atom)
+            features[56:59] = self.get_ss(atom)
+            features[59:65] = self.get_deepsite_features(atom, calc_charge=False)
 
             if self.feature_file:
                 self.precalc_features[atom.serial_number-1] = features
 
             return features
 
-    def get_features_for_residue(self, residue, only_aa=False, preload=False):
+    def get_features_for_residue(self, residue, only_aa=False, non_geom_features=False, preload=False):
         """Calculate FEATUREs"""
         if not self.feature_file and preload:
-            print "preload features"
-            features = self.precalc_features[atom.serial_number-1]
-            if only_aa:
+            try:
+                features = self.precalc_features[residue.get_id()[1]-1]
+            except ValueError:
+                print residue.get_id()[1]-1, self.precalc_features.shape[0]
+                print max([r.get_id()[1] for r in self.structure.get_residues()])
+                raise
+            if non_geom_features:
+                return np.concatenate((
+                    features[15:36],
+                    features[0:4],
+                    features[8:12],
+                    ))
+            elif only_aa:
                 return features[15:36]
             else:
-                return features
+                return features[:self.nFeatures]
+        elif non_geom_features:
+            features = np.zeros(29)
+            features[0:21] = self.get_residue(residue)
+            features[21:25] = self.get_charge(residue)
+            features[25:29] = self.get_hydrophobicity(residue)
+            return features
         elif only_aa:
             return self.get_residue(residue)
         else:
-            features = np.zeros(Structure.nFeatures)
+            features = np.zeros(39)
 
             features[0:4] = self.get_charge(residue)
             features[4:8] = self.get_concavity(residue)
@@ -849,8 +998,8 @@ class Structure(object):
             features[15:36] = self.get_residue(residue)
             features[36:39]  = self.get_ss(residue)
 
-            if self.feature_file:
-                self.precalc_features[atom.serial_number-1] = features
+            if self.feature_file and False:
+                self.precalc_features[residue.get_id()[1]-1] = features
 
             return features
 
@@ -895,7 +1044,7 @@ class Structure(object):
         return elem_type
 
     def get_vdw(self, atom):
-        return np.array([vdw.get(atom.get_name().strip()[0], 0.0)])
+        return np.array([vdw_radii.get(atom.element.title(), 2.0)])
 
     def get_charge(self, atom_or_residue):
         if isinstance(atom_or_residue, PDB.Atom.Atom):
@@ -910,7 +1059,7 @@ class Structure(object):
             charge[3] = float(charge_value == 0)
             return charge
         else:
-            raise RuntimeErorr("Input must be Atom or Residue")
+            raise RuntimeError("Input must be Atom or Residue: {}".format(type(atom_or_residue)))
 
         pqr = self._get_pqr()
         atom_id = atom.get_full_id()[3:5]
@@ -989,6 +1138,7 @@ class Structure(object):
         """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             is_atom = True
+            atom = atom_or_residue
             residue = atom_or_residue.get_parent()
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
             is_atom = False
@@ -1005,19 +1155,19 @@ class Structure(object):
                     atom_area = selections["sele"]
             except (KeyError, AssertionError, AttributeError, TypeError):
                 atom_area = np.NaN
-        else:
-            dssp = self._get_dssp()
+
+        dssp = self._get_dssp()
+        try:
+            #("1abc", 0, "A", (" ", 10, "A"), (self.name, self.altloc))
+            residue_area = dssp[residue.get_full_id()[2:]][3]
+        except (KeyError, AssertionError, AttributeError, TypeError):
             try:
-                #("1abc", 0, "A", (" ", 10, "A"), (self.name, self.altloc))
-                residue_area = dssp[residue.get_full_id()[2:]][3]
-            except (KeyError, AssertionError, AttributeError, TypeError):
-                try:
-                    #Remove HETATMs
-                    residue_area = dssp[(residue.get_full_id()[2], (' ', residue.get_full_id()[3][1], ' '))][3]
-                    if residue_area == "NA":
-                        residue_area = np.NaN
-                except (KeyError, AssertionError, AttributeError, TypeError):
+                #Remove HETATMs
+                residue_area = dssp[(residue.get_full_id()[2], (' ', residue.get_full_id()[3][1], ' '))][3]
+                if residue_area == "NA":
                     residue_area = np.NaN
+            except (KeyError, AssertionError, AttributeError, TypeError):
+                residue_area = np.NaN
 
         if is_atom:
             asa = np.zeros(4)
@@ -1078,28 +1228,71 @@ class Structure(object):
         ss[2] = float(atom_ss not in "GHITBE")
         return ss
 
+    def get_deepsite_features(self, atom, calc_charge=True):
+        """Use DeepSites rules for autodock atom types
+        """
+        element, is_hbond_donor = self.get_autodock_features(atom)
+        features = np.zeros(8 if calc_charge else 6, dtype=bool)
+
+        #hydrophobic
+        features[0] = (element == 'C') | (element == 'A')
+
+        #aromatic
+        features[1] = element == 'A'
+
+        #hbond_acceptor
+        features[2] = (element == 'NA') | (element == 'NS') | (element == 'OA') | \
+                      (element == 'OS') | (element == 'SA')
+
+        #hbond_donor
+        features[3] = is_hbond_donor
+
+        #metal
+        features[4] = (element == 'MG') | (element == 'ZN') | (element == 'MN') | \
+                      (element == 'CA') | (element == 'FE')
+
+        #occupancies / excluded volume
+        features[5] = (element != 'H') & (element != 'HS') & (element != 'HD')
+
+        if calc_charge:
+            #positive_ionizable
+            charge = self.get_charge(atom)[0]
+            features[6] = charge > 0
+
+            #negative_ionizable
+            features[7] = charge < 0
+
+        return features.astype(float)
+
     def get_grid_coord_for_atom(self, atom, vsize=96, max_radius=40, homothetic_transformation=False, round=False, voxel_size=None):
         """Convert atom cartesian coordiantes to voxel space using a homothetic transformation
         """
         if voxel_size is not None and voxel_size != self.voxel_size:
             self.set_voxel_size(voxel_size)
 
+
+
         #Center at origin
         #print "original:", atom.coord
-        new_coord = np.array(atom.coord) - self._mean_coord()
+        #new_coord = np.array(atom.coord) - self._mean_coord()
         #print "at origin:", new_coord
 
         if homothetic_transformation:
+            new_coord = np.array(atom.coord) - self._mean_coord()
             adjusted = (int(vsize/2.-1)/float(max_radius))*new_coord
             new_coord = adjusted + (vsize-1)/2 # Translate center
             voxel = new_coord.astype(int) # Round components
         else:
             #No transformation, just fit inside a (256,256,256) volume
-            new_coord += [self.volume/2]*3
+            #new_coord += [self.volume/2]*3
             #print "at 126:", new_coord
             if round:
                 new_coord = np.around(new_coord)
-            voxel = np.digitize(new_coord, self.voxels)
+            voxel = np.array([
+                np.digitize([atom.coord[0]], self.voxels_x)[0]-1,
+                np.digitize([atom.coord[1]], self.voxels_y)[0]-1,
+                np.digitize([atom.coord[2]], self.voxels_z)[0]-1,
+                ])
 
 
         # if half_angstrom:
@@ -1115,13 +1308,23 @@ class Structure(object):
         #print "voxel:", rounded
         return voxel
 
+    def get_grid_occupancy_for_atom(self, atom):
+        a = atom.get_coord()
+        vdw_radii = vdw.get(atom.element.title(), 0.0)
+        return grid_for_atom(coord, vdw_radii, self.voxel_centers)
+
+
     def get_grid_coord_for_residue(self, residue, round=False):
-        coord = residue["CA"].get_coord() #np.mean([a.get_coord() for a in residue], axis=0)
-        coord += [self.volume/2]*3
+        coord = np.mean([a.get_coord() for a in residue], axis=0) #residue["CA"].get_coord() #
+        # coord += [self.volume/2]*3
         if round:
             coord = np.around(coord)
         #print residue.get_resname(), coord,
-        voxel = np.digitize(coord, self.voxels)
+        voxel = np.array([
+            np.digitize([coord[0]], self.voxels_x)[0]-1,
+            np.digitize([coord[1]], self.voxels_y)[0]-1,
+            np.digitize([coord[2]], self.voxels_z)[0]-1,
+            ])
         #print voxel
         return voxel, coord
 
@@ -1135,8 +1338,21 @@ class Structure(object):
         else:
             self.voxel_size = 3.43
         self.voxels = np.arange(0, self.volume, self.voxel_size)
-        make_atom_spheres(self.voxel_size)
-
+        #make_atom_spheres(self.voxel_size)
+        center = np.floor(self.mean_coord)
+        min_box = center-128
+        max_box = center+128
+        minX = min_box[0]
+        minY = min_box[1]
+        minZ = min_box[2]
+        maxX = max_box[0]
+        maxY = max_box[1]
+        maxZ = max_box[2]
+        self.voxels_x = np.arange(minX, maxX, voxel_size)
+        self.voxels_y = np.arange(minY, maxY, voxel_size)
+        self.voxels_z = np.arange(minZ, maxZ, voxel_size)
+        half_voxel = voxel_size/2.
+        self.voxel_centers = np.array((self.voxels_x,self.voxels_y,self.voxels_z)).T+half_voxel
 
         #np.multiply((vsize/2.)-1)/float(max_radius), coords)
 
@@ -1188,6 +1404,27 @@ def rotation_matrix(random = False, theta = 0, phi = 0, z = 0):
     M = (np.outer(V, V) - np.eye(3)).dot(R)
 
     return M
+
+@jit
+def distance(a,b):
+    d = (a[0]-b[0])**2+(a[1]-b[1])**2+(a[0]-b[0])**2+(a[2]-b[2])**2
+    d = np.sqrt(d)
+    return d
+
+@jit
+def grid_for_atom(coord, vdw_radii, centers):
+    """Modified from DeepSite paper
+    """
+    best_center = None
+    best_occupancy = None
+    for grid_center in centers:
+        dist_to_center = distance(coord, grid_center)
+        x = float(vdw_radii)/dist_to_center
+        n = 1-np.exp(-x**12)
+        if best_occupancy is None or n>best_occupancy:
+            best_occupancy = n
+            best_center = grid_center
+    return best_center
 
 if __name__ == "__main__":
   import sys

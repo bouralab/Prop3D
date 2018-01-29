@@ -69,7 +69,7 @@ class SwarmJob(object):
             self.write()
 
         while not SwarmJob.can_add_job():
-            time.sleep(0.1)
+            time.sleep(0.3)
 
         cmd = ["/usr/local/slurm/bin/sbatch"]
 
@@ -77,28 +77,60 @@ class SwarmJob(object):
             cmd.append("--dependency=afterany:{}".format(",".join(hold_jid)))
 
         cmd.append(self.cmd_file)
-        
-        self.job_id = subprocess.check_output(cmd)
-        time.sleep(0.1)
+
+        for _ in xrange(5):
+            try:
+                self.job_id = subprocess.check_output(cmd)
+                break
+            except subprocess.CalledProcessError:
+                time.sleep(0.3)
+
+        time.sleep(0.3)
         return self.job_id
 
-def calculate_features(pdb, chain, resi, id):
+def calculate_features(pdb, chain, resi, id, course_grained):
     from molmimic.biopdbtools import Structure
-    print Structure.features_from_string(pdb, chain, resi, id=id, force_feature_calculation=True)
+    resi = None if resi == "None" else resi
+    course_grained = course_grained == "True"
+    course_grained = bool(course_grained)
+    grid, data = Structure.features_from_string(pdb, chain, resi=resi, id=id, course_grained=course_grained, force_feature_calculation=True)
 
-def load_ibis(ibis_data):
-    from molmimic.keras_model.pdb_generator import IBISGenerator
-    data = IBISGenerator(ibis_data, input_shape=(96,96,96,59))
-    for i, row in data.data.iterrows():
-        print "Running {} ({}.{}): {}".format(row["unique_obs_int"], row["pdb"], row["chain"], ",".join(["{}{}".format(i,n) for i, n in zip(row["resi"].split(","), row["resn"].split(","))]))
-        job = SwarmJob(row["unique_obs_int"])
-        job += "/data/draizene/3dcnn python {} {} {} {} {}\n".format(os.path.realpath(__file__), row["pdb"], row["chain"], row["resi"], row["unique_obs_int"])
+def load_ibis(ibis_data, course_grained=False):
+    from molmimic.torch_model.torch_loader import IBISDataset
+    print "Loading"
+    dataset = IBISDataset(ibis_data, input_shape=(512,512,512))
+    print "Loaded"
+    data = dataset.data #if course_grained else dataset.full_data
+    parsing = True
+    for i, row in data.iterrows():
+        #if row["pdb"]=="3OXQ" and row["chain"] == "A":
+        #    parsing = True
+        #    continue
+        if not parsing:
+            continue
+
+        id = dataset.full_data.loc[(dataset.full_data["pdb"]==row["pdb"])&(dataset.full_data["chain"]==row["chain"])].iloc[0]["gi"]
+        print "Running {}: {}.{}".format(id, row["pdb"], row["chain"])
+        resi = None
+        # else:
+        #     print "Running {} ({}.{}): {}".format(row["unique_obs_int"], row["pdb"], row["chain"], ",".join(["{}{}".format(i,n) for i, n in zip(row["resi"].split(","), row["resn"].split(","))]))
+        #     id = row["unique_obs_int"]
+        #     resi = row["resi"]
+
+        job = SwarmJob(id)
+        job += "/data/draizene/3dcnn-torch python {} {} {} {} {} {}\n".format(os.path.realpath(__file__), row["pdb"], row["chain"], resi, id, course_grained)
         job.submit()
 
 if __name__ == "__main__":
-    if len(sys.argv) == 2:
-        load_ibis(sys.argv[1])
-    elif len(sys.argv) == 5:
+    if len(sys.argv) in [2, 3]:
+        if len(sys.argv) == 3:
+            if sys.argv[1] == "--course-grained":
+                load_ibis(sys.argv[2], True)
+            elif sys.argv[2] == "--course-grained":
+                load_ibis(sys.argv[1], True)
+        else:
+            load_ibis(sys.argv[1])
+    elif len(sys.argv) == 6:
         calculate_features(*sys.argv[1:])
     else:
-        raise RuntimeError("Must be path to ibis luca file or (pdb, chain, resi, id)")
+        raise RuntimeError("Must be path to ibis luca file or (pdb, chain, resi, id, use_course_grained)")
