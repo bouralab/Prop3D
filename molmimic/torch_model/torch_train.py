@@ -8,7 +8,7 @@ import time
 import multiprocessing
 import math
 from datetime import datetime
-from itertools import izip
+from itertools import izip, groupby
 
 import matplotlib
 matplotlib.use("Agg")
@@ -273,7 +273,7 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
             # Iterate over data.
             for data_iter_num, data in enumerate(dataloaders[phase]):
                 #Input will be turned SparseConvNetTensor
-                print "{} Batch: {} of {}".format(phase.title(), data_iter_num, num_batches),
+                print "{} Batch: {} of {}".format(phase.title(), data_iter_num, num_batches-1),
                 datasets[phase].batch = data_iter_num
                 #print type(data["data"]), data["data"].__class__.__name__, data["data"].__class__.__name__ == "InputBatch"
                 scaling = data.get("scaling", 1.0)
@@ -293,13 +293,22 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                     inputs = scn.InputBatch(3, inputSpatialSize)
                     labels = scn.InputBatch(3, inputSpatialSize)
 
+                    if isinstance(data["data"][0], np.ndarray):
+                        long_tensor = lambda arr: torch.from_numpy(arr).long()
+                        float_tensor = lambda arr: torch.from_numpy(arr).float()
+                    elif isinstance(data["data"][0], (list, tuple)):
+                        long_tensor = lambda arr: torch.LongTensor(arr)
+                        float_tensor = lambda arr: torch.FloatTensor(arr)
+                    else:
+                        raise RuntimeError("invalid datatype")
+
                     for sample, (indices, features, truth) in enumerate(izip(data["indices"], data["data"], data["truth"])):
                         inputs.addSample()
                         labels.addSample()
 
-                        indices = torch.LongTensor(indices)
-                        features = torch.FloatTensor(features)
-                        truth = torch.FloatTensor(truth)
+                        indices = long_tensor(indices)
+                        features = float_tensor(features)
+                        truth = float_tensor(truth)
 
                         try:
                             inputs.setLocations(indices, features, 0) #Use 1 to remove duplicate coords?
@@ -349,7 +358,7 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                     raise
 
                 if sparse_input:
-                    loss = criterion(outputs.features, labels.features, scaling)
+                    loss = DiceLoss2()(outputs.features, labels.features, inputs.getSpatialLocations(), scaling)
 
                     if math.isnan(loss.data[0]):
                         print "Loss is Nan?"
@@ -358,14 +367,18 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                     stats.update(outputs.features.data, labels.features.data, loss.data[0])
                 else:
                     outputs = scn.SparseToDense(3, 1)(outputs)
-                    loss = criterion(outputs.cpu(), labels.cpu())
+                    loss = DiceLoss2()(outputs.cpu(), labels.cpu(), inputs.getSpatialLocations(), scaling)
                     stats.update(outputs.data.cpu().view(-1), labels.data.cpu().view(-1), loss.data[0])
 
                 # backward + optimize only if in training phase
                 if phase == 'train':
-                    optimizer.zero_grad()
+                    #optimizer.zero_grad()
+                    a = list(model.parameters())[0].clone()
                     loss.backward()
                     optimizer.step()
+                    b = list(model.parameters())[0].clone()
+                    not_updated = torch.equal(a.data, b.data)
+                    if not_updated: print "NOT UPDATED"
 
                 print "Epoch {} {}: corrects:{:.2f}% nll:{:.2f}% dice:{:.4f}% time:{:.1f}s".format(
                     epoch, phase, stats.correctpct(), stats.nllpct(), loss.data[0]*-100, time.time() - since)
@@ -397,15 +410,73 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
 
     return model
 
-class DiceLoss(_Loss):
+class DiceLoss(torch.autograd.Function):
+    """From torchbiomed"""
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def forward(self, _input, _target, save=True):
+
+        input = _input.view(-1)
+        target = _target.view(-1)
+
+        if save:
+            self.save_for_backward(input, target)
+
+        eps = 0.000001
+        _, result_ = input.max(0)
+        result_ = torch.squeeze(result_)
+        if input.is_cuda:
+            result = torch.cuda.FloatTensor(result_.size())
+            self.target_ = torch.cuda.FloatTensor(target.size())
+        else:
+            result = torch.FloatTensor(result_.size())
+            self.target_ = torch.FloatTensor(target.size())
+        result.copy_(result_)
+        self.target_.copy_(target)
+        target = self.target_
+#       print(input)
+        intersect = torch.dot(result, target)
+        # binary values so sum the same as sum of squares
+        result_sum = torch.sum(result)
+        target_sum = torch.sum(target)
+        union = result_sum + target_sum + (2*eps)
+
+        # the target volume can be empty - so we still want to
+        # end up with a score of 1 if the result is 0/0
+        IoU = intersect / union
+        print('union: {:.3f}\t intersect: {:.6f}\t target_sum: {:.0f} IoU: result_sum: {:.0f} IoU {:.7f}'.format(
+            union, intersect, target_sum, result_sum, 2*IoU))
+        out = torch.FloatTensor(1).fill_(2*IoU)
+        self.intersect, self.union = intersect, union
+        return out
+
+    def backward(self, grad_output):
+        input, _ = self.saved_tensors
+        intersect, union = self.intersect, self.union
+        target = self.target_
+        gt = torch.div(target, union)
+        IoU2 = intersect/(union*union)
+        pred = torch.mul(input[:, 1], IoU2)
+        dDice = torch.add(torch.mul(gt, 2), torch.mul(pred, -4))
+        grad_input = torch.cat((torch.mul(dDice, -grad_output[0]),
+                                torch.mul(dDice, grad_output[0])), 0)
+        return grad_input , None
+
+class DiceLoss2(_Loss):
     def __init__(self, size_average=True, smooth=1.):
-        super(DiceLoss, self).__init__(size_average)
+        super(DiceLoss2, self).__init__(size_average)
         self.smooth = smooth
 
-    def forward(self, input, target, scaling=1.0):
-        return -self.dice_coef(input, target, scaling)
+    def forward(self, input, target, locations, scaling=1.0):
+        if self.size_average:
+            return -self.dice_coef_samples(input, target, locations, scaling)
 
-    def dice_coef(self, input, target, scaling):
+        return -self.dice_coef_batch(input, target, scaling)
+
+
+
+    def dice_coef_batch(self, input, target, weights):
         iflat = input.view(-1)
         tflat = target.view(-1)
         intersection = (iflat * tflat).sum()
@@ -413,9 +484,84 @@ class DiceLoss(_Loss):
         #Do per batch
         dice = ((2. * intersection + self.smooth) / ((iflat.sum() + tflat.sum() + self.smooth)))
 
-        dice /= float(scaling)
-
         return dice
+
+    def dice_coef_samples(self, input, target, locations, weights=1.0):
+        samples = locations[:, 3]
+        #dice = torch.FloatTensor(samples[-1]+1)
+        previous_row = 0
+        dice = None #[0]*samples[-1]+1
+        num_samples = samples[-1]+1
+
+        use_sample_weights = isinstance(weights, (list, tuple))
+
+        for i, sample in groupby(enumerate(samples), key=lambda x:x[1]):
+            for voxel_end in sample: pass
+
+            batch_predictions = input[previous_row:voxel_end[1]+1]
+            target_values = target[previous_row:voxel_end[1]+1]
+            previous_row = voxel_end[1]
+
+            iflat = batch_predictions.view(-1)
+            tflat = target_values.view(-1)
+            intersection = (iflat * tflat).sum()
+
+            dice_val = ((2. * intersection + self.smooth) / ((iflat.sum() + tflat.sum() + self.smooth)))
+
+            # if use_sample_weights:
+            #     dice_val *= weights[i]
+
+            if dice is None:
+                dice = dice_val
+            else:
+                dice += dice_val
+
+        # if not use_sample_weights:
+        #     dice_val *= weights
+
+            #dice.append(dice_val)
+            #if scaling != 1.0:
+            #    dice /= float(scaling)
+        return dice/float(num_samples) #torch.mean(dice)
+
+
+    def forward_lasagne(self, input, target):
+        n = input.size(0)
+        dice = torch.FloatTensor(n).zero_()
+        self.union = torch.FloatTensor(n).zero_()
+        self.intersection = torch.FloatTensor(n).zero_()
+
+        self.result = np.reshape(np.squeeze(np.argmax(bottom[0].data[...],axis=1)),[bottom[0].data.shape[0],bottom[0].data.shape[2]])
+        self.gt = np.reshape(np.squeeze(bottom[1].data[...]),[bottom[1].data.shape[0],bottom[1].data.shape[2]])
+
+        self.gt = (self.gt > 0.5).astype(dtype=np.float32)
+        self.result = self.result.astype(dtype=np.float32)
+
+        for i in xrange(0,n):
+            # compute dice
+            CurrResult = (self.result[i,:]).astype(dtype=np.float32)
+            CurrGT = (self.gt[i,:]).astype(dtype=np.float32)
+
+            self.union[i] = torch.sum(CurrResult)+torch.sum(CurrGT)
+            self.intersection[i] = torch.sum(CurrResult * CurrGT)
+
+            dice[i] = 2 * self.intersection[i] / (self.union[i]+0.00001)
+            print dice[i]
+
+        top[0].data[0]=np.sum(dice)
+
+    def backward_lasagne(self, top, propagate_down, bottom):
+        for btm in [0]:
+            prob = bottom[0].data[...]
+            bottom[btm].diff[...] = np.zeros(bottom[btm].diff.shape, dtype=np.float32)
+            for i in range(0, bottom[btm].diff.shape[0]):
+
+                bottom[btm].diff[i, 0, :] += 2.0 * (
+                    (self.gt[i, :] * self.union[i]) / ((self.union[i]) ** 2) - 2.0*prob[i,1,:]*(self.intersection[i]) / (
+                    (self.union[i]) ** 2))
+                bottom[btm].diff[i, 1, :] -= 2.0 * (
+                    (self.gt[i, :] * self.union[i]) / ((self.union[i]) ** 2) - 2.0*prob[i,1,:]*(self.intersection[i]) / (
+                    (self.union[i]) ** 2))
 
 class IoULoss(_Loss):
     def __init__(self, size_average=True, smooth=1.):

@@ -14,11 +14,12 @@ class SwarmJob(object):
     max_jobs = 1000
     max_cpus = 56
 
-    def __init__(self, name, cpus=1, mem="60g", walltime="72:00:00", gpus=False, user_parameters=None):
+    def __init__(self, name, cpus=1, mem="60", walltime="72:00:00", gpus=False, user_parameters=None):
         parameters = []
 
         self.name = name
         self.cpus = cpus
+        self.mem = mem
         self.cmd_file = "{}.sh".format(self.name)
         self.job_id = None
         self.cmd = "#!/bin/sh\n"
@@ -26,7 +27,7 @@ class SwarmJob(object):
         self.parameters = [
             "--job-name={}".format(name),
             "--cpus-per-task={}".format(cpus),
-            "--mem={}".format(mem),
+            "--mem={}g".format(mem),
             "--time={}".format(walltime)
         ]
 
@@ -39,8 +40,8 @@ class SwarmJob(object):
         if user_parameters is not None and isinstance(user_parameters, (list, tuple)):
             self.parameters += user_parameters
 
-        for param in self.parameters:
-            self.cmd += "#SBATCH {}\n".format(param)
+        # for param in self.parameters:
+        #     self.cmd += "#SBATCH {}\n".format(param)
 
     def __iadd__(self, new):
         self.cmd += new
@@ -64,7 +65,7 @@ class SwarmJob(object):
         with open(self.cmd_file, "w") as f:
             f.write(self.cmd)
 
-    def submit(self, write=True, hold_jid=None):
+    def submit_indivual(self, write=True, hold_jid=None):
         if write:
             self.write()
 
@@ -88,12 +89,31 @@ class SwarmJob(object):
         time.sleep(0.3)
         return self.job_id
 
+    def run(self, write=True):
+        if write:
+            self.write()
+
+        cmd = ["swarm", "--file", self.cmd_file,
+               "--logdir", "logs",
+               "-g", str(self.mem),
+               ]
+
+        for _ in xrange(5):
+            try:
+                self.job_id = subprocess.check_output(cmd)
+                break
+            except subprocess.CalledProcessError:
+                time.sleep(0.3)
+
+        time.sleep(0.3)
+        return self.job_id
+
 def calculate_features(pdb, chain, resi, id, course_grained):
     from molmimic.biopdbtools import Structure
     resi = None if resi == "None" else resi
     course_grained = course_grained == "True"
     course_grained = bool(course_grained)
-    grid, data = Structure.features_from_string(pdb, chain, resi=resi, id=id, course_grained=course_grained, force_feature_calculation=True)
+    Structure.features_from_string(pdb, chain, resi=resi, id=id, course_grained=course_grained, force_feature_calculation=True, grid=False)
 
 def load_ibis(ibis_data, course_grained=False):
     from molmimic.torch_model.torch_loader import IBISDataset
@@ -102,6 +122,7 @@ def load_ibis(ibis_data, course_grained=False):
     print "Loaded"
     data = dataset.data #if course_grained else dataset.full_data
     parsing = True
+    job = SwarmJob("ibis_features")
     for i, row in data.iterrows():
         #if row["pdb"]=="3OXQ" and row["chain"] == "A":
         #    parsing = True
@@ -117,9 +138,8 @@ def load_ibis(ibis_data, course_grained=False):
         #     id = row["unique_obs_int"]
         #     resi = row["resi"]
 
-        job = SwarmJob(id)
         job += "/data/draizene/3dcnn-torch python {} {} {} {} {} {}\n".format(os.path.realpath(__file__), row["pdb"], row["chain"], resi, id, course_grained)
-        job.submit()
+    job.run()
 
 if __name__ == "__main__":
     if len(sys.argv) in [2, 3]:

@@ -5,10 +5,12 @@ import re
 import subprocess
 from cStringIO import StringIO
 from collections import Iterable, Counter, defaultdict
+from itertools import izip
 import tempfile
 
 import numpy as np
 import pandas as pd
+from scipy import spatial
 from sklearn.decomposition import PCA
 from scipy.interpolate import RegularGridInterpolator
 from Bio import PDB
@@ -24,7 +26,6 @@ try:
 except ImportError:
     freesasa = None
 
-import h5py
 try:
     import pybel
 except ImportError:
@@ -260,40 +261,45 @@ class Structure(object):
         self.course_grained = course_grained
         self.nFeatures = Structure.number_of_features(course_grained=course_grained)
 
+        self.shift_coords_to_volume_center()
         #Creates self.voxels
         self.set_voxel_size(voxel_size) #0.5
 
-        precalc_features_path = os.environ.get("MOLMIMIC_FEATURES", os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "features2", "residue" if self.course_grained else "atom"))
-        precalc_features_path = os.path.join(precalc_features_path, "{}.h5".format(self.id))
+        precalc_features_path = os.environ.get("MOLMIMIC_FEATURES", os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "features", "residue" if self.course_grained else "atom"))
+        precalc_features_path = os.path.join(precalc_features_path, "{}.npy".format(self.id))
 
         if course_grained:
             shape = max([r.get_id()[1] for r in self.structure.get_residues()])
         else:
             shape = max([a.serial_number for a in self.structure.get_atoms()])
 
-        #print "There are {} {}".format(shape, "residues" if course_grained else "atoms")
-
-        if force_feature_calculation or not os.path.isfile(precalc_features_path):
-            self.feature_file = h5py.File(precalc_features_path, 'w')
-            self.precalc_features = self.feature_file.create_dataset('features', dtype='f', shape=(shape, self.nFeatures), fillvalue=0., compression='gzip', compression_opts=9)
+        if force_feature_calculation:
+            #print "Calculating features (forced)..."
+            self.precalc_features = np.memmap(precalc_features_path, dtype=np.float, mode="w+", shape=(shape, self.nFeatures))
         else:
             try:
-                self.precalc_features = h5py.File(precalc_features_path, 'r')["features"]
-                self.feature_file = None
-            except IOError:
-                try:
-                    self.feature_file = h5py.File(precalc_features_path, 'w')
-                    self.precalc_features = self.feature_file.create_dataset('features', dtype='f', shape=(shape, self.nFeatures), fillvalue=0., compression='gzip', compression_opts=9)
-                except IOError:
-                    self.feature_file = None
-                    self.precalc_features = None
+                #print precalc_features_path
+                self.precalc_features = np.memmap(precalc_features_path, dtype=np.float, mode="r", shape=(shape, self.nFeatures))
+                #print "Loaded Features"
+            except IOError as e:
+                #print e
+                #print "Calculating features..."
+                self.precalc_features = None #np.memmap(precalc_features_path, dtype=np.float, mode="w+", shape=(shape, self.nFeatures))
 
-        # try:
-        #     aa = SeqIO.index(os.path.join(os.environ.get("PDB_SNAPSHOT", "/pdb")), "sequences", "pdb_seqres.txt")
-        #     self.aa = str(aa["{}_{}".format(pdb, chain[0].upper())].seq)
-        # except KeyError:
-        #     self.aa = None
-        #     print "Canot read seq file:", "{}/sequences/pdb_seqres.txt".format(os.environ.get("PDB_SNAPSHOT", "/pdb"))
+        # if force_feature_calculation or not os.path.isfile(precalc_features_path):
+        #     self.feature_file = h5py.File(precalc_features_path, 'w')
+        #     self.precalc_features = self.feature_file.create_dataset('features', dtype='f', shape=(shape, self.nFeatures), fillvalue=0., compression='gzip', compression_opts=9)
+        # else:
+        #     try:
+        #         self.precalc_features = h5py.File(precalc_features_path, 'r')["features"]
+        #         self.feature_file = None
+        #     except IOError:
+        #         try:
+        #             self.feature_file = h5py.File(precalc_features_path, 'w')
+        #             self.precalc_features = self.feature_file.create_dataset('features', dtype='f', shape=(shape, self.nFeatures), fillvalue=0., compression='gzip', compression_opts=9)
+        #         except IOError:
+        #             self.feature_file = None
+        #             self.precalc_features = None
 
     @staticmethod
     def number_of_features(only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False):
@@ -317,7 +323,7 @@ class Structure(object):
                 return 65
 
     @staticmethod
-    def features_from_string(pdb, chain, resi=None, id=None, input_shape=(96,96,96), batch_index=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, grid=True, return_data=True, return_truth=True, rotate=True, force_feature_calculation=False, expand_atom=False, include_full_protein=False):
+    def features_from_string(pdb, chain, resi=None, id=None, input_shape=(96,96,96), batch_index=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, grid=True, return_data=True, return_truth=True, rotate=True, force_feature_calculation=False, expand_atom=False, include_full_protein=False, balance_classes=False):
         """Get features
 
         Paramters
@@ -337,7 +343,8 @@ class Structure(object):
             id=id,
             course_grained=course_grained,
             force_feature_calculation=force_feature_calculation)
-        s.orient_to_pai()
+
+        #s.orient_to_pai()
         if resi:
             binding_site = s.align_seq_to_struc(resi, return_residue=True)
         else:
@@ -346,20 +353,24 @@ class Structure(object):
         if grid:
             if rotate:
                 s.rotate(1).next()
+
             features = s.get_features(
                 input_shape=input_shape,
                 residue_list=binding_site,
                 batch_index=batch_index,
                 only_aa=only_aa,
                 only_atom=only_atom,
+                non_geom_features=non_geom_features,
                 use_deepsite_features=use_deepsite_features,
                 expand_atom=expand_atom,
-                include_full_protein=include_full_protein)
+                include_full_protein=include_full_protein,
+                balance_classes=balance_classes)
         else:
-            features = s.get_features_per_atom(binding_site)
+            features = [s.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features) \
+                for atom in s.structure.get_atoms()]
 
-        if s.feature_file:
-            s.feature_file.close()
+        if s.precalc_features is not None and force_feature_calculation:
+            s.precalc_features.flush()
 
         return features
 
@@ -540,13 +551,28 @@ class Structure(object):
 
         #id = (atom.get_parent().get_parent().get_id(), atom.get_parent().get_id()[1], atom.get_name().strip())
         #print id, atom.serial_number
-        return self.autodock_features[atom.serial_number]
+        try:
+            return self.autodock_features[atom.serial_number]
+        except KeyError:
+            return "  ", False
 
-    def _mean_coord(self):
+
+    def get_mean_coord(self):
         if not self.mean_coord_updated:
             self.mean_coord = np.mean(self.get_coords(), axis=0)
             self.mean_coord_updated = True
         return self.mean_coord
+
+    def shift_coords_to_volume_center(self):
+        mean_coord = self.get_mean_coord()
+        #print "old mean", mean_coord
+        coords = self.get_coords()-mean_coord
+        coords += np.array([self.volume/2.]*3)
+        self.update_coords(coords)
+        self.mean_coord_updated = False
+        #print "new mean", self.get_mean_coord(), np.min(self.get_coords(), axis=0), np.max(self.get_coords(), axis=0) 
+        #assert 0
+        return np.mean(coords, axis=0)
 
     def get_coords(self, include_hetatms=False, exclude_atoms=None):
         return np.array([a.get_coord() for a in self.get_atoms(
@@ -563,6 +589,7 @@ class Structure(object):
             M = rotation_matrix(random=True)
             coords = np.dot(self.get_coords(), M)
             self.update_coords(coords)
+            self.shift_coords_to_volume_center()
             yield r
 
     def update_coords(self, coords):
@@ -616,7 +643,7 @@ class Structure(object):
         features = [self.get_features_for_atom(a) for r in residue_list for a in r]
         return features
 
-    def get_features(self, input_shape=(96, 96, 96), residue_list=None, batch_index=None, return_data=True, return_truth=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, include_full_protein=False, voxel_size=0.5):
+    def get_features(self, input_shape=(96, 96, 96), residue_list=None, batch_index=None, return_data=True, return_truth=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, include_full_protein=False, balance_classes=False, voxel_size=0.5):
         # return self.get_features_in_grid(
         #     input_shape=input_shape,
         #     residue_list=residue_list,
@@ -632,7 +659,8 @@ class Structure(object):
                 binding_site_residues=residue_list,
                 include_full_protein=include_full_protein,
                 only_aa=only_aa,
-                non_geom_features=non_geom_features
+                non_geom_features=non_geom_features,
+                balance_classes=balance_classes
             )
         return self.map_atoms_to_voxel_space(
             expand_atom=expand_atom,
@@ -641,7 +669,8 @@ class Structure(object):
             only_aa=only_aa,
             only_atom=only_atom,
             use_deepsite_features=use_deepsite_features,
-            non_geom_features=non_geom_features)
+            non_geom_features=non_geom_features,
+            balance_classes=balance_classes)
 
     def get_features_in_grid(self, input_shape=(96, 96, 96), sparse=True, residue_list=None, batch_index=None, return_data=True, return_truth=True, only_aa=False, expand_atom=True, include_full_protein=False, voxel_size=0.5):
         if return_truth and residue_list is None:
@@ -740,7 +769,7 @@ class Structure(object):
         neighbors = self.kdtree.search(atom.get_coord(), radius)
         return neighbors
 
-    def map_atoms_to_voxel_space(self, expand_atom=False, binding_site_residues=None, include_full_protein=False, only_aa=False, only_atom=False, use_deepsite_features=False, non_geom_features=False):
+    def map_atoms_to_voxel_space(self, expand_atom=False, binding_site_residues=None, include_full_protein=False, only_aa=False, only_atom=False, use_deepsite_features=False, non_geom_features=False, balance_classes=False):
         """Map atoms to sparse voxel space.
 
         Parameters
@@ -762,17 +791,26 @@ class Structure(object):
         indices : np.array((nVoxels,3))
         data : np.array((nVoxels,nFeatures))
         """
-        exclude_atoms = None #["N", "C", "O"] #Ignore backbone
-
         if binding_site_residues is not None:
             if not include_full_protein:
                 atoms = sorted((a for r in binding_site_residues for a in r), key=lambda a: a.get_serial_number())
                 atoms = list(self.filter_atoms(atoms, exclude_atoms=exclude_atoms))
                 binding_site_atoms = [a.get_serial_number() for a in atoms]
             else:
-                atoms = list(self.get_atoms(include_hetatms=True, exclude_atoms=exclude_atoms))
+                atoms = list(self.get_atoms(include_hetatms=True))
                 nAtoms = len(atoms)
                 binding_site_atoms = [a.get_serial_number() for r in binding_site_residues for a in r]
+
+                if balance_classes:
+                    non_binding_site_atoms = [a.get_serial_number() for a in atoms if a.get_serial_number() not in binding_site_atoms]
+                    try:
+                        non_binding_site_atoms = np.random.choice(non_binding_site_atoms, len(binding_site_atoms))
+                    except ValueError:
+                        #Might give over balance
+                        non_binding_site_atoms = []
+
+                atoms = list(atoms)
+
         else:
             atoms = list(self.get_atoms(include_hetatms=True, exclude_atoms=exclude_atoms))
             nAtoms = len(atoms)
@@ -791,26 +829,32 @@ class Structure(object):
         if expand_atom:
             atom_points = self.expand_atom
         else:
-            atom_points = lambda a: [self.get_grid_coord_for_atom(a)]
+            atom_points = lambda a: self.get_grid_coords_for_atom_by_kdtree(a, 1)
 
         data_voxels = defaultdict(lambda: np.zeros(nFeatures))
         truth_voxels = defaultdict(lambda: np.zeros(1))
 
         for atom in atoms:
-            print "Getting grid..."
-            atom_sphere = atom_points(atom)
-            print "Finished getting grid...", atom_sphere
-
-            print "Getting features..."
-            features = self.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features)
-            print "Finished getting features..."
-
             truth = np.array([int(atom.get_serial_number() in binding_site_atoms)])
+
+            if not truth and balance_classes and atom.get_serial_number() not in non_binding_site_atoms:
+                continue
+
+            #print "Getting grid..."
+            atom_sphere = atom_points(atom)
+            #print "Finished getting grid...", atom_sphere
+
+            #print "Getting features..."
+            features = self.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features)
+            #print "Finished getting features..."
+
+
 
             for atom_grid in atom_sphere:
                 atom_grid = tuple(atom_grid.tolist())
+                #print atom_grid
                 try:
-                    data_voxels[atom_grid] += features
+                    data_voxels[atom_grid] = np.maximum(features, data_voxels[atom_grid])
                 except ValueError:
                     print nFeatures, data_voxels[atom_grid].shape, features.shape
                     raise
@@ -903,28 +947,33 @@ class Structure(object):
 
     def get_features_for_atom(self, atom, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, preload=True):
         """Calculate FEATUREs"""
-        if not self.feature_file and preload:
-            #print "preload features"
-            features = self.precalc_features[atom.serial_number-1]
-            if use_deepsite_features:
-                print features[59:65]
-                print features[20:22]
-                print features.shape
-                return np.concatenate((
-                    features[59:65],
-                    features[20:22]))
-            if only_atom:
-                return features[13:18]
-            elif only_aa:
-                return features[35:56]
-            elif non_geom_features:
-                return np.concatenate((
-                    features[13:18],
-                    features[19:23],
-                    features[27:31]))
-            else:
-                return features
-        elif use_deepsite_features:
+        assert isinstance(atom, (PDB.Atom.Atom, PDB.Atom.DisorderedAtom))
+        if isinstance(atom, PDB.Atom.DisorderedAtom):
+            #All altlocs have been removed so onlt one remains
+            atom = atom.disordered_get_list()[0]
+
+        if preload and self.precalc_features is not None:
+            try:
+                features = self.precalc_features[atom.serial_number-1]
+                if use_deepsite_features:
+                    return np.concatenate((
+                        features[59:65],
+                        features[20:22]))
+                if only_atom:
+                    return features[13:18]
+                elif only_aa:
+                    return features[35:56]
+                elif non_geom_features:
+                    return np.concatenate((
+                        features[13:18],
+                        features[19:23],
+                        features[27:31]))
+                else:
+                    return features
+            except ValueError:
+                pass
+
+        if use_deepsite_features:
             return self.get_deepsite_features(atom)
         elif only_atom:
             return self.get_element_type(atom)
@@ -956,31 +1005,30 @@ class Structure(object):
             features[56:59] = self.get_ss(atom)
             features[59:65] = self.get_deepsite_features(atom, calc_charge=False)
 
-            if self.feature_file:
+            if self.precalc_features is not None:
                 self.precalc_features[atom.serial_number-1] = features
 
             return features
 
     def get_features_for_residue(self, residue, only_aa=False, non_geom_features=False, preload=False):
         """Calculate FEATUREs"""
-        if not self.feature_file and preload:
+        if preload and self.precalc_features is not None:
             try:
                 features = self.precalc_features[residue.get_id()[1]-1]
+                if non_geom_features:
+                    return np.concatenate((
+                        features[15:36],
+                        features[0:4],
+                        features[8:12],
+                        ))
+                elif only_aa:
+                    return features[15:36]
+                else:
+                    return features[:self.nFeatures]
             except ValueError:
-                print residue.get_id()[1]-1, self.precalc_features.shape[0]
-                print max([r.get_id()[1] for r in self.structure.get_residues()])
-                raise
-            if non_geom_features:
-                return np.concatenate((
-                    features[15:36],
-                    features[0:4],
-                    features[8:12],
-                    ))
-            elif only_aa:
-                return features[15:36]
-            else:
-                return features[:self.nFeatures]
-        elif non_geom_features:
+                pass
+
+        if non_geom_features:
             features = np.zeros(29)
             features[0:21] = self.get_residue(residue)
             features[21:25] = self.get_charge(residue)
@@ -998,7 +1046,7 @@ class Structure(object):
             features[15:36] = self.get_residue(residue)
             features[36:39]  = self.get_ss(residue)
 
-            if self.feature_file and False:
+            if self.precalc_features is not None:
                 self.precalc_features[residue.get_id()[1]-1] = features
 
             return features
@@ -1264,7 +1312,7 @@ class Structure(object):
 
         return features.astype(float)
 
-    def get_grid_coord_for_atom(self, atom, vsize=96, max_radius=40, homothetic_transformation=False, round=False, voxel_size=None):
+    def get_grid_coord_for_atom_by_digitization(self, atom, vsize=96, max_radius=40, homothetic_transformation=False, round=False, voxel_size=None):
         """Convert atom cartesian coordiantes to voxel space using a homothetic transformation
         """
         if voxel_size is not None and voxel_size != self.voxel_size:
@@ -1308,10 +1356,31 @@ class Structure(object):
         #print "voxel:", rounded
         return voxel
 
+    def get_grid_coords_for_atom_by_kdtree(self, atom, k=4):
+        dist = self.get_vdw(atom)[0]
+        neighbors = self.voxel_tree.query_ball_point(atom.coord, r=dist) #k=k, distance_upper_bound=dist)
+        # print dist, neighbors, len(neighbors)
+        return [self.voxel_tree.data[idx] for idx in neighbors]
+        # assert 0
+        # print dist, distances, indices, self.voxel_tree.data[indices] if distances != np.inf else None, atom.coord
+        # if distances == np.inf:
+        #     while distances == np.inf:
+        #         dist += 0.1
+        #         distances, indices = neighbors = self.voxel_tree.query_ball_point(atom.coord, r=dist) #k=k, distance_upper_bound=dist)
+        #         print dist, distances, indices, self.voxel_tree.data[indices] if distances != np.inf else None, atom.coord
+        # if not isinstance(indices, list):
+        #     indices = [indices]
+        #     distances = [distances]
+        # assert 0
+        return [self.voxel_tree.data[idx] for dist, idx in izip(distances, indices) if distance != np.inf]
+
     def get_grid_occupancy_for_atom(self, atom):
         a = atom.get_coord()
         vdw_radii = vdw.get(atom.element.title(), 0.0)
-        return grid_for_atom(coord, vdw_radii, self.voxel_centers)
+        voxel_index, = grid_for_atom(coord, vdw_radii, self.voxel_centers)
+        return (self.voxels_x[voxel_index],
+            self.voxels_y[voxel_index],
+            self.voxels_z[voxel_index])
 
 
     def get_grid_coord_for_residue(self, residue, round=False):
@@ -1333,28 +1402,43 @@ class Structure(object):
 
     def set_voxel_size(self, voxel_size=None):
         if not self.course_grained:
-            assert voxel_size is not None
-            self.voxel_size = voxel_size
+            self.voxel_size = voxel_size or 1.0
         else:
             self.voxel_size = 3.43
         self.voxels = np.arange(0, self.volume, self.voxel_size)
         #make_atom_spheres(self.voxel_size)
-        center = np.floor(self.mean_coord)
-        min_box = center-128
-        max_box = center+128
-        minX = min_box[0]
-        minY = min_box[1]
-        minZ = min_box[2]
-        maxX = max_box[0]
-        maxY = max_box[1]
-        maxZ = max_box[2]
-        self.voxels_x = np.arange(minX, maxX, voxel_size)
-        self.voxels_y = np.arange(minY, maxY, voxel_size)
-        self.voxels_z = np.arange(minZ, maxZ, voxel_size)
+        # center = np.floor(self.mean_coord)
+        # min_box = center-128
+        # max_box = center+128
+        # minX = min_box[0]
+        # minY = min_box[1]
+        # minZ = min_box[2]
+        # maxX = max_box[0]
+        # maxY = max_box[1]
+        # maxZ = max_box[2]
+        #self.voxels = np.arange(0, self.volume, voxel_size)
+        #self.voxels_y = np.arange(minY, maxY, voxel_size)
+        #self.voxels_z = np.arange(minZ, maxZ, voxel_size)
         half_voxel = voxel_size/2.
-        self.voxel_centers = np.array((self.voxels_x,self.voxels_y,self.voxels_z)).T+half_voxel
+        #self.voxel_centers = np.array((self.voxels_x,self.voxels_y,self.voxels_z)).T+half_voxel
 
+        #print "Making KDTree..."
         #np.multiply((vsize/2.)-1)/float(max_radius), coords)
+        coords = self.get_coords()
+        min_coord = np.floor(np.min(coords, axis=0))-5
+        max_coord = np.ceil(np.max(coords, axis=0)+5)+5
+        extent_x = np.arange(min_coord[0], max_coord[0], voxel_size)
+        extent_y = np.arange(min_coord[1], max_coord[1], voxel_size)
+        extent_z = np.arange(min_coord[2], max_coord[2], voxel_size)
+        mx, my, mz = np.meshgrid(extent_x, extent_y, extent_z)
+
+        self.voxel_tree = spatial.cKDTree(zip(mx.ravel(), my.ravel(), mz.ravel()))
+        # print "Made KDTree."
+        # self.extent_start = np.array([
+        #     np.digitize(min_coord[0], self.voxels_x)-1,
+        #     np.digitize(min_coord[1], self.voxels_y)-1,
+        #     np.digitize(min_coord[2], self.voxels_z)-1,
+        # ])
 
     def get_atoms_from_grids(self, grids, vsize=96, max_radius=40):
         for atom in self.get_atoms():
@@ -1407,7 +1491,7 @@ def rotation_matrix(random = False, theta = 0, phi = 0, z = 0):
 
 @jit
 def distance(a,b):
-    d = (a[0]-b[0])**2+(a[1]-b[1])**2+(a[0]-b[0])**2+(a[2]-b[2])**2
+    d = (a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2
     d = np.sqrt(d)
     return d
 
@@ -1415,16 +1499,18 @@ def distance(a,b):
 def grid_for_atom(coord, vdw_radii, centers):
     """Modified from DeepSite paper
     """
+    best_center_index = None
     best_center = None
     best_occupancy = None
-    for grid_center in centers:
+    for i, grid_center in enumerate(centers):
         dist_to_center = distance(coord, grid_center)
         x = float(vdw_radii)/dist_to_center
         n = 1-np.exp(-x**12)
         if best_occupancy is None or n>best_occupancy:
             best_occupancy = n
             best_center = grid_center
-    return best_center
+            best_ceter_index = i
+    return i, best_center
 
 if __name__ == "__main__":
   import sys

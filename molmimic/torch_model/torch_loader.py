@@ -23,8 +23,9 @@ except:
 from molmimic.biopdbtools import Structure, InvalidPDB
 
 def dense_collate(data, batch_size=1):
-    batch = {"data":None, "truth":None}
+    batch = {"data":None, "truth":None, "scaling":1.0}
 
+    num_true = 0
     for i, d in enumerate(data):
         if batch["data"] is None:
             if len(d["data"].shape) == 3:
@@ -36,6 +37,9 @@ def dense_collate(data, batch_size=1):
 
         batch["data"][i, ...] = torch.from_numpy(d["data"])
         batch["truth"][i, ...] = torch.from_numpy(d["truth"])
+        num_true += np.sum(d["truth"])
+
+    batch["scaling"] = float(num_true)/len(data) #(256*256*256)
 
     return batch
 
@@ -62,71 +66,84 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
         def add_sample(indices, features, truth):
             batch["data"].addSample()
             batch["truth"].addSample()
-            indices = torch.from_numpy(indices)
+            indices = torch.from_numpy(indices).long()
             try:
-                batch["data"].setLocations(indices, torch.from_numpy(features), 0) #Use 1 to remove duplicate coords?
-                batch["truth"].setLocations(indices, torch.from_numpy(truth), 0)
+                batch["data"].setLocations(indices, torch.from_numpy(features).float(), 0) #Use 1 to remove duplicate coords?
+                batch["truth"].setLocations(indices, torch.from_numpy(truth).float(), 0)
             except AssertionError:
                 #PDB didn't fit in grid?
                 pass
             #del features
             #del truth
 
+    num_true = 0
+    sample_scales = []
     for d in data:
     	if d["data"] is None: continue
         add_sample(d["indices"], d["data"], d["truth"])
+        num_true += np.sum(d["truth"])
+        sample_scales.append(1.-np.sum(d["truth"])/d["truth"].shape[0])
 
     #print "Made batch"
     if create_tensor:
         batch["data"].precomputeMetadata(1)
 
+    batch["sample_scales"] = sample_scales
+    batch["scaling"] = 1.-float(num_true)/len(data) #(256*256*256)
+
     return batch
 
 class IBISDataset(Dataset):
-    def __init__(self, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, only_atom=False, course_grained=False, expand_atom=False, start_index=0, end_index=None, train=True):
+    def __init__(self, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, start_index=0, end_index=None, full=True, balance_classes=False, train=True):
         self.transform = transform
         self.only_aa = only_aa
         self.only_atom = only_atom
+        self.non_geom_features = non_geom_features
+        self.use_deepsite_features = use_deepsite_features
+        self.full = full
+        self.balance_classes = balance_classes
+        self.train = train
         self.course_grained = course_grained
         self.expand_atom = expand_atom
         self.input_shape = input_shape
         self.epoch = None
         self.batch = None
 
+
         # Open and load text file including the whole training data
         data = pd.read_table(ibis_data, sep="\t")
-        self.data = data.loc[(data["tax_glob_group"] == tax_glob_group) & (data["n"] >= num_representatives)]
+        self.full_data = data.loc[(data["tax_glob_group"] == tax_glob_group) & (data["n"] >= num_representatives)]
 
         try:
             skip = "{}_skip.tab".format(os.path.splitext(ibis_data)[0])
             with open(skip) as skip_f:
                 skip_ids = [int(l.rstrip()) for l in skip_f if l]
-            osize = self.data.shape[0]
-            self.data= self.data.loc[~self.data["unique_obs_int"].isin(skip_ids)]
-            print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", len(skip_ids), osize, self.data.shape[0], osize)
+            osize = self.full_data.shape[0]
+            self.full_data= self.full_data.loc[~self.full_data["unique_obs_int"].isin(skip_ids)]
+            print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", len(skip_ids), osize, self.full_data.shape[0], osize)
         except IOError:
             print "No Skip ID file"
             pass
 
         if 0 < start_index < 1:
-            start_index *= self.data.shape[0]
+            start_index *= self.full_data.shape[0]
 
         if end_index is None:
-            end_index = self.data.shape[0]
+            end_index = self.full_data.shape[0]
         elif end_index < 1:
-            end_index *= self.data.shape[0]
+            end_index *= self.full_data.shape[0]
 
         start_index = int(start_index)
         end_index = int(end_index)
 
-        if start_index != 0 or end_index != self.data.shape[0]:
-            self.data = self.data.iloc[start_index:end_index]
+        if start_index != 0 or end_index != self.full_data.shape[0]:
+            self.full_data = self.full_data.iloc[start_index:end_index]
 
+        self.data = self.full_data[["pdb", "chain"]].drop_duplicates()
         self.n_samples = self.data.shape[0]
-        self.train = train
 
     @classmethod
-    def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, only_atom=False, course_grained=False, expand_atom=False, train_full=False, validate_full=False):
+    def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, train_full=False, validate_full=False, balance_classes=True):
         print "Train full", train_full, "Validate full", validate_full
         train = cls(
             ibis_data,
@@ -137,9 +154,13 @@ class IBISDataset(Dataset):
             end_index=data_split,
             only_aa=only_aa,
             only_atom=only_atom,
+            non_geom_features=non_geom_features,
+            use_deepsite_features=use_deepsite_features,
             course_grained=course_grained,
             expand_atom=expand_atom,
-            train=train_full)
+            full=train_full,
+            balance_classes=balance_classes,
+            train=True)
         validate = cls(
             ibis_data,
             transform=transform,
@@ -148,41 +169,60 @@ class IBISDataset(Dataset):
             num_representatives=num_representatives,
             start_index=data_split,
             only_aa=only_aa,
+            non_geom_features=non_geom_features,
+            use_deepsite_features=use_deepsite_features,
             course_grained=course_grained,
             expand_atom=expand_atom,
             only_atom=only_atom,
-            train=validate_full)
+            full=validate_full,
+            balance_classes=False,
+            train=False)
         return {"train":train, "val":validate}
 
     def get_data_loader(self, batch_size, shuffle, num_workers):
         return DataLoader(self, batch_size=batch_size, \
             shuffle=shuffle, num_workers=num_workers, collate_fn=sparse_collate)
 
+    def get_number_of_features(self):
+        return Structure.number_of_features(
+            only_aa=self.only_aa,
+            only_atom=self.only_atom,
+            non_geom_features=self.non_geom_features,
+            use_deepsite_features=self.use_deepsite_features,
+            course_grained=self.course_grained
+            )
+
     def __getitem__(self, index, verbose=True):
-        datum = self.data.iloc[index]
-        #datum = self.data.loc[(self.data["pdb"]=="1JY3")&(self.data["chain"]=="Q")].iloc[0]
-        print datum
+        pdb_chain = self.data.iloc[index]
+
+        binding_sites = self.full_data.loc[(self.full_data["pdb"]==pdb_chain["pdb"])&(self.full_data["chain"]==pdb_chain["chain"])]
+        #pdb_chain = {"pdb":"4CAK", "chain":"B"}
+        #binding_sites = self.full_data.loc[(self.full_data["pdb"]=="4CAK")&(self.full_data["chain"]=="B")]
+        binding_site_residues = ",".join([binding_site["resi"] for _, binding_site in binding_sites.iterrows()])
+        gi = binding_sites["gi"].iloc[0] #"{}.{}".format(pdb_chain["pdb"], pdb_chain["chain"]) if self.course_grained else binding_sites["unique_obs_int"].iloc[0]
 
         #print "Running {} ({}.{}): {}".format(datum["unique_obs_int"], datum["pdb"], datum["chain"], ",".join(["{}{}".format(i,n) for i, n in zip(datum["resi"].split(","), datum["resn"].split(","))]))
         try:
             indices, data, truth = Structure.features_from_string(
-                datum["pdb"],
-                datum["chain"],
-                datum["resi"],
-                id=datum["unique_obs_int"],
+                pdb_chain["pdb"],
+                pdb_chain["chain"],
+                binding_site_residues,
+                id=gi,
                 input_shape=self.input_shape,
                 rotate=self.transform,
                 only_aa=self.only_aa,
                 only_atom=self.only_atom,
+                non_geom_features=self.non_geom_features,
+                use_deepsite_features=self.use_deepsite_features,
                 course_grained=self.course_grained,
                 expand_atom=self.expand_atom,
-                include_full_protein=self.train)
+                include_full_protein=self.full,
+                balance_classes=self.balance_classes)
         except (KeyboardInterrupt, SystemExit):
             raise
         except InvalidPDB:
             trace = traceback.format_exc()
-            print "Error:", trace
-            with open("{}_{}_{}_{}_{}.error".format(datum["pdb"], datum["chain"], datum["unique_obs_int"], self.epoch, self.batch), "w") as ef:
+            with open("{}_{}_{}_{}_{}.error".format(pdb_chain["pdb"], pdb_chain["chain"], gi, self.epoch, self.batch), "w") as ef:
                 print >> ef, trace
 
             #return
@@ -193,7 +233,7 @@ class IBISDataset(Dataset):
         except:
             trace = traceback.format_exc()
             print "Error:", trace
-            with open("{}_{}_{}_{}_{}.error".format(datum["pdb"], datum["chain"], datum["unique_obs_int"], self.epoch, self.batch), "w") as ef:
+            with open("{}_{}_{}_{}_{}.error".format(pdb_chain["pdb"], pdb_chain["chain"], gi, self.epoch, self.batch), "w") as ef:
                 print >> ef, trace
             raise
 
@@ -238,7 +278,7 @@ class IBISDataset(Dataset):
 
     # Override to give PyTorch size of dataset
     def __len__(self):
-        return self.data.shape[0]
+        return self.n_samples
 
 class SphereDataset(Dataset):
     def __init__(self, shape, cnt=5, r_min=10, r_max=30, border=10, sigma=20, n_samples=1000, train=True):
