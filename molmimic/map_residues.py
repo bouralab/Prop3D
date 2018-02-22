@@ -6,16 +6,17 @@ from xml.etree.cElementTree import parse, ParseError
 class InvalidSIFTS(RuntimeError):
     pass
 
-def map_residues(pdb, chain, resi):
+def map_residues(pdb_name, chain, resi):
     if len(resi) == 1 and isinstance(resi[0], str) and "," in resi[0]:
         resi = map(int, resi[0].split(","))
+    comlete_resi = ",".join(map(str,resi))
     resi = iter(sorted(resi))
     parsing = False
     current_resi = resi.next()
 
-    sifts_path = get_sifts(pdb)
+    sifts_path = get_sifts(pdb_name)
     if sifts_path is None:
-        raise InvalidSIFTS(pdb)
+        raise InvalidSIFTS(pdb_name)
 
     ns = "{http://www.ebi.ac.uk/pdbe/docs/sifts/eFamily.xsd}"
 
@@ -23,21 +24,22 @@ def map_residues(pdb, chain, resi):
         try:
             tree = parse(xml)
         except ParseError:
-            raise InvalidSIFTS(pdb)
+            raise InvalidSIFTS(pdb_name)
 
         elem = tree.getroot()
         for entityNum, entity in enumerate(elem.findall(".//{}entity".format(ns))):
             try:
                 dbChainId = entity.find(".//{ns}segment/{ns}listResidue/{ns}residue/{ns}crossRefDb[@dbSource='PDB']".format(ns=ns)).attrib["dbChainId"]
             except (AttributeError, KeyError):
-                raise InvalidSIFTS(pdb)
+                raise InvalidSIFTS(pdb_name)
             if  dbChainId == chain:
                 for residue in entity.findall(".//{ns}segment/{ns}listResidue/{ns}residue".format(ns=ns)):
                     if int(residue.attrib["dbResNum"]) == current_resi+1:
                         try:
                             pdb = int(residue.findall('.//{}crossRefDb[@dbSource="PDB"]'.format(ns))[0].attrib["dbResNum"])
                         except (IndexError, ValueError) as e:
-                            print "Error PDB is None"
+                            #print "Error PDB is None", pdb_name, chain, comlete_resi, sifts_path
+                            #import pdb; pdb.set_trace()
                             pdb = None
 
                         try:
@@ -59,4 +61,9 @@ def get_sifts(pdb):
     if os.path.isfile(path):
         return path
     else:
-        return None
+        import urllib2
+        path = "{}.xml.gz".format(pdb.lower())
+        sifts = urllib2.urlopen("ftp://ftp.ebi.ac.uk/pub/databases/msd/sifts/xml/{}".format(path))
+        with open(path, "w") as f:
+            f.write(sifts.read())
+        return path

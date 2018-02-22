@@ -5,7 +5,7 @@ def atom_distances(structure):
     import numpy as np
     from molmimic.biopdbtools import Structure
     from sklearn.metrics.pairwise import euclidean_distances
-    
+
     if isinstance(structure, tuple):
         from molmimic.biopdbtools import Structure
         structure = Structure(structure[0], structure[1])

@@ -13,6 +13,7 @@ except ImportError:
 
 import pandas as pd
 import numpy as np
+from scipy.spatial import cKDTree, distance
 
 try:
     import sparseconvnet as scn
@@ -39,7 +40,7 @@ def dense_collate(data, batch_size=1):
         batch["truth"][i, ...] = torch.from_numpy(d["truth"])
         num_true += np.sum(d["truth"])
 
-    batch["scaling"] = float(num_true)/len(data) #(256*256*256)
+    batch["weight"] = float(num_true)/len(data) #(256*256*256)
 
     return batch
 
@@ -76,32 +77,38 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
             #del features
             #del truth
 
-    num_true = 0
-    sample_scales = []
-    for d in data:
+    sample_weights = []
+    batch_weight = 0.0
+    num_data = 0.0
+    for i, d in enumerate(data):
     	if d["data"] is None: continue
         add_sample(d["indices"], d["data"], d["truth"])
-        num_true += np.sum(d["truth"])
-        sample_scales.append(1.-np.sum(d["truth"])/d["truth"].shape[0])
+        num_true = np.sum(d["truth"][:, 0])
+        true_prob = num_true/float(d["truth"].shape[0])
+        sample_weights.append(np.array((1-true_prob, true_prob)))
+        batch_weight += num_true
+        num_data += d["truth"].shape[0]
+
+    batch_weight /= float(num_data)
 
     #print "Made batch"
     if create_tensor:
         batch["data"].precomputeMetadata(1)
 
-    batch["sample_scales"] = sample_scales
-    batch["scaling"] = 1.-float(num_true)/len(data) #(256*256*256)
+    batch["sample_weights"] = np.array(sample_weights)
+    batch["weight"] = np.array([1-batch_weight, batch_weight]) #None #1.-float(num_true)/len(data) #(256*256*256)
 
     return batch
 
 class IBISDataset(Dataset):
-    def __init__(self, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, start_index=0, end_index=None, full=True, balance_classes=False, train=True):
+    def __init__(self, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, start_index=0, end_index=None, undersample=False, oversample=False, train=True):
         self.transform = transform
         self.only_aa = only_aa
         self.only_atom = only_atom
         self.non_geom_features = non_geom_features
         self.use_deepsite_features = use_deepsite_features
-        self.full = full
-        self.balance_classes = balance_classes
+        self.oversample = oversample
+        self.undersample = undersample
         self.train = train
         self.course_grained = course_grained
         self.expand_atom = expand_atom
@@ -140,11 +147,19 @@ class IBISDataset(Dataset):
             self.full_data = self.full_data.iloc[start_index:end_index]
 
         self.data = self.full_data[["pdb", "chain"]].drop_duplicates()
+        self.data["include_negatives"] = True
         self.n_samples = self.data.shape[0]
 
+        if self.oversample:
+            d = self.data.copy()
+            d["include_negatives"] = False
+            d = pd.concat([d]*5, ignore_index=True)
+            self.data = pd.concat((self.data, d), ignore_index=True)
+            self.n_samples = self.data.shape[0]
+
     @classmethod
-    def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, train_full=False, validate_full=False, balance_classes=True):
-        print "Train full", train_full, "Validate full", validate_full
+    def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, oversample=False, undersample=False):
+        print "make undersampe", undersample
         train = cls(
             ibis_data,
             transform=transform,
@@ -158,8 +173,8 @@ class IBISDataset(Dataset):
             use_deepsite_features=use_deepsite_features,
             course_grained=course_grained,
             expand_atom=expand_atom,
-            full=train_full,
-            balance_classes=balance_classes,
+            undersample=undersample,
+            oversample=oversample,
             train=True)
         validate = cls(
             ibis_data,
@@ -174,8 +189,8 @@ class IBISDataset(Dataset):
             course_grained=course_grained,
             expand_atom=expand_atom,
             only_atom=only_atom,
-            full=validate_full,
-            balance_classes=False,
+            undersample=False,
+            oversample=False,
             train=False)
         return {"train":train, "val":validate}
 
@@ -216,8 +231,8 @@ class IBISDataset(Dataset):
                 use_deepsite_features=self.use_deepsite_features,
                 course_grained=self.course_grained,
                 expand_atom=self.expand_atom,
-                include_full_protein=self.full,
-                balance_classes=self.balance_classes)
+                include_full_protein=pdb_chain["include_negatives"],
+                undersample=self.undersample)
         except (KeyboardInterrupt, SystemExit):
             raise
         except InvalidPDB:
@@ -237,36 +252,154 @@ class IBISDataset(Dataset):
                 print >> ef, trace
             raise
 
-        #print "Got data for", index
-        #data = np.nan_to_num(data)
+        sample = {
+            "indices": indices,
+            "data": data,
+            "truth": truth #np.ones((len(grid_indices), 1), dtype=int).tolist()
+            }
 
-        #print truth
-        #print truth.shape
+        return sample
 
-        # grid_indices = []
-        # grid_features = []
-        # grid_truth = []
-        # for grid_index, sample_indices in groupby(sorted(enumerate(indices.tolist()), key=lambda x:x[1]), key=lambda x:x[1]):
-        #     sample_indices, _ = zip(*sample_indices)
-        #     sample_indices = list(sample_indices)
-        #     # print "SAME GRIDS"
-        #     #print data[sample_indices].shape
-        #     # features = np.sum(data[sample_indices], axis=0)
-        #     # #assert np.argmax(features) < data[sample_indices].shape[1]
-        #     # features = np.eye(1, 21, np.argmax(features))[0].tolist() #One-hot
-        #     # grid_indices.append(grid_index)
-        #     # grid_features.append(features)
-        #     # print "NEW FEATURES"
-        #     # print features
+    # Override to give PyTorch size of dataset
+    def __len__(self):
+        return self.n_samples
 
-        #     if verbose and len(sample_indices) > 1:
-        #         print "More than one atom per voxel in", datum["pdb"], datum["chain"], datum["unique_obs_int"]
-        #         print "   ", len(sample_indices), "at", grid_index, "but contain the same residue" if data[sample_indices[0]].tolist()==data[sample_indices[1]].tolist() else "but do not contain the same residue"
-        #         print "   Using the first found atom"
+class IBISUnclusteredDataset(Dataset):
+    def __init__(self, ibis_data, ppi=True, pli=False, transform=True, input_shape=(256, 256, 256), only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, start_index=0, end_index=None, full=True, undersample=False, oversample=False, train=True):
+        self.ppi = ppi
+        self.pli = pli
+        self.transform = transform
+        self.only_aa = only_aa
+        self.only_atom = only_atom
+        self.non_geom_features = non_geom_features
+        self.use_deepsite_features = use_deepsite_features
+        self.full = full
+        self.undersample = undersample
+        self.oversample = oversample
+        self.train = train
+        self.course_grained = course_grained
+        self.input_shape = input_shape
+        self.epoch = None
+        self.batch = None
 
-        #     grid_indices.append(grid_index)
-        #     grid_features.append(data[sample_indices[0]].tolist())
-        #     grid_truth.append(truth[sample_indices[0]].tolist())
+        # Open and load text file including the whole training data
+        self.data = pd.read_table(ibis_data)
+
+        try:
+            skip = "{}_skip.tab".format(os.path.splitext(ibis_data)[0])
+            with open(skip) as skip_f:
+                skip_ids = [int(l.rstrip()) for l in skip_f if l]
+            osize = self.data.shape[0]
+            self.data= self.data.loc[~self.data["pdb"].isin(skip_ids)]
+            print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", len(skip_ids), osize, self.data.shape[0], osize)
+        except IOError:
+            pass
+
+        if 0 < start_index < 1:
+            start_index *= self.data.shape[0]
+
+        if end_index is None:
+            end_index = self.data.shape[0]
+        elif end_index < 1:
+            end_index *= self.data.shape[0]
+
+        start_index = int(start_index)
+        end_index = int(end_index)
+
+        if start_index != 0 or end_index != self.data.shape[0]:
+            self.data = self.data.iloc[start_index:end_index]
+
+        self.data["include_negatives"] = True
+        self.n_samples = self.data.shape[0]
+
+        if self.oversample:
+            d = self.data.copy()
+            d["include_negatives"] = False
+            d = pd.concat([d]*5, ignore_index=True)
+            self.data = pd.concat((self.data, d), ignore_index=True)
+            self.n_samples = self.data.shape[0]
+
+    @classmethod
+    def get_training_and_validation(cls, ibis_data, ppi=True, pli=False, transform=True, input_shape=(96, 96, 96), data_split=0.8, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, undersample=False, oversample=False):
+        train = cls(
+            ibis_data,
+            ppi=ppi,
+            pli=pli,
+            transform=transform,
+            input_shape=input_shape,
+            end_index=data_split,
+            only_aa=only_aa,
+            only_atom=only_atom,
+            non_geom_features=non_geom_features,
+            use_deepsite_features=use_deepsite_features,
+            course_grained=course_grained,
+            undersample=undersample,
+            oversample=oversample,
+            train=True)
+        validate = cls(
+            ibis_data,
+            transform=transform,
+            input_shape=input_shape,
+            start_index=data_split,
+            only_aa=only_aa,
+            non_geom_features=non_geom_features,
+            use_deepsite_features=use_deepsite_features,
+            course_grained=course_grained,
+            only_atom=only_atom,
+            undersample=False,
+            oversample=False,
+            train=False)
+        return {"train":train, "val":validate}
+
+    def get_data_loader(self, batch_size, shuffle, num_workers):
+        return DataLoader(self, batch_size=batch_size, \
+            shuffle=shuffle, num_workers=num_workers, collate_fn=sparse_collate)
+
+    def get_number_of_features(self):
+        return Structure.number_of_features(
+            only_aa=self.only_aa,
+            only_atom=self.only_atom,
+            non_geom_features=self.non_geom_features,
+            use_deepsite_features=self.use_deepsite_features,
+            course_grained=self.course_grained
+            )
+
+    def __getitem__(self, index, verbose=True):
+        data = self.data.iloc[index]
+
+        try:
+            indices, data, truth = Structure.features_from_string(
+                data["pdb"],
+                data["chain"],
+                data["ppi_residues"],
+                input_shape=self.input_shape,
+                rotate=self.transform,
+                only_aa=self.only_aa,
+                only_atom=self.only_atom,
+                non_geom_features=self.non_geom_features,
+                use_deepsite_features=self.use_deepsite_features,
+                course_grained=self.course_grained,
+                include_full_protein=data["include_negatives"],
+                undersample=self.undersample,
+                unclustered=True)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except InvalidPDB:
+            trace = traceback.format_exc()
+            with open("{}_{}_{}_{}.error".format(data["pdb"], data["chain"], self.epoch, self.batch), "w") as ef:
+                print >> ef, trace
+
+            #return
+            return {"indices": None,
+                    "data": None,
+                    "truth": None
+                    }
+        except:
+            trace = traceback.format_exc()
+            print "Error:", trace
+            with open("{}_{}_{}_{}.error".format(data["pdb"], data["chain"], self.epoch, self.batch), "w") as ef:
+                print >> ef, trace
+            raise
 
         sample = {
             "indices": indices,
@@ -280,7 +413,7 @@ class IBISDataset(Dataset):
     def __len__(self):
         return self.n_samples
 
-class SphereDataset(Dataset):
+class DenseSphereDataset(Dataset):
     def __init__(self, shape, cnt=5, r_min=10, r_max=30, border=10, sigma=20, n_samples=1000, train=True):
         self.shape = shape
         self.cnt = cnt
@@ -306,11 +439,106 @@ class SphereDataset(Dataset):
         return self.n_samples
 
     def __getitem__(self, index):
+        np.random.seed()
         indices, data, truth = create_spheres(self.cnt, self.shape, self.border, self.r_min, self.r_max, train=self.train)
 
         sample = {
             "indices": indices,
             "data": data,
+            "truth": truth
+            }
+
+        return sample
+
+class SphereDataset(Dataset):
+    def __init__(self, shape, cnt=3, r_min=15, r_max=30, border=10, sigma=20, n_samples=1000, nFeatures=3, train=True):
+        assert nFeatures > 0
+        self.shape = np.array(shape)
+        self.cnt = cnt
+        self.r_min = r_min
+        self.r_max = r_max
+        self.border = border
+        self.sigma = sigma
+        self.n_samples = n_samples
+        self.nFeatures = nFeatures
+        self.train = train
+
+        x = np.arange(0, self.shape[0])
+        y = np.arange(0, self.shape[1])
+        z = np.arange(0, self.shape[2])
+        mx, my, mz = np.meshgrid(x, y, z)
+        self.voxel_tree = cKDTree(zip(mx.ravel(), my.ravel(), mz.ravel()))
+        
+        self.features = np.eye(self.nFeatures)
+
+        #Return blue (0,0,1) if nFeatures=3, else always 3rd feature is used or last feature if nFeature < 3
+        self.bs_color = self.features[min(2, self.nFeatures-1, )] 
+
+    @classmethod
+    def get_training_and_validation(cls, shape, cnt=3, r_min=15, r_max=30, border=10, n_samples=1000, nFeatures=3, data_split=0.8):
+        train = cls(shape, cnt=cnt, r_min=r_min, r_max=r_max, border=border, n_samples=n_samples*data_split, nFeatures=nFeatures, train=True)
+        validate = cls(shape, cnt=cnt, r_min=r_min, r_max=r_max, border=border, n_samples=n_samples*(1-data_split), nFeatures=nFeatures, train=False)
+        return {"train":train, "val":validate}
+
+    def get_data_loader(self, batch_size, shuffle, num_workers):
+        return DataLoader(self, batch_size=batch_size, \
+            shuffle=shuffle, num_workers=num_workers, collate_fn=sparse_collate)
+
+    # Override to give PyTorch size of dataset
+    def __len__(self):
+        return self.n_samples
+
+    def __getitem__(self, index):
+        np.random.seed()
+
+        #center = [np.random.randint(self.border+self.r_max, edge-border-self.r_max) for edge in shape]
+        r = np.random.randint(self.r_min, self.r_max)
+        center = np.round(self.shape/2.).astype(int)
+
+        outer_sphere_points = self.voxel_tree.query_ball_point(center, r)
+        inner_sphere_points = self.voxel_tree.query_ball_point(center, r-1)
+        sphere_points = np.setdiff1d(outer_sphere_points, inner_sphere_points)
+        indices = np.array([self.voxel_tree.data[i] for i in sphere_points])
+
+        cnt = np.random.randint(1, self.cnt+1)
+
+        tree = cKDTree(indices)
+
+        colors = self.features[np.random.choice(self.nFeatures, indices.shape[0])]
+        truth = np.zeros((indices.shape[0], 2))
+        truth[:, 0] = 1.
+
+        used_points = None
+        distances = None
+        for bs_id in xrange(cnt):
+            num_search = 0
+            while True:
+                idx = np.random.randint(0, indices.shape[0])
+                bs_position = indices[idx]
+                if used_points is None: break
+                distances = distance.cdist(used_points, bs_position[None], 'euclidean')
+                if len(np.where(distances <= 2)[0]) == 0:
+                    break
+                num_search += 1
+            size = np.random.randint(5, 8)
+            ball_indices = list(tree.query_ball_point(bs_position, r=size))
+
+            colors[ball_indices, :] = self.bs_color
+            truth[ball_indices, :] = np.array([0., 1.])
+
+            points = np.array([tree.data[idx] for idx in ball_indices])
+
+            if used_points is None:
+                used_points = points
+            else:
+                used_points = np.concatenate((used_points, points))
+        del used_points
+        del tree
+        del distances
+
+        sample = {
+            "indices": indices,
+            "data": colors,
             "truth": truth
             }
 
