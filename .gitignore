@@ -4,5 +4,6 @@ pdb2pqr_structures
 rosetta_pdbs
 molmimic/data/ibisdown/
 molmimic/data/ibisdown_data/
+molmimic/data/ibis_full.tsv
 features/
 features2/
