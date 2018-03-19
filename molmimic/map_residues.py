@@ -10,6 +10,7 @@ def map_residues(pdb_name, chain, resi):
     if len(resi) == 1 and isinstance(resi[0], str) and "," in resi[0]:
         resi = map(int, resi[0].split(","))
     comlete_resi = ",".join(map(str,resi))
+    
     resi = iter(sorted(resi))
     parsing = False
     current_resi = resi.next()

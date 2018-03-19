@@ -32,16 +32,14 @@ class SwarmJob(object):
         ]
 
         if gpus:
-            self.parametersa += [
+            self.parameters += [
                 "--partition=gpu",
                 "--gres=gpu:k80:{}".format(gpus if isinstance(gpus, int) and gpus > 0 else 4)
                 ]
 
         if user_parameters is not None and isinstance(user_parameters, (list, tuple)):
             self.parameters += user_parameters
-
-        # for param in self.parameters:
-        #     self.cmd += "#SBATCH {}\n".format(param)
+    
 
     def __iadd__(self, new):
         self.cmd += new
@@ -61,11 +59,15 @@ class SwarmJob(object):
     def can_add_job():
         return SwarmJob.number_of_jobs_running()+SwarmJob.number_of_jobs_pending() < SwarmJob.max_jobs
 
+    def add_individual_parameters(self):
+        for param in self.parameters:
+            self.cmd += "#SBATCH {}\n".format(param)
+
     def write(self):
         with open(self.cmd_file, "w") as f:
             f.write(self.cmd)
 
-    def submit_indivual(self, write=True, hold_jid=None):
+    def submit_individual(self, write=True, hold_jid=None):
         if write:
             self.write()
 

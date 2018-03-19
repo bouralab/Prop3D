@@ -83,35 +83,36 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
     logger.update_loss(np.array([kappa_combined]),     meter='kappa_avg')
     logger.update_loss(np.array([f1_combined]),        meter='f1_avg')
 
-    result = (output>0.7).cpu().float()
-    _, results_flat = result.max(dim=1)
-    _, targets_flat = result.max(dim=1)
+    if n_classes == 2:
+        result = (output>0.7).cpu().float()
+        _, results_flat = result.max(dim=1)
+        _, targets_flat = result.max(dim=1)
 
-    iflat = results_flat.view(-1)
-    tflat = targets_flat.view(-1)
-    intersection = (iflat * tflat).sum()
+        iflat = results_flat.view(-1)
+        tflat = targets_flat.view(-1)
+        intersection = (iflat * tflat).sum()
 
-    dice = ((2. * intersection + smooth) / ((iflat.sum() + tflat.sum() + smooth))).data[0]
-    weighted_dice = weight[1]*dice
-    mcc = metrics.matthews_corrcoef(tflat.data.numpy(), iflat.data.numpy())
-    precision = metrics.precision_score(tflat.data.numpy(), iflat.data.numpy())
-    kappa = metrics.cohen_kappa_score(tflat.data.numpy(), iflat.data.numpy())
-    f1 = metrics.f1_score(tflat.data.numpy(), iflat.data.numpy())
+        dice = ((2. * intersection + smooth) / ((iflat.sum() + tflat.sum() + smooth))).data[0]
+        weighted_dice = weight_sum*dice
+        mcc = metrics.matthews_corrcoef(tflat.data.numpy(), iflat.data.numpy())
+        precision = metrics.precision_score(tflat.data.numpy(), iflat.data.numpy())
+        kappa = metrics.cohen_kappa_score(tflat.data.numpy(), iflat.data.numpy())
+        f1 = metrics.f1_score(tflat.data.numpy(), iflat.data.numpy())
 
-    logger.update_loss(np.array([dice]),          meter='dice_flat')
-    logger.update_loss(np.array([weighted_dice]), meter='weighted_dice_flat')
-    logger.update_loss(np.array([mcc]),           meter='mcc_flat')
-    logger.update_loss(np.array([precision]),     meter='precision_flat')
-    logger.update_loss(np.array([kappa]),         meter='kappa_flat')
-    logger.update_loss(np.array([f1]),            meter='f1_flat')
+        logger.update_loss(np.array([dice]),          meter='dice_flat')
+        logger.update_loss(np.array([weighted_dice]), meter='weighted_dice_flat')
+        logger.update_loss(np.array([mcc]),           meter='mcc_flat')
+        logger.update_loss(np.array([precision]),     meter='precision_flat')
+        logger.update_loss(np.array([kappa]),         meter='kappa_flat')
+        logger.update_loss(np.array([f1]),            meter='f1_flat')
 
-    del result
-    del results_flat
-    del targets_flat
-    del weight_sum
-    del iflat
-    del tflat
-    del intersection
+        del result
+        del results_flat
+        del targets_flat
+        del weight_sum
+        del iflat
+        del tflat
+        del intersection
 
     global values
     for meter_name, value in logger.meter.iteritems():

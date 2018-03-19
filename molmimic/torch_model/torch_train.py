@@ -36,7 +36,7 @@ from torchviz import dot
 import subprocess
 subprocess.call("python -c 'import visdom.server as vs; vs.main()' &", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True, save_final=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, course_grained=False, no_batch_norm=False, use_resnet_unet=False, unclustered=False, undersample=False, oversample=False):
+def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=True, save_final=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, course_grained=False, no_batch_norm=False, use_resnet_unet=False, unclustered=False, undersample=False, oversample=False, nFeatures=3, allow_feature_combos=False, bs_feature=None, bs_feature2=None, bs_features=None, stripes=False, data_parallel=False, dropout_depth=False, dropout_width=False, dropout_p=0.5):
     if model_prefix is None:
         model_prefix = "./molmimic_model_{}".format(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
 
@@ -47,11 +47,25 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
 
     if ibis_data == "spheres":
         from torch_loader import SphereDataset
-        datasets = SphereDataset.get_training_and_validation(input_shape, cnt=1, n_samples=1000, data_split=0.99)
-        nFeatures = 3
+        datasets = SphereDataset.get_training_and_validation(input_shape, cnt=1, n_samples=1000, nFeatures=nFeatures, allow_feature_combos=allow_feature_combos, bs_feature=bs_feature, bs_feature2=bs_feature2, bs_features=bs_features, stripes=stripes, data_split=0.99)
         validation_batch_size = 1
+        if bs_features is not None:
+            nClasses = len(bs_features)+1
+        else:
+            nClasses = 2
     elif os.path.isfile(ibis_data):
         dataset = IBISDataset if not unclustered else IBISUnclusteredDataset
+
+        if allow_feature_combos and nFeatures is not None:
+            random_features = (nFeatures, allow_feature_combos, bs_feature, bs_feature2)
+        elif not allow_feature_combos and nFeatures is not None:
+            random_features = (nFeatures, False, bs_feature, bs_feature2)
+        elif allow_feature_combos is not None and nFeatures is None:
+            random_features = None
+            print "ignoring --allow-feature-combos"
+        else:
+            random_features = None
+
         datasets = dataset.get_training_and_validation(
             ibis_data,
             input_shape=input_shape,
@@ -62,8 +76,10 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
             data_split=data_split,
             course_grained=course_grained,
             oversample=oversample,
-            undersample=undersample)
+            undersample=undersample,
+            random_features=random_features)
         nFeatures = datasets["train"].get_number_of_features()
+        nClasses = 2
 
         validation_batch_size = batch_size
     else:
@@ -72,7 +88,7 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
     if num_workers%2 == 0:
         num_workers -= 1
     num_workers /= 2
-    num_workers = 10
+    num_workers = 6
 
     dataloaders = {name:dataset.get_data_loader(
         batch_size if dataset.train else validation_batch_size,
@@ -83,11 +99,14 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
     dtype = 'torch.cuda.FloatTensor' if torch.cuda.is_available() else 'torch.FloatTensor'
 
     if use_resnet_unet:
-        model = ResNetUNet(nFeatures, 2)
+        model = ResNetUNet(nFeatures, nClasses, dropout_depth=dropout_depth, dropout_width=dropout_width, dropout_p=dropout_p)
         #criterion = torchbiomed.loss.DiceLoss #torch.nn.NLLLoss
     else:
-        model = UNet3D(nFeatures, 2, batchnorm=not no_batch_norm)
+        model = UNet3D(nFeatures, nClasses, batchnorm=not no_batch_norm)
         #criterion = torchbiomed.loss.DiceLoss
+
+    if data_parallel:
+        model = torch.nn.DataParallel(model)
 
     model.type(dtype)
 
@@ -115,7 +134,7 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
 
     draw_graph = True
 
-    mlog = MeterLogger(nclass=2, title="Sparse 3D UNet", server="cn4216")
+    mlog = MeterLogger(nclass=nClasses, title="Sparse 3D UNet", server="cn4216")
 
     #Start clean
     for obj in gc.get_objects():
@@ -153,11 +172,16 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                 datasets[phase].batch = data_iter_num
                 #print type(data["data"]), data["data"].__class__.__name__, data["data"].__class__.__name__ == "InputBatch"
                 batch_weight = data.get("weight", None)
+                print batch_weight
                 if batch_weight is not None:
-                    batch_weight = torch.from_numpy(batch_weight).float().cuda()
+                    batch_weight = torch.from_numpy(batch_weight).float()
+                    # if use_gpu:
+                    #     batch_weight = batch_weight.cuda()
                 sample_weights = data.get("sample_weights", None)
                 if sample_weights is not None:
-                    sample_weights = torch.from_numpy(sample_weights).float().cuda()
+                    sample_weights = torch.from_numpy(sample_weights).float()
+                    # if use_gpu:
+                    #     sample_weights = sample_weights.cuda()
 
                 #print sample_weights, batch_weight
 
@@ -198,8 +222,11 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                             print e
                             continue
 
-                        inputs.setLocations(indices, features, 0) #Use 1 to remove duplicate coords?
-                        labels.setLocations(indices, truth, 0)
+                        try:
+                            inputs.setLocations(indices, features, 0) #Use 1 to remove duplicate coords?
+                            labels.setLocations(indices, truth, 0)
+                        except AssertionError:
+                            import pdb; pdb.set_trace()
 
                     del data
                     del indices
@@ -270,7 +297,7 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
 
                 mlog.update_loss(loss, meter='loss')
                 mlog.update_meter(outputs, torch.max(labels.features, 1)[1], meters={'accuracy', 'map'})
-                add_to_logger(mlog,  "Train" if phase=="train" else "Test", epoch, outputs, labels.features, batch_weight)
+                add_to_logger(mlog,  "Train" if phase=="train" else "Test", epoch, outputs, labels.features, batch_weight, n_classes=nClasses)
 
                 # backward + optimize only if in training phase
                 if phase == 'train':
@@ -299,6 +326,7 @@ def train(ibis_data, input_shape=(96,96,96), model_prefix=None, check_point=True
                 del batch_weight
                 del sample_weights
 
+                #Delete all unused objects on the GPU
                 for obj in gc.get_objects():
                     try:
                         if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
@@ -339,7 +367,7 @@ def parse_args():
         "--shape",
         type=int,
         nargs=3,
-        default=(256,256,256))
+        default=(264,264,264))#(256,256,256)
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -429,6 +457,63 @@ def parse_args():
         action="store_true",
         help="Undersample non bidning site atoms"
     )
+    parser.add_argument(
+        "--nFeatures",
+        default=3,
+        required=False,
+        type=int,
+        choices=range(3,8),
+        metavar="[3-7]",
+        help="Number of features to use -- only works in spherical mode"
+    )
+    parser.add_argument(
+        "--allow-feature-combos",
+        default=False,
+        action="store_true",
+        help="Allow combination of features -- only works in spherical mode"
+    )
+    parser.add_argument(
+        "--dropout-width",
+        default=False,
+        action="store_true",
+        help="Apply dropout after convolution operations on width"
+    )
+    parser.add_argument(
+        "--dropout-depth",
+        default=False,
+        action="store_true",
+        help="Apply dropout after convolution operations on depth"
+    )
+    parser.add_argument(
+        "--dropout-p",
+        default=0.5,
+        type=float
+    )
+    parser.add_argument(
+        "--bs-feature",
+        default=None
+    )
+    parser.add_argument(
+        "--bs-feature2",
+        default=None
+    )
+    parser.add_argument(
+        "--bs-features",
+        default=None,
+        nargs="+"
+    )
+    parser.add_argument(
+        "--stripes",
+        default=False,
+        action="store_true",
+        help="On spherical models, apply bs-feature2 as stripes on patch"
+    )
+    parser.add_argument(
+        "--data-parallel",
+        default=False,
+        action="store_true",
+        help=""
+    )
 
     gpus = parser.add_mutually_exclusive_group()
     gpus.add_argument(
@@ -489,5 +574,15 @@ if __name__ == "__main__":
         use_resnet_unet       = args.use_resnet_unet,
         unclustered           = args.unclustered,
         undersample           = args.undersample,
-        oversample            = args.oversample
+        oversample            = args.oversample,
+        nFeatures             = args.nFeatures,
+        allow_feature_combos  = args.allow_feature_combos,
+        bs_feature            = args.bs_feature,
+        bs_feature2           = args.bs_feature2,
+        bs_features           = args.bs_features,
+        stripes               = args.stripes,
+        data_parallel         = args.data_parallel,
+        dropout_depth         = args.dropout_depth,
+        dropout_width         = args.dropout_width,
+        dropout_p             = args.dropout_p
     )

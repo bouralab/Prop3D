@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import sparseconvnet as scn
 import torch.nn.functional as F
+from torch.autograd.variable import Variable
 
 class UNet3D(nn.Module):
     """Sparse 3D Unet for voxel level prediction.
@@ -14,7 +15,7 @@ class UNet3D(nn.Module):
     n_classes : int
     """
 
-    def __init__(self, in_channel, n_classes, batchnorm=True, droput=0.0, maxout=0.0):
+    def __init__(self, in_channel, n_classes, batchnorm=True, droput=0.0):
         self.in_channel = in_channel
         self.n_classes = n_classes
         super(UNet3D, self).__init__()
@@ -60,7 +61,7 @@ class UNet3D(nn.Module):
     def set_log_level(self, level=None):
         self.log_level = level or 0
 
-    def encoder(self, in_channels, out_channels, filter_size=3, filter_stride=1, bias=True, batchnorm=True, submanifold=True, dropout=1.0):
+    def encoder(self, in_channels, out_channels, filter_size=3, filter_stride=1, bias=True, batchnorm=True, submanifold=True, dropout=0.0):
         layer = scn.Sequential(
             scn.SubmanifoldConvolution(3, in_channels, out_channels, filter_size, bias) if submanifold \
                 else scn.Convolution(3, in_channels, out_channels, filter_size, filter_stride, bias),
@@ -202,14 +203,15 @@ class UNet3D(nn.Module):
         act = self.act(conv8)
         del conv8
 
-        return act
+        return act.features
 
 class ResNetUNet(nn.Module):
-    def __init__(self, nInputFeatures, nClasses):
+    def __init__(self, nInputFeatures, nClasses, dropout_depth=False, dropout_width=False, dropout_p=0.5):
         nn.Module.__init__(self)
         self.sparseModel = scn.Sequential().add(
-           scn.ValidConvolution(3, nInputFeatures, 64, 3, False)).add(
-           scn.ResNetUNet(3, 64, 2, 4))
+            scn.ValidConvolution(3, nInputFeatures, 64, 3, False)).add(
+            ResNetUNetDropout(3, 64, 2, 4, dropout_depth=dropout_depth, dropout_width=dropout_width, dropout_p=dropout_p) \
+               if dropout_depth or dropout_width else scn.ResNetUNet(3, 64, 2, 4))
         self.linear = nn.Linear(64, nClasses)
         self.final = scn.ValidConvolution(3, 64, nClasses, 1, False)
         self.relu = scn.ReLU()
@@ -226,25 +228,148 @@ class ResNetUNet(nn.Module):
         #del x3
         return x3
 
-class Dropout(nn.Module):
-    def __init__(self, p=0.5, inplace=False):
-        super(Dropout, self).__init__()
-        if p < 0 or p > 1:
-            raise ValueError("dropout probability has to be between 0 and 1, but got {}".format(p))
-        self.p = p
-        self.inplace = inplace
+def ResNetUNetDropout(dimension, nPlanes, reps, depth=4, dropout_p=0.5, dropout_depth=False, dropout_width=False):
+    """
+    U-Net style network with ResNet-style blocks.
+    For voxel level prediction:
+    import sparseconvnet as scn
+    import torch.nn
+    class Model(nn.Module):
+        def __init__(self):
+            nn.Module.__init__(self)
+            self.sparseModel = scn.Sequential().add(
+               scn.ValidConvolution(3, nInputFeatures, 64, 3, False)).add(
+               scn.ResNetUNet(3, 64, 2, 4))
+            self.linear = nn.Linear(64, nClasses)
+        def forward(self,x):
+            x=self.sparseModel(x).features
+            x=self.linear(x)
+            return x
+    """
+    def _res_dropout(m, a, b, p):
+        m.add(scn.ConcatTable()
+              .add(scn.Identity() if a == b else scn.NetworkInNetwork(a, b, False))
+              .add(scn.Sequential()
+                   .add(scn.BatchNormReLU(a))
+                   .add(Dropout(p))
+                   .add(scn.SubmanifoldConvolution(dimension, a, b, 3, False))
+                   .add(scn.BatchNormReLU(b))
+                   .add(Dropout(p))
+                   .add(scn.SubmanifoldConvolution(dimension, b, b, 3, False))))\
+         .add(scn.AddTable())
 
+    def _res(m, a, b, p):
+        m.add(scn.ConcatTable()
+              .add(scn.Identity() if a == b else scn.NetworkInNetwork(a, b, False))
+              .add(scn.Sequential()
+                   .add(scn.BatchNormReLU(a))
+                   .add(scn.SubmanifoldConvolution(dimension, a, b, 3, False))
+                   .add(scn.BatchNormReLU(b))
+                   .add(scn.SubmanifoldConvolution(dimension, b, b, 3, False))))\
+         .add(scn.AddTable())
+
+    res = _res_dropout if dropout_depth else _res
+
+    def v(depth, nPlanes):
+        m = scn.Sequential()
+        if depth == 1:
+            for _ in range(reps):
+                res(m, nPlanes, nPlanes, dropout_p)
+        else:
+            m = scn.Sequential()
+            for _ in range(reps):
+                res(m, nPlanes, nPlanes, dropout_p)
+            if dropout_width:
+                m.add(
+                    scn.ConcatTable() .add(
+                        scn.Identity()) .add(
+                        scn.Sequential() .add(
+                            scn.BatchNormReLU(nPlanes)) .add(
+                            #In place of Maxpooling
+                            scn.Convolution(
+                                dimension,
+                                nPlanes,
+                                nPlanes,
+                                2,
+                                2,
+                                False)) . add(
+                            Dropout(dropout_p)) .add(
+                                v(
+                                    depth - 1,
+                                    nPlanes)) .add(
+                                        scn.BatchNormReLU(nPlanes)) .add(
+                                            scn.Deconvolution(
+                                                dimension,
+                                                nPlanes,
+                                                nPlanes,
+                                                2,
+                                                2,
+                                                False))))
+            else:
+                m.add(
+                scn.ConcatTable() .add(
+                    scn.Identity()) .add(
+                    scn.Sequential() .add(
+                        scn.BatchNormReLU(nPlanes)) .add(
+                        scn.Convolution(
+                            dimension,
+                            nPlanes,
+                            nPlanes,
+                            2,
+                            2,
+                            False)) .add(
+                            v(
+                                depth - 1,
+                                nPlanes)) .add(
+                                    scn.BatchNormReLU(nPlanes)) .add(
+                                        scn.Deconvolution(
+                                            dimension,
+                                            nPlanes,
+                                            nPlanes,
+                                            2,
+                                            2,
+                                            False))))
+            m.add(scn.JoinTable())
+            for i in range(reps):
+                res(m, 2 * nPlanes if i == 0 else nPlanes, nPlanes, dropout_p)
+        return m
+    m = v(depth, nPlanes)
+    m.add(scn.BatchNormReLU(nPlanes))
+    return m
+
+class RegularDropout(nn.Module):
+    def __init__(self, p = 0.5):
+        nn.Module.__init__(self)
+        self.p = p
     def forward(self, input):
-        output = SparseConvNetTensor()
-        output.features = F.dropout3d(input.features, self.p, self.training, self.inplace)
+        output = scn.SparseConvNetTensor()
+        i = input.features.data
+        if self.training:
+            m = i.new().resize_(1).expand_as(i).fill_(1-self.p)
+            output.features = Variable(i * torch.bernoulli(m), requires_grad=input.features.requires_grad)
+        else:
+            output.features = Variable(i * (1 - self.p), requires_grad=input.features.requires_grad)
         output.metadata = input.metadata
         output.spatial_size = input.spatial_size
         return output
+    def input_spatial_size(self, out_size):
+        return out_size
 
-class Maxout(scn.MaxPooling):
-     def __init__(self, dimension, pool_size, pool_stride, nFeatures, p=0.5):
-        if p < 0 or p > 1:
-            raise ValueError("dropout probability has to be between 0 and 1, "
-                             "but got {}".format(p))
-
-        super(Maxout, self).__init__(dimension, pool_size, pool_stride, nFeaturesToDrop=p*nFeatures)
+class Dropout(nn.Module):
+    """Batchwise Dropout"""
+    def __init__(self, p = 0.5):
+        nn.Module.__init__(self)
+        self.p = p
+    def forward(self, input):
+        output = scn.SparseConvNetTensor()
+        i = input.features.data
+        if self.training:
+            m = i.new().resize_(1).expand(1,i.shape[1]).fill_(1-self.p)
+            output.features = Variable(i * torch.bernoulli(m), requires_grad=input.features.requires_grad)
+        else:
+            output.features = Variable(i * (1 - self.p), requires_grad=input.features.requires_grad)
+        output.metadata = input.metadata
+        output.spatial_size = input.spatial_size
+        return output
+    def input_spatial_size(self, out_size):
+        return out_size

@@ -14,6 +14,8 @@ from sklearn.metrics import silhouette_samples, silhouette_score
 
 from Bio.SVDSuperimposer import SVDSuperimposer 
 
+import seaborn as sns
+
 """
 Modified from Fatiando a Terra fatiando.vis.myv (http://www.fatiando.org/v0.2/index.html)
 """
@@ -248,7 +250,7 @@ def plot_full_volume(volume, truth, grayscale=True, walls=True):
 
     nodes = mayavi.mlab.points3d(volumes_negpts[1][0], volumes_negpts[1][1], volumes_negpts[1][2], mode="cube", scale_factor=1, color=(0, 1, 0), opacity=0.01)
 
-def create_figure(n_samples, size=(96,96,96), walls=True, elev=20, azim=135):
+def create_figure(n_samples, size=(96,96,96), walls=True, elev=20, azim=135, no_prediction=False):
     # Initialization
     plt.clf()
     plt.cla()
@@ -257,10 +259,14 @@ def create_figure(n_samples, size=(96,96,96), walls=True, elev=20, azim=135):
 
     plt.rc('text', usetex = True)
     plt.rc('font', family = 'serif')
-    fig = plt.figure(figsize=(12,12))
+    if no_prediction:
+        fig = plt.figure(figsize=(n_samples*10,10))
+    else:
+        fig = plt.figure(figsize=(12,12))
     axes = []
-    for iax in xrange(2*n_samples):
-        ax = fig.add_subplot(2, n_samples, iax+1, projection='3d')
+    n_plots = n_samples if no_prediction else 2*n_samples
+    for iax in xrange(n_plots):
+        ax = fig.add_subplot(1 if no_prediction else 2, n_samples, iax+1, projection='3d')
         ax.set_aspect('equal')
 
         # Set position of the view
@@ -324,7 +330,7 @@ def plot_volume_matplotlib(ax, volume, truth=None, rot_z180=None, rot_x45=None, 
     From: EnzyNet
     """
     if truth is not None:
-        truth, volume, rot_z180, rot_x45 = move_to_camera_center(truth, volume)
+       truth, volume, rot_z180, rot_x45 = move_to_camera_center(truth, volume)
 
     plot_matrix(ax, volume, colors=colors)
 
@@ -332,23 +338,42 @@ def plot_volume_matplotlib(ax, volume, truth=None, rot_z180=None, rot_x45=None, 
         return rot_z180, rot_x45
 
 
-def plot_cube_at(pos = (0,0,0), ax = None, color=(0,1,0)):
+def plot_cube_at(pos = (0,0,0), ax = None, color=(0,1,0), alpha=0.4):
     """Plots a cube element at position pos
     From: EnzyNet
     """
     if ax != None:
         X, Y, Z = cuboid_data(pos)
-        ax.plot_surface(X, Y, Z, color=color, rstride=1, cstride=1, alpha=0.4, shade=False)
+        ax.plot_surface(X, Y, Z, color=color, rstride=1, cstride=1, alpha=alpha, shade=False)
 
+set2 = sns.color_palette("Set2", 8)
 def plot_matrix(ax, matrix, truth=False, colors=False):
     'Plots cubes from a volumic matrix'
-    if len(matrix.shape) == 3:
+    if len(matrix.shape) >= 3:
+        if len(matrix.shape) == 4 and matrix.shape[3]==3:
+            use_raw_color = True
+        else:
+            use_raw_color = False
+
+        half_k = matrix.shape[2]/2.
         for i in xrange(matrix.shape[0]):
             for j in xrange(matrix.shape[1]):
                 for k in xrange(matrix.shape[2]):
-                    if matrix[i,j,k] == 1:
-                        #print "Plotting voxel at", i, j, k
-                        plot_cube_at(pos=(i,j,k), ax=ax)
+                    #if matrix[i,j,k] == 1:
+                    #print "Plotting voxel at", i, j, k
+                    if truth:
+                        color = (0,0,1)
+                    elif use_raw_color:
+                        color = matrix[i,j,k]
+                    elif colors is not None:
+                        color = colors[n]
+                        if len(color) > 3:
+                            color = set2[np.argmax(color)]
+                    else:
+                         color = (0,1,0)
+
+                    alpha = abs(half_k-k)/half_k
+                    plot_cube_at(pos=(i,j,k), ax=ax, color=color, alpha=alpha)
     elif len(matrix.shape) == 2 and matrix.shape[1] == 3:
         for n, point in enumerate(matrix):
             i,j,k = point
@@ -356,6 +381,8 @@ def plot_matrix(ax, matrix, truth=False, colors=False):
                 color = (0,0,1)
             elif colors is not None:
                 color = colors[n]
+                if len(color) > 3:
+                    color = set2[np.argmax(color)]
             else:
                  color = (0,1,0)
             plot_cube_at(pos = (i,j,k), ax = ax, color=color)

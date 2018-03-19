@@ -105,37 +105,6 @@ vdw_aa_radii = {
 
 surface_areas = {atom:4.*np.pi*(radius**2) for atom, radius in vdw_radii.iteritems()}
 
-def make_sphere(atom, radius, voxel_size=0.25):
-    """Make sphere with given radius centered at the origin"""
-    assert radius > 0 and voxel_size > 0
-
-    sphere_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "{}_{}.npy".format(atom, voxel_size))
-    try:
-        sphere_coords = np.load(sphere_file)
-    except IOError:
-        weight = 1./voxel_size
-        print "using weight", weight
-        radius *= max(1, weight)
-        shape = 2*radius
-
-        y, x, z = np.ogrid[-radius:radius, -radius:radius, -radius:radius]
-        sphere_coords = x*x + y*y + z*z < radius*radius
-        sphere_coords = np.array(np.where(sphere_coords==True)).T.astype("float64")
-        sphere_coords -= np.mean(sphere_coords, axis=0)
-        np.save(sphere_file, sphere_coords)
-    return sphere_coords
-
-atom_spheres = defaultdict()
-def make_atom_spheres(voxel_size=0.25, default_radius=2):
-    global atom_spheres
-    #atom_spheres = {atom:make_sphere(vdw) for atom, vdw in vdw_radii.iteritems()}
-    atom_spheres = {}
-    for atom, vdw in vdw_radii.iteritems():
-        atom_spheres[atom] = make_sphere(atom, vdw, voxel_size)
-    default_sphere = make_sphere("default", default_radius, voxel_size)
-    atom_spheres = defaultdict(lambda:default_sphere, atom_spheres)
-    return atom_spheres
-
 maxASA = {"A": 129.0, "R": 274.0, "N": 195.0, "D": 193.0, "C": 167.0, "E": 223.0, "Q": 225.0, "G": 104.0, "H": 224.0, "I": 197.0, "K": 201.0, "L": 236.0, "M": 224.0, "F": 240.0, "P": 159.0, "S": 155.0, "T": 172.0, "W": 285.0, "Y": 263.0, "V": 174.0}
 
 obsolete_pdbs = pd.read_table(os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "obsolete.dat"), delim_whitespace=True, skiprows=1, names=["status", "data", "old", "new"], header=None,)
@@ -195,7 +164,7 @@ def extract_chain(structure, chain, pdb, write_to_stdout=False):
     return new_structure
 
 class Structure(object):
-    def __init__(self, pdb, chain, path=None, id=None, snapshot=True, course_grained=False, voxel_size=1.0, input_format="pdb", force_feature_calculation=False, unclustered=False):
+    def __init__(self, pdb, chain, path=None, id=None, snapshot=True, course_grained=False, volume=264, voxel_size=1.0, input_format="pdb", force_feature_calculation=False, unclustered=False):
         if path is None and not os.path.isfile(pdb) and len(pdb) == 4:
             path = "{}/pdb/{}/pdb{}.ent.gz".format(os.environ.get("PDB_SNAPSHOT", "/pdb"), pdb[1:3].lower(), pdb.lower())
 
@@ -286,7 +255,7 @@ class Structure(object):
         self.starting_residue = None
         self.starting_index_seq = None
         self.starting_index_struc = None
-        self.volume = 256
+        self.volume = volume
         self.id = "{}_{}{}".format(self.pdb, self.chain, "_{}".format(id) if id else "")
         self.course_grained = course_grained
         self.nFeatures = Structure.number_of_features(course_grained=course_grained)
@@ -319,22 +288,7 @@ class Structure(object):
             except IOError as e:
                 raise InvalidPDB #print e
                 #print "Calculating features..."
-                self.precalc_features = None #np.memmap(precalc_features_path, dtype=np.float, mode="w+", shape=(shape, self.nFeatures))
-
-        # if force_feature_calculation or not os.path.isfile(precalc_features_path):
-        #     self.feature_file = h5py.File(precalc_features_path, 'w')
-        #     self.precalc_features = self.feature_file.create_dataset('features', dtype='f', shape=(shape, self.nFeatures), fillvalue=0., compression='gzip', compression_opts=9)
-        # else:
-        #     try:
-        #         self.precalc_features = h5py.File(precalc_features_path, 'r')["features"]
-        #         self.feature_file = None
-        #     except IOError:
-        #         try:
-        #             self.feature_file = h5py.File(precalc_features_path, 'w')
-        #             self.precalc_features = self.feature_file.create_dataset('features', dtype='f', shape=(shape, self.nFeatures), fillvalue=0., compression='gzip', compression_opts=9)
-        #         except IOError:
-        #             self.feature_file = None
-        #             self.precalc_features = None
+                self.precalc_features = None
 
     @staticmethod
     def number_of_features(only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False):
@@ -376,6 +330,7 @@ class Structure(object):
             pdb,
             chain,
             id=id,
+            volume=np.max(input_shape),
             course_grained=course_grained,
             force_feature_calculation=force_feature_calculation,
             unclustered=unclustered)
@@ -628,13 +583,10 @@ class Structure(object):
 
     def shift_coords_to_volume_center(self):
         mean_coord = self.get_mean_coord()
-        #print "old mean", mean_coord
         coords = self.get_coords()-mean_coord
         coords += np.array([self.volume/2.]*3)
         self.update_coords(coords)
         self.mean_coord_updated = False
-        #print "new mean", self.get_mean_coord(), np.min(self.get_coords(), axis=0), np.max(self.get_coords(), axis=0)
-        #assert 0
         return np.mean(coords, axis=0)
 
     def get_coords(self, include_hetatms=False, exclude_atoms=None):
@@ -677,7 +629,7 @@ class Structure(object):
                 if r.get_id()[1] == resseq:
                     return r
             else:
-                raise InvalidPDB()
+                return None
 
     def align_seq_to_struc(self, *seq_num, **kwds):
         return_residue=kwds.get("return_residue", False)
@@ -685,6 +637,11 @@ class Structure(object):
         if return_residue:
             mapped_residues = [self.get_residue_from_resseq(pdbnum) \
                 for current_resi, resn, pdbnum, ncbi in map_residues(self.pdb, self.chain, seq_num)]
+
+            if mapped_residues.count(None) > len(mapped_residues)/2.:
+                raise InvalidPDB("Binding Site missing from structure")
+
+            mapped_residues = [r for r in mapped_residues if r is not None]
         else:
             mapped_residues = [pdb for current_resi, resn, pdb, ncbi in map_residues(self.pdb, self.chain, seq_num)]
 

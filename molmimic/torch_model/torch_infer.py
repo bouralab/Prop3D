@@ -36,7 +36,7 @@ from molmimic.biopdbtools import Structure
 from torchviz import dot
 #import torchbiomed.loss as bioloss
 
-def load_model(model_file, no_batch_norm=False, use_resnet_unet=True, unclustered=False, nFeatures=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False):
+def load_model(model_file, no_batch_norm=False, use_resnet_unet=True, dropout_depth=False, dropout_width=False, dropout_p=0.5, unclustered=False, nFeatures=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False):
     model_prefix = "./molmimic_model_{}".format(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
 
     dtype = 'torch.cuda.FloatTensor' if torch.cuda.is_available() else 'torch.FloatTensor'
@@ -45,7 +45,7 @@ def load_model(model_file, no_batch_norm=False, use_resnet_unet=True, unclustere
         nFeatures = Structure.number_of_features(only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features)
 
     if use_resnet_unet:
-        model = ResNetUNet(nFeatures, 2)
+        model = ResNetUNet(nFeatures, 2, dropout_depth=dropout_depth, dropout_width=dropout_width, dropout_p=dropout_p)
     else:
         model = UNet3D(nFeatures, 2, batchnorm=not no_batch_norm)
 

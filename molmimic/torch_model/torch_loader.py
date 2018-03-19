@@ -1,3 +1,6 @@
+import sys
+sys.path.append("/data/draizene/molmimic")
+
 import os
 import traceback
 from itertools import groupby
@@ -22,6 +25,7 @@ except:
     scn = None
 
 from molmimic.biopdbtools import Structure, InvalidPDB
+from itertools import product, izip
 
 def dense_collate(data, batch_size=1):
     batch = {"data":None, "truth":None, "scaling":1.0}
@@ -78,16 +82,26 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
             #del truth
 
     sample_weights = []
-    batch_weight = 0.0
-    num_data = 0.0
+    if data[0]["truth"].shape[1] == 2:
+        batch_weight = 0.0
+        num_data = 0.0
+    else:
+        batch_weight = np.zeros(data[0]["truth"].shape[1])
+        num_data = 0.0
     for i, d in enumerate(data):
-    	if d["data"] is None: continue
+        if d["data"] is None: continue
         add_sample(d["indices"], d["data"], d["truth"])
-        num_true = np.sum(d["truth"][:, 0])
-        true_prob = num_true/float(d["truth"].shape[0])
-        sample_weights.append(np.array((1-true_prob, true_prob)))
-        batch_weight += num_true
-        num_data += d["truth"].shape[0]
+        if d["truth"].shape[1] == 2:
+            num_true = np.sum(d["truth"][:, 0])
+            true_prob = num_true/float(d["truth"].shape[0])
+            sample_weights.append(np.array((1-true_prob, true_prob)))
+            batch_weight += num_true
+            num_data += d["truth"].shape[0]
+        else:
+            num_true = np.sum(d["truth"], axis=0)
+            batch_weight += num_true
+            sample_weights.append(num_true/float(d["truth"].shape[0]))
+            num_data += d["truth"].shape[0]
 
     batch_weight /= float(num_data)
 
@@ -95,13 +109,16 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
     if create_tensor:
         batch["data"].precomputeMetadata(1)
 
-    batch["sample_weights"] = np.array(sample_weights)
-    batch["weight"] = np.array([1-batch_weight, batch_weight]) #None #1.-float(num_true)/len(data) #(256*256*256)
-
+    if data[0]["truth"].shape[1] == 2:
+        batch["sample_weights"] = np.array(sample_weights)
+        batch["weight"] = np.array([1-batch_weight, batch_weight]) #None #1.-float(num_true)/len(data) #(256*256*256)
+    else:
+        batch["sample_weights"] = np.array(sample_weights)
+        batch["weight"] = batch_weight
     return batch
 
 class IBISDataset(Dataset):
-    def __init__(self, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, start_index=0, end_index=None, undersample=False, oversample=False, train=True):
+    def __init__(self, ibis_data, transform=True, input_shape=(264,264,264), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, start_index=0, end_index=None, undersample=False, oversample=False, random_features=None, train=True):
         self.transform = transform
         self.only_aa = only_aa
         self.only_atom = only_atom
@@ -115,6 +132,20 @@ class IBISDataset(Dataset):
         self.input_shape = input_shape
         self.epoch = None
         self.batch = None
+
+        self.random_features = random_features
+        if self.random_features is not None:
+            if random_features[1]:
+                self.rfeats = np.array(list(product([0,1], repeat=random_features[0])))
+            else:
+                self.rfeats = np.eye(random_features[0])
+
+            #Return blue (0,0,1) if nFeatures=3, else always 3rd feature is used or last feature if nFeature < 3
+            if len(random_features) >= 3:
+                self.r_bs = np.array(map(int, random_features[2]))
+            else:
+                self.r_bs = self.rfeats[min(2, random_features[0])]
+
 
 
         # Open and load text file including the whole training data
@@ -158,7 +189,7 @@ class IBISDataset(Dataset):
             self.n_samples = self.data.shape[0]
 
     @classmethod
-    def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(96, 96, 96), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, oversample=False, undersample=False):
+    def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(264,264,264), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, oversample=False, undersample=False, random_features=None):
         print "make undersampe", undersample
         train = cls(
             ibis_data,
@@ -175,6 +206,7 @@ class IBISDataset(Dataset):
             expand_atom=expand_atom,
             undersample=undersample,
             oversample=oversample,
+            random_features=random_features,
             train=True)
         validate = cls(
             ibis_data,
@@ -191,6 +223,7 @@ class IBISDataset(Dataset):
             only_atom=only_atom,
             undersample=False,
             oversample=False,
+            random_features=random_features,
             train=False)
         return {"train":train, "val":validate}
 
@@ -199,6 +232,8 @@ class IBISDataset(Dataset):
             shuffle=shuffle, num_workers=num_workers, collate_fn=sparse_collate)
 
     def get_number_of_features(self):
+        if self.random_features is not None:
+            return self.random_features[0]
         return Structure.number_of_features(
             only_aa=self.only_aa,
             only_atom=self.only_atom,
@@ -238,6 +273,7 @@ class IBISDataset(Dataset):
         except InvalidPDB:
             trace = traceback.format_exc()
             with open("{}_{}_{}_{}_{}.error".format(pdb_chain["pdb"], pdb_chain["chain"], gi, self.epoch, self.batch), "w") as ef:
+                print trace
                 print >> ef, trace
 
             #return
@@ -252,6 +288,12 @@ class IBISDataset(Dataset):
                 print >> ef, trace
             raise
 
+        if self.random_features is not None:
+            #Use random features from SphereDataset
+            data = self.rfeats[np.random.choice(len(self.rfeats), indices.shape[0])]
+            truth_indices = np.where(truth[:, 1]==1)
+            data[truth_indices] = self.r_bs
+
         sample = {
             "indices": indices,
             "data": data,
@@ -265,7 +307,7 @@ class IBISDataset(Dataset):
         return self.n_samples
 
 class IBISUnclusteredDataset(Dataset):
-    def __init__(self, ibis_data, ppi=True, pli=False, transform=True, input_shape=(256, 256, 256), only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, start_index=0, end_index=None, full=True, undersample=False, oversample=False, train=True):
+    def __init__(self, ibis_data, ppi=True, pli=False, transform=True, input_shape=(264,264,264), only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, start_index=0, end_index=None, full=True, undersample=False, oversample=False, train=True):
         self.ppi = ppi
         self.pli = pli
         self.transform = transform
@@ -320,7 +362,7 @@ class IBISUnclusteredDataset(Dataset):
             self.n_samples = self.data.shape[0]
 
     @classmethod
-    def get_training_and_validation(cls, ibis_data, ppi=True, pli=False, transform=True, input_shape=(96, 96, 96), data_split=0.8, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, undersample=False, oversample=False):
+    def get_training_and_validation(cls, ibis_data, ppi=True, pli=False, transform=True, input_shape=(264,264,264), data_split=0.8, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, undersample=False, oversample=False):
         train = cls(
             ibis_data,
             ppi=ppi,
@@ -451,7 +493,7 @@ class DenseSphereDataset(Dataset):
         return sample
 
 class SphereDataset(Dataset):
-    def __init__(self, shape, cnt=3, r_min=15, r_max=30, border=10, sigma=20, n_samples=1000, nFeatures=3, train=True):
+    def __init__(self, shape, cnt=3, r_min=15, r_max=30, border=10, sigma=20, n_samples=1000, nFeatures=3, allow_feature_combos=False, bs_feature=None, bs_feature2=None, bs_features=None, train=True, stripes=False):
         assert nFeatures > 0
         self.shape = np.array(shape)
         self.cnt = cnt
@@ -468,16 +510,50 @@ class SphereDataset(Dataset):
         z = np.arange(0, self.shape[2])
         mx, my, mz = np.meshgrid(x, y, z)
         self.voxel_tree = cKDTree(zip(mx.ravel(), my.ravel(), mz.ravel()))
-        
-        self.features = np.eye(self.nFeatures)
 
-        #Return blue (0,0,1) if nFeatures=3, else always 3rd feature is used or last feature if nFeature < 3
-        self.bs_color = self.features[min(2, self.nFeatures-1, )] 
+        if allow_feature_combos:
+            self.features = np.array(list(product([0,1], repeat=nFeatures)))
+        else:
+            self.features = np.eye(self.nFeatures)
+
+        if bs_features is not None:
+            if not isinstance(bs_features, (list,tuple)):
+                raise RuntimeError("Invalid bs_features")
+
+            bs_features = [[np.array(map(int, bs_feat)) for bs_feat in bs_feature.split(",")] for bs_feature in bs_features]
+            try:
+                self.bs_color, self.bs_color2 = zip(*bs_features)
+            except ValueError:
+                self.bs_color = [f[0] for f in bs_features]
+
+            self.n_classes = len(self.bs_color)+1
+        else:
+            #Return blue (0,0,1) if nFeatures=3, else always 3rd feature is used or last feature if nFeature < 3
+            if isinstance(bs_feature, str):
+                self.bs_color = np.array(map(int, bs_feature))
+            elif isinstance(bs_feature, np.ndarray):
+                self.bs_color = bs_feature
+            else:
+                self.bs_color = self.features[min(2, self.nFeatures-1)]
+
+            if isinstance(bs_feature2, str):
+                self.bs_color2 = np.array(map(int, bs_feature2))
+            elif isinstance(bs_feature2, np.ndarray):
+                self.bs_color2 = bs_feature2
+            else:
+                self.bs_color2 = None
+
+            self.n_classes = 2
+
+        if stripes:
+            self.color_patch = make_stripes
+        else:
+            self.color_patch = alternate_colors
 
     @classmethod
-    def get_training_and_validation(cls, shape, cnt=3, r_min=15, r_max=30, border=10, n_samples=1000, nFeatures=3, data_split=0.8):
-        train = cls(shape, cnt=cnt, r_min=r_min, r_max=r_max, border=border, n_samples=n_samples*data_split, nFeatures=nFeatures, train=True)
-        validate = cls(shape, cnt=cnt, r_min=r_min, r_max=r_max, border=border, n_samples=n_samples*(1-data_split), nFeatures=nFeatures, train=False)
+    def get_training_and_validation(cls, shape, cnt=3, r_min=15, r_max=30, border=10, n_samples=1000, nFeatures=3, allow_feature_combos=False, bs_feature=None, bs_feature2=None, bs_features=None, stripes=False, data_split=0.8):
+        train = cls(shape, cnt=cnt, r_min=r_min, r_max=r_max, border=border, n_samples=n_samples*data_split, nFeatures=nFeatures, allow_feature_combos=allow_feature_combos, bs_feature=bs_feature, bs_feature2=bs_feature2, bs_features=bs_features, stripes=False, train=True)
+        validate = cls(shape, cnt=cnt, r_min=r_min, r_max=r_max, border=border, n_samples=n_samples*(1-data_split), nFeatures=nFeatures, allow_feature_combos=allow_feature_combos, bs_feature=bs_feature, bs_feature2=bs_feature2, bs_features=bs_features, stripes=False, train=False)
         return {"train":train, "val":validate}
 
     def get_data_loader(self, batch_size, shuffle, num_workers):
@@ -504,8 +580,8 @@ class SphereDataset(Dataset):
 
         tree = cKDTree(indices)
 
-        colors = self.features[np.random.choice(self.nFeatures, indices.shape[0])]
-        truth = np.zeros((indices.shape[0], 2))
+        colors = self.features[np.random.choice(len(self.features), indices.shape[0])] #self.color_patch(indices, self.bs_color, self.bs_color2) #
+        truth = np.zeros((indices.shape[0], self.n_classes))
         truth[:, 0] = 1.
 
         used_points = None
@@ -522,12 +598,27 @@ class SphereDataset(Dataset):
                 num_search += 1
             size = np.random.randint(5, 8)
             ball_indices = list(tree.query_ball_point(bs_position, r=size))
+            points = [tree.data[idx] for idx in ball_indices]
 
-            colors[ball_indices, :] = self.bs_color
-            truth[ball_indices, :] = np.array([0., 1.])
+            if self.bs_color is not None and isinstance(self.bs_color, (tuple,list)):
+                class_num = np.random.choice(len(self.bs_color))
+                bs_color = self.bs_color[class_num]
+                if self.bs_color2 is not None:
+                    bs_color2 = self.bs_color2[class_num]
+                    colors[ball_indices, :] = self.color_patch(points, bs_color, bs_color2)
+                else:
+                    colors[ball_indices, :] = bs_color
+                truth[ball_indices, class_num] = 1.
+                truth[ball_indices, 0] = 0.
 
-            points = np.array([tree.data[idx] for idx in ball_indices])
+            else:
+                if self.bs_color2 is not None:
+                    colors[ball_indices, :] = self.color_patch(points, self.bs_color, self.bs_color2)
+                else:
+                    colors[ball_indices, :] = self.bs_color
+                truth[ball_indices, :] = np.array([0., 1.])
 
+            points = np.array(points)
             if used_points is None:
                 used_points = points
             else:
@@ -543,6 +634,55 @@ class SphereDataset(Dataset):
             }
 
         return sample
+
+def alternate_colors(patch, color1, color2):
+    """Make sure no voxel in the patch is the same color as its 8 neighest neighbors
+    """
+    tree = cKDTree(patch)
+    features = np.tile(color1, (len(patch),1))
+    for i, pnt in enumerate(patch):
+        #Max distance should be sqrt(3) to account for voxels in one the 27 surrounding voxels,
+        #but since it is circle like, there will only be 8 neighbors
+        neighbors = tree.query(pnt, k=8, distance_upper_bound=1.42)
+        for d, n in izip(*neighbors):
+            if d == np.inf or tree.data[n].tolist() == tree.data[i].tolist(): continue
+            if features[n].tolist() == features[i].tolist():
+                features[n] = color2
+    return features
+
+def make_stripes(patch, color1, color2, gap_dist=np.pi/60.):
+    """Make stripes on patch
+    """
+    #Start with all features of the patch as color1
+    features = np.tile(color1, (len(patch),1))
+    patch = np.array(patch)
+    patch_spherical = to_spherical(patch-np.array((96,96,96)))
+    psis = patch_spherical[:,2]
+    psi_range = np.arange(np.min(psis), np.max(psis), gap_dist)
+
+    for psi in psi_range:
+        stripe_points = np.where((patch_spherical[:,2]>=psi-0.01)&(patch_spherical[:,2]<=psi+0.01))
+        stripe = patch[stripe_points]
+        features[stripe_points] = color2
+
+    return features
+
+def to_spherical(xyz):
+    """(theta, phi, r)
+    """
+    ptsnew = np.zeros(xyz.shape)
+    xy = xyz[:,0]**2 + xyz[:,1]**2
+    ptsnew[:,0] = np.sqrt(xy + xyz[:,2]**2)
+    ptsnew[:,1] = np.arctan2(xyz[:,1], xyz[:,0])
+    ptsnew[:,2] = np.arctan2(np.sqrt(xy), xyz[:,2]) # for elevation angle defined from Z-axis down
+    return ptsnew
+
+def to_cartesian(az, el, r):
+    rcos_theta = r * np.cos(el)
+    x = rcos_theta * np.cos(az)
+    y = rcos_theta * np.sin(az)
+    z = r * np.sin(el)
+    return x, y, z
 
 def create_spheres(num_spheres, shape=(96, 96, 96), border=10, min_r=5, max_r=15, hallow=True, train=True):
     """Create randomly placed and randomy sized spheres inside of a grid
