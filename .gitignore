@@ -1,0 +1,8 @@
+*.pyc
+gromacs_structures
+pdb2pqr_structures
+rosetta_pdbs
+molmimic/data/ibisdown/
+molmimic/data/ibisdown_data/
+features/
+features2/
