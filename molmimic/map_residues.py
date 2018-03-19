@@ -10,7 +10,7 @@ def map_residues(pdb_name, chain, resi):
     if len(resi) == 1 and isinstance(resi[0], str) and "," in resi[0]:
         resi = map(int, resi[0].split(","))
     comlete_resi = ",".join(map(str,resi))
-    
+
     resi = iter(sorted(resi))
     parsing = False
     current_resi = resi.next()
@@ -39,8 +39,6 @@ def map_residues(pdb_name, chain, resi):
                         try:
                             pdb = int(residue.findall('.//{}crossRefDb[@dbSource="PDB"]'.format(ns))[0].attrib["dbResNum"])
                         except (IndexError, ValueError) as e:
-                            #print "Error PDB is None", pdb_name, chain, comlete_resi, sifts_path
-                            #import pdb; pdb.set_trace()
                             pdb = None
 
                         try:

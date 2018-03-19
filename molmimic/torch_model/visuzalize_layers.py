@@ -101,7 +101,7 @@ class Sparse3DCNNLayerVisualization():
             # Loss function is the mean of the output of the selected layer/filter
             # We try to minimize the mean of the output of that specific filter
             loss = torch.mean(self.conv_output)
-            print "Iteration: {}, Loss: {:.2f}".format(i, loss.data.cpu()[0])
+            print("Iteration: {}, Loss: {:.2f}".format(i, loss.data.cpu()[0]))
 
             # Backward
             loss.backward()

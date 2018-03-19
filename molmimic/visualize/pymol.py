@@ -16,14 +16,11 @@ from collections import defaultdict, Counter
 from scipy import spatial
 
 import sys
-print sys.executable
 molpath = os.path.realpath(os.path.join(os.path.dirname(pymol.__script__), "..", ".."))
-print molpath
 sys.path.append(molpath)
-print sys.path
 
 
-from molmimic.torch_model.torch_loader import IBISDataset 
+from molmimic.torch_model.torch_loader import IBISDataset
 
 
 #############################################################################
@@ -115,19 +112,19 @@ class CGO(object):
 
         # YZ Plane
         self.cgo += make_plane_points(name='p1', l1=[x, y+voxel, z], l2=[x, y, z], l3=[x, y, z+voxel], center=False, makepseudo=False, settings=settings)
-        
-        # YZ Plane, shifted in X, 
+
+        # YZ Plane, shifted in X,
         self.cgo += make_plane_points(name='p6', l1=[x+voxel, y+voxel, z], l2=[x+voxel, y, z], l3=[x+voxel, y, z+voxel], center=False, makepseudo=False, settings=settings)
 
         # XZ Plane
         self.cgo += make_plane_points(name='p2', l1=[x+voxel, y, z], l2=[x, y, z], l3=[x, y, z+voxel], center=False, makepseudo=False, settings=settings)
-        
+
         # XZ Plane, shifted in Y, #orange
         self.cgo += make_plane_points(name='p5', l1=[x+voxel, y+voxel, z], l2=[x, y+voxel, z], l3=[x, y+voxel, z+voxel], center=False, makepseudo=False, settings=settings)
 
         # XY Plane, forest
         self.cgo += make_plane_points(name='p4', l1=[x+voxel, y, z], l2=[x, y, z], l3=[x, y+voxel, z], center=False, makepseudo=False, settings=settings)
-        
+
         # XY Plane, shifted in Z, red
         self.cgo += make_plane_points(name='p3', l1=[x+voxel, y, z+voxel], l2=[x, y, z+voxel], l3=[x, y+voxel, z+voxel], center=False, makepseudo=False, settings=settings)
 
@@ -137,10 +134,10 @@ class CGO(object):
         cmd.load_cgo(self.cgo, self.name)
         cmd.set('auto_zoom', az, quiet=1)
 
-def drawBoundingBox(selection="(all)", minX=None, minY=None, minZ=None, maxX=None, maxY=None, maxZ=None, padding=0.0, linewidth=2.0, r=1.0, g=1.0, b=1.0):     
-    """                                                                  
-    DESCRIPTION                                                          
-            Given selection, draw the bounding box around it.          
+def drawBoundingBox(selection="(all)", minX=None, minY=None, minZ=None, maxX=None, maxY=None, maxZ=None, padding=0.0, linewidth=2.0, r=1.0, g=1.0, b=1.0):
+    """
+    DESCRIPTION
+            Given selection, draw the bounding box around it.
 
     USAGE:
             drawBoundingBox [selection, [padding, [linewidth, [r, [g, b]]]]]
@@ -155,25 +152,25 @@ def drawBoundingBox(selection="(all)", minX=None, minY=None, minZ=None, maxX=Non
                                     defaults to 2.0
 
             r,                      red color component, valid range is [0.0, 1.0]
-                                    defaults to 1.0                               
+                                    defaults to 1.0
 
             g,                      green color component, valid range is [0.0, 1.0]
-                                    defaults to 1.0                                 
+                                    defaults to 1.0
 
             b,                      blue color component, valid range is [0.0, 1.0]
-                                    defaults to 1.0                                
+                                    defaults to 1.0
 
     RETURNS
             string, the name of the CGO box
 
     NOTES
             * This function creates a randomly named CGO box that minimally spans the protein. The
-            user can specify the width of the lines, the padding and also the color.                            
-    """                                                                                                    
+            user can specify the width of the lines, the padding and also the color.
+    """
     if None in [minX, minY, minZ, maxX, maxY, maxZ]:
         ([minX, minY, minZ],[maxX, maxY, maxZ]) = cmd.get_extent(selection)
 
-    print "Box dimensions (%.2f, %.2f, %.2f)" % (maxX-minX, maxY-minY, maxZ-minZ)
+    print("Box dimensions (%.2f, %.2f, %.2f)" % (maxX-minX, maxY-minY, maxZ-minZ))
 
     minX = minX - float(padding)
     minY = minY - float(padding)
@@ -183,7 +180,7 @@ def drawBoundingBox(selection="(all)", minX=None, minY=None, minZ=None, maxX=Non
     maxZ = maxZ + float(padding)
 
     if padding != 0:
-             print "Box dimensions + padding (%.2f, %.2f, %.2f)" % (maxX-minX, maxY-minY, maxZ-minZ)
+             print("Box dimensions + padding (%.2f, %.2f, %.2f)" % (maxX-minX, maxY-minY, maxZ-minZ))
 
     boundingBox = [
             LINEWIDTH, float(linewidth),
@@ -311,26 +308,19 @@ def drawgridbox(selection="(all)", volume=256.0, voxel_size=1.0, lw=2.0, r=1.0, 
     mean_coord = np.mean(coords, axis=0)
     volume_center = np.array((extent_x.shape[0]/2., extent_y.shape[0]/2., extent_z.shape[0]/2.))
     shift_by = volume_center-mean_coord
-    print volume_center, shift_by
 
     if show_binding_sites:
         volume_center = np.array((128.,128.,128.))
-        shift_by = volume_center-mean_coord 
+        shift_by = volume_center-mean_coord
         pdb = cmd.get_names("objects", selection=selection)[0].split(".",1)[0].upper()
         for a in model.atom:
             chain = a.chain
             break
 
-        print pdb, chain
-
         ibis_dataset = IBISDataset(os.path.join(molpath, "molmimic", "ibis_luca.tab"), transform=False, input_shape=(256,256,256), balance_classes=bool(undersample))
-
-        print ibis_dataset.data.iloc[0]
-
         index = ibis_dataset.data.loc[(ibis_dataset.data['pdb']==pdb)&(ibis_dataset.data["chain"]==chain)].index[0]
-        print index
-        grids = ibis_dataset[0] 
-        
+        grids = ibis_dataset[0]
+
 
         voxels = CGO("{}_VOXELS".format(pdb))
 
@@ -341,7 +331,7 @@ def drawgridbox(selection="(all)", volume=256.0, voxel_size=1.0, lw=2.0, r=1.0, 
             if oversample and not truth:
                 continue
             voxels.add_cube(grid[0], grid[1], grid[2], r=0, g=g, b=b)
-        voxels.load()   
+        voxels.load()
 
     else:
         xs = np.arange(0, extent_x.shape[0]+1)
@@ -565,7 +555,6 @@ def grid_for_atom(coord, vdw_radii, centers):
         dist_to_center = distance(coord, grid_center)
         x = float(vdw_radii)/dist_to_center
         n = 1-np.exp(-x**12)
-        print n
         if best_occupancy is None or n>best_occupancy:
             best_occupancy = n
             best_center = grid_center
@@ -573,4 +562,3 @@ def grid_for_atom(coord, vdw_radii, centers):
     return best_center_index, best_center
 
 cmd.extend ("drawgridbox", drawgridbox)
-

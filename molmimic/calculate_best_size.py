@@ -21,30 +21,30 @@ def calc_size(ibis_data):
     data = IBISDataset(ibis_data, input_shape=(264,264,264))
 
     with open("protein_distances.txt", "w") as data_file:
-        print >> data_file, "pdb\tchain\tid\tmin\tmax\tdist"
+        print("pdb\tchain\tid\tmin\tmax\tdist", file=data_file)
         for i, row in data.data.iterrows():
-            print "Running {}:{}.{} ({} of {})".format(i, row["pdb"], row["chain"], i+1, data.data.shape[0])
+            print("Running {}:{}.{} ({} of {})".format(i, row["pdb"], row["chain"], i+1, data.data.shape[0]))
 
             coords = data[i]
             min_coord = np.min(coords["indices"], axis=0)
             max_coord = np.max(coords["indices"], axis=0)
             dist = int(np.ceil(np.linalg.norm(max_coord-min_coord)))
 
-            print >> data_file, "{}\t{}\t{}\t{}\t{}\t{}".format(
+            print("{}\t{}\t{}\t{}\t{}\t{}".format(
                 row["pdb"],
                 row["chain"],
                 row["unique_obs_int"],
                 min_coord.tolist(),
                 max_coord.tolist(),
-                dist)
+                dist), file=data_file)
 
             max_dist = max(max_dist, dist)
             min_dist = min(min_dist, dist)
 
-        print >> data_file, "#Max distance: {}".format(max_dist)
-        print >> data_file, "#Min distance: {}".format(min_dist)
-        print "Max distance: {}".format(max_dist)
-        print "Min distance: {}".format(min_dist)
+        print("#Max distance: {}".format(max_dist), file=data_file)
+        print("#Min distance: {}".format(min_dist), file=data_file)
+        print("Max distance: {}".format(max_dist))
+        print("Min distance: {}".format(min_dist))
 
     plot_sizes("protein_distances.txt")
 
@@ -53,7 +53,7 @@ def plot_sizes(size_data):
     sizes = []
     pdbs = []
     with open(size_data) as f:
-        f.next()
+        next(f)
         for line in f:
             if line.startswith("#"):
                 #Max size
@@ -62,8 +62,8 @@ def plot_sizes(size_data):
 
             pdb, chain, id, min_coord, max_coord, dist = line.rstrip().split("\t")
 
-            if int(dist) >= 249:
-                print pdb, chain, id, dist
+            if int(dist) >= 264:
+                print(pdb, chain, id, dist)
 
             if (pdb, chain) in pdbs:
                 continue

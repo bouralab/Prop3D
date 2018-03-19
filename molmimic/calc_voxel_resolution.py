@@ -25,7 +25,7 @@ def atom_distances(structure):
             raise
 
     with open(os.path.join(directory, "{}_{}_min_dist.txt".format(structure.pdb, structure.chain)), "w") as f:
-        print >> f, min_dist
+        print(min_dist, file=f)
 
 def atom_density(structure):
     import numpy as np
@@ -36,7 +36,7 @@ def atom_density(structure):
     min_coord = np.min(coords, axis=0)
     max_coord = np.max(coords, axis=0)
     volume = np.prod(max_coord-min_coord)
-    density = len(coords)/float(volume)
+    density = len(coords)/volume
 
     directory = "atom_densities"
 
@@ -47,7 +47,7 @@ def atom_density(structure):
             raise
 
     with open(os.path.join("{}_{}_density.txt".format(structure.pdb, structure.chain)), "w") as f:
-        print >> f, density
+        print(density, file=f)
 
 def atom_density_by_sliding_box(structure, volume=5, stride=1, pad=True):
     import numpy as np
@@ -64,8 +64,8 @@ def atom_density_by_sliding_box(structure, volume=5, stride=1, pad=True):
     max_coord = np.max(coords, axis=0)
     volume = np.prod(max_coord-min_coord)
 
-    pad_min = stride/2
-    pad_max = int(np.ciel(stride/2.))
+    pad_min = int(np.floor(stride/2))
+    pad_max = int(np.ciel(stride/2))
 
     total_volume = volume*volume*volume
 
@@ -73,12 +73,11 @@ def atom_density_by_sliding_box(structure, volume=5, stride=1, pad=True):
     for i, x in enumerate(xrange(int(min_coord[0])-pad_min, int(max_coord[0])+pad_max, stride)):
         for j, y in enumerate(xrange(int(min_coord[1])-pad_min, int(max_coord[1])+pad_max, stride)):
             for k, z in enumerate(xrange(int(min_coord[2])-pad_min, int(max_coord[2])+pad_max, stride)):
-                neighbors = kdtree.search(((2*x+1)/2., (2*y+1)/2., (2*z+1)/2.), radius=volume/2.)
-                densities.append(len(neighbors)/float(total_volume))
+                neighbors = kdtree.search(((2*x+1)/2, (2*y+1)/2, (2*z+1)/2), radius=volume/2)
+                densities.append(len(neighbors)/total_volume)
 
     density = np.mean(densities)
     std = np.std(densities)
-
 
     directory = "atom_densities2"
 
@@ -89,7 +88,7 @@ def atom_density_by_sliding_box(structure, volume=5, stride=1, pad=True):
             raise
 
     with open(os.path.join(directory, "{}_{}_density_{}.txt".format(structure.pdb, structure.chain, volume)), "w") as f:
-        print >> f, "{}\t{}".format(density, std)
+        print("{}\t{}".format(density, std), file=f)
 
 def atom_collisions(structure):
     from collections import Counter
@@ -108,16 +107,16 @@ def atom_collisions(structure):
             raise
 
     for grid_size in xrange(25, 255, 5):
-        grid_size /= 100.
+        grid_size /= 100
         structure.set_voxel_size(grid_size)
         occupancy = Counter()
         for atom in structure.get_atoms(exclude_atoms=["N", "C", "O"]):
             grid = tuple(structure.get_grid_coord(atom).tolist())
             occupancy[grid] += 1
         with open(os.path.join(direcotry, "{}_{}_collisions_{}.tsv".format(structure.pdb, structure.chain, grid_size)), "w") as f:
-            print f.name
+            print(f.name)
             for grid, collisions in occupancy.iteritems():
-                print >> f, "{}\t{}\t{}\t{}".format(grid[0], grid[1], grid[2], collisions)
+                print("{}\t{}\t{}\t{}".format(grid[0], grid[1], grid[2], collisions), file=f)
 
 def run(pdb, chain, density=True, collisions=False, atom_distances=False):
     from molmimic.biopdbtools import Structure
@@ -156,17 +155,17 @@ def plot(density=True, collisions=True, atom_distances=True):
     if collisions:
         collision_data = pd.DataFrame()
         for grid_size in xrange(25, 255, 5):
-            grid_size /= 100.
+            grid_size /= 100
             with open("/data/draizene/molmimic/atom_collisions/{}.txt".format(grid_size), "w") as out:
                 for f in glob.glob("/data/draizene/molmimic/atom_collisions/*_collisions_{}.tsv".format(grid_size)):
                     with open(f) as f_:
                         for line in f_:
-                            print >> out, line.rstrip().split("\t")[-1]
-            print grid_size
+                            print(line.rstrip().split("\t")[-1], file=out)
+            print(grid_size)
 
         collision_data = pd.DataFrame()
         for grid_size in xrange(25, 255, 5):
-            grid_size /= 100.
+            grid_size /= 100
             data = pd.read_table("/data/draizene/molmimic/atom_collisions/{}.txt".format(grid_size), names="Occupancy")
             sns.distplot(data, hist=False, axlabel="Occupancy")
             plt.savefig(os.path.join(directory, "collisions_{}.pdf".format(grid_size)))
@@ -196,7 +195,7 @@ def voxel_resolution2(pdb, chain):
     min_dist = distances[mask].min()
 
     with open("{}_{}_distances.txt".format(pdb, chain), "w") as f:
-        print >> f, min_dist
+        print(min_dist, file=f)
 
 def min_voxel_resolution():
     import glob
@@ -205,9 +204,9 @@ def min_voxel_resolution():
         with open(fname) as f:
             dist = float(f.read().rstrip())
             min_dist = min(min_dist, dist)
-    print "Min distance is", min_dist
+    print("Min distance is", min_dist)
     with open("global_min_dist.txt", "w") as f:
-        print >> f, min_dist
+        print(min_dist, file=f)
 
 def load_ibis(ibis_data):
     import os
@@ -217,13 +216,13 @@ def load_ibis(ibis_data):
     data = data.data[['pdb', 'chain']].drop_duplicates()
     jobs = []
     for i, row in data.iterrows():
-        print "Running {}.{}".format(row["pdb"], row["chain"])
+        print("Running {}.{}".format(row["pdb"], row["chain"]))
         job = SwarmJob("dist_{}.{}".format(row["pdb"], row["chain"]))
         job += "/data/draizene/3dcnn-torch python {} {} {}\n".format(os.path.realpath(__file__), row["pdb"], row["chain"])
         jid = job.submit()
         jobs.append(jid)
 
-    print "Running Reduce"
+    print("Running Reduce")
     job = SwarmJob("reduce")
     job += "/data/draizene/3dcnn python-torch {} reduce\n".format(os.path.realpath(__file__), row["pdb"], row["chain"])
     job.submit(hold_jid=jobs)

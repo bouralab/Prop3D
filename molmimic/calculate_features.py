@@ -39,7 +39,7 @@ class SwarmJob(object):
 
         if user_parameters is not None and isinstance(user_parameters, (list, tuple)):
             self.parameters += user_parameters
-    
+
 
     def __iadd__(self, new):
         self.cmd += new
@@ -119,9 +119,7 @@ def calculate_features(pdb, chain, resi, id, course_grained):
 
 def load_ibis(ibis_data, course_grained=False):
     from molmimic.torch_model.torch_loader import IBISDataset
-    print "Loading"
     dataset = IBISDataset(ibis_data, input_shape=(512,512,512))
-    print "Loaded"
     data = dataset.data #if course_grained else dataset.full_data
     parsing = True
     job = SwarmJob("ibis_features")
@@ -133,12 +131,8 @@ def load_ibis(ibis_data, course_grained=False):
             continue
 
         id = dataset.full_data.loc[(dataset.full_data["pdb"]==row["pdb"])&(dataset.full_data["chain"]==row["chain"])].iloc[0]["gi"]
-        print "Running {}: {}.{}".format(id, row["pdb"], row["chain"])
+        print("Running {}: {}.{}".format(id, row["pdb"], row["chain"]))
         resi = None
-        # else:
-        #     print "Running {} ({}.{}): {}".format(row["unique_obs_int"], row["pdb"], row["chain"], ",".join(["{}{}".format(i,n) for i, n in zip(row["resi"].split(","), row["resn"].split(","))]))
-        #     id = row["unique_obs_int"]
-        #     resi = row["resi"]
 
         job += "/data/draizene/3dcnn-torch python {} {} {} {} {} {}\n".format(os.path.realpath(__file__), row["pdb"], row["chain"], resi, id, course_grained)
     job.run()

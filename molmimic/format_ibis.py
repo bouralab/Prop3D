@@ -7,7 +7,7 @@ def parse_ibis_centroid(pdb, chain, resi, input_shape=(96,96,96), rotations=200)
     f = h5py.File('{}_{}_{}.h5'.format(index, pdb, chain), 'w')
     data_grid = f.create_dataset("data", (200, 96, 96, 96, 50), fillvalue=0, compression='gzip', compression_opts=9)
     truth_grid = f.create_dataset("truth", (200, 96, 96, 96, 1), fillvalue=0, compression='gzip', compression_opts=9)
-    print index, pdb, chain, resi
+    print(index, pdb, chain, resi)
     try:
         structure = Structure.from_pdb(pdb, expand_to_p1=False)
     except IOError:
@@ -25,7 +25,7 @@ def parse_ibis_centroid(pdb, chain, resi, input_shape=(96,96,96), rotations=200)
             grid = binding_site.get_grid_coord(atom)
             data_grid[rotation_num, grid[0], grid[1], grid[2], :] = structure.get_features_for_atom(binding_site.parent_iseqs[atom.i_seq], i_seq=True)
             truth_grid[rotation_num, grid[0], grid[1], grid[2], 0] = 1
-    
+
     f.close()
 
 def concatenate(h5_files_f):
@@ -40,7 +40,7 @@ def concatenate(h5_files_f):
 
     with open(h5_files_f) as files:
         for i, file in enumerate(files):
-            print "FILE:", file.rstrip()
+            print("FILE:", file.rstrip())
             file = h5py.File(file.rstrip(), 'r')
             data_grid[i, ...] = file["data"]
             truth_grid[i, ...] = file["truth"]
@@ -59,7 +59,7 @@ def parse_ibis_centroids(tax_glob_group="A_eukaryota", num_represtatives=20):
     resfaces = pd.read_table(resfaces_f, header=0)
     data = pd.merge(resfaces, observations, left_on="unique_obs_int", right_on="uniq_obs_int_id")
     data = data.loc[(data["tax_glob_group"] == tax_glob_group) & (data["n"] >= num_represtatives)]
-    
+
     h5_data_files = open("h5_data_files.txt", "w")
     job_ids = []
     for i, row in data.iterrows():
@@ -68,7 +68,7 @@ def parse_ibis_centroids(tax_glob_group="A_eukaryota", num_represtatives=20):
         qsub += "iotbx.python {} {} {} {} {}\n".format(sys.argv[0], i, row["pdb"], row["chain"], row["resi"])
         jid = qsub.submit()
         job_ids.append(jid)
-        print >> h5_data_files, "{}_{}_{}.h5".format(i, row["pdb"], row["chain"])
+        print("{}_{}_{}.h5".format(i, row["pdb"], row["chain"]), file=h5_data_files)
     h5_data_files.close()
 
     qsub = Qsub("ibis_merge".format(i), threads=1)
@@ -84,6 +84,4 @@ if __name__ == "__main__":
     elif len(sys.argv) == 2:
         concatenate(sys.argv[1])
     else:
-        print "?", sys.argv
-
-
+        print("?", sys.argv)

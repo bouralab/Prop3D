@@ -29,11 +29,11 @@ def infer_spheres(model, shape=(96,96,96), n_samples=3, n_features=3, combinatio
 
         ax = axes[sample]
         truth = np.where(sphere["truth"][0][:, 1]==1.0)
-        truth_voxels = sphere["indices"][0][truth] 
+        truth_voxels = sphere["indices"][0][truth]
         rot_z180, rot_x45 = mv.plot_volume_matplotlib(
-            ax, 
-            sphere["indices"][0], 
-            colors=sphere["data"][0], 
+            ax,
+            sphere["indices"][0],
+            colors=sphere["data"][0],
             truth=truth_voxels)
         #ax.set_title("Truth", fontdict={"fontsize":20})
 
@@ -44,22 +44,21 @@ def infer_spheres(model, shape=(96,96,96), n_samples=3, n_features=3, combinatio
         _, prediction = (output>=0.7).max(dim=1)
         prediction = prediction.data.cpu().numpy()
         prediction = np.where(prediction==1)[0]
-        prediction_voxels = sphere["indices"][0][prediction] 
-        print prediction.shape, prediction_voxels.shape
+        prediction_voxels = sphere["indices"][0][prediction]
         colors = np.tile(np.array([0.95, 0.37, 0.18]), (prediction_voxels.size,1))
         mv.plot_volume_matplotlib(
-            ax, prediction_voxels, 
-            colors=colors, 
-            truth=truth_voxels, 
-            rot_z180=rot_z180, 
+            ax, prediction_voxels,
+            colors=colors,
+            truth=truth_voxels,
+            rot_z180=rot_z180,
             rot_x45=rot_x45)
         #ax.set_title("Prediction", fontdict={"fontsize":20})
 
-        print logs.meter["dice_avg"].val
-        print logs.meter["dice_class1"].val
-        print logs.meter["mcc_avg"].val
-        print
-    
+        print(logs.meter["dice_avg"].val)
+        print(logs.meter["dice_class1"].val)
+        print(logs.meter["mcc_avg"].val)
+        print()
+
     mv.save_fig(fig, "sphere_inder.pdf")
 
 def parse_args(args=None):
@@ -68,7 +67,7 @@ def parse_args(args=None):
     parser.add_argument(
         "--n_samples",
         default=3,
-        type=int 
+        type=int
     )
     parser.add_argument(
         "--n_features",
@@ -122,6 +121,5 @@ if __name__ == "__main__":
     args = parse_args()
 
     model = infer.load_model(args.model, nFeatures=args.n_features, no_batch_norm=args.no_batch_norm, use_resnet_unet=True, dropout_depth=args.dropout_depth, dropout_width=args.dropout_width, dropout_p=args.dropout_p)
-    
-    infer_spheres(model, shape=args.shape, n_samples=args.n_samples, n_features=args.n_features, combinations=args.combination, bs_feature=args.bs_feature, bs_feature2=args.bs_feature2, stripes=args.stripes, no_prediction=args.no_prediction, use_gpu=True)
 
+    infer_spheres(model, shape=args.shape, n_samples=args.n_samples, n_features=args.n_features, combinations=args.combination, bs_feature=args.bs_feature, bs_feature2=args.bs_feature2, stripes=args.stripes, no_prediction=args.no_prediction, use_gpu=True)

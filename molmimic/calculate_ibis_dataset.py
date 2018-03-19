@@ -8,7 +8,7 @@ from calculate_features import SwarmJob
 from molmimic.biopdbtools import Structure
 
 def split_ibis(f):
-    f.next()
+    next(f)
     for line in f:
         yield line.rstrip().split(":")
 
@@ -34,7 +34,7 @@ def get_ibis(pdb_ibis_file, multimers=False, max_dist=256.0, use_structure_filte
 
             if not has_interactions:
                 continue
-            
+
             if use_structure_filters:
                 try:
                     structure = Structure(pdb, chain, force_feature_calculation=True, unclustered=True)
@@ -42,47 +42,47 @@ def get_ibis(pdb_ibis_file, multimers=False, max_dist=256.0, use_structure_filte
                     raise
                 except:
                     trace = traceback.format_exc()
-                    print "Error:", trace
+                    print("Error:", trace)
                     continue
-                
+
                 coords = structure.get_coords()
                 min_coord = np.min(coords, axis=0)
                 max_coord = np.max(coords, axis=0)
                 dist = int(np.ceil(np.linalg.norm(max_coord-min_coord)))
-                
+
                 if dist > max_dist:
                     continue
 
                 if calculate_features:
                     for atom in structure.structure.get_atoms():
                         structure.get_features_for_atom(atom, preload=False)
-                    
+
                     structure.precalc_features.flush()
 
             if save_binding_site_sequences:
                 with open("/data/draizene/molmimic/molmimic/data/ibisdown_data/{}_{}.tsv".format(pdb, chain), "w") as f:
                     for line in info:
-                        print >> f, line
+                        print(line, file=f)
 
 def post_process(force=True):
     import re
-    def get_digits(s): 
+    def get_digits(s):
         try:
             return int(re.findall('\d+', s)[0])
         except (IndexError, ValueError):
-            print s
+            print(s)
             raise
 
     full_data_dir = "/data/draizene/molmimic/molmimic/data"
     full_data = full_data_dir+"/ibis_full.tsv"
     if not os.path.exists(full_data) or force:
         with open(full_data, "w") as out:
-            print >> out, "\t".join(["pdb", "chain", "residues", "ppi"])
-            
+            print("\t".join(["pdb", "chain", "residues", "ppi"]), file=out)
+
             for f in glob.glob(full_data_dir+"/ibisdown_data/*"):
                 with open(f) as info:
                     for line in info:
-                        print >> out, line.rstrip()
+                        print(line.rstrip(), file=out)
 
     ibis_full = pd.read_table(full_data)
     ibis_full_ppi = ibis_full[ibis_full["ppi"] == 1]
@@ -92,9 +92,9 @@ def post_process(force=True):
         groups = df.groupby(["pdb", "chain"])
 
         with open(full_data_dir+"/ibis_{}.tsv".format(name), "w") as f:
-            print >> f, "pdb\tchain\t{}_residues".format(name)
+            print("pdb\tchain\t{}_residues".format(name), file=f)
             for (pdb, chain), group in groups:
-                print >> f, "{}\t{}\t{}".format(pdb, chain, ",".join(map(str, set(sorted(map(get_digits, ",".join(group["residues"]).split(",")))))))
+                print("{}\t{}\t{}".format(pdb, chain, ",".join(map(str, set(sorted(map(get_digits, ",".join(group["residues"]).split(","))))))), file=f)
 
     ppi = pd.read_table(full_data_dir+"/ibis_ppi.tsv")
     pli = pd.read_table(full_data_dir+"/ibis_pli.tsv")
@@ -111,7 +111,7 @@ def load_ibis(ibis_dir):
     for i, f in enumerate(glob.glob("{}/*/*.txt".format(ibis_dir))):
         pdb = os.path.splitext(os.path.basename(f))[0]
         if pdb not in allowed_pdbs: continue
-        print "Running {}: {}".format(i, pdb)
+        print("Running {}: {}".format(i, pdb))
         job += "/data/draizene/3dcnn-torch python {} single {}\n".format(
             os.path.realpath(__file__), f)
     job.run()

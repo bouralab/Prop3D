@@ -63,8 +63,8 @@ def feature_selection(ibis_data, batch_size=100):
     else:
         #X = np.require(np.memmap("collpased_features.npy", mode="w+", shape=(data.data.shape[0], Structure.nFeatures)), requirements=['O'])
         X = []
-        for i, batch_start in enumerate(xrange(0, data.data.shape[0], batch_size)):
-            for j, index in enumerate(xrange(batch_start, min(batch_start+batch_size, data.data.shape[0]))):
+        for i, batch_start in enumerate(range(0, data.data.shape[0], batch_size)):
+            for j, index in enumerate(range(batch_start, min(batch_start+batch_size, data.data.shape[0]))):
                 row = data.data.iloc[index]
                 id = "{}_{}_{}".format(row["pdb"].lower(), row["chain"].split("_")[0], row["unique_obs_int"])
                 precalc_features_path = os.path.join(
@@ -81,42 +81,38 @@ def feature_selection(ibis_data, batch_size=100):
     	try:
         	model.fit(np.nan_to_num(X).tolist())
         except ValueError as e:
-        	print name
-        	print e
-        	print X
-        	print
         	continue
         if should_create:
         	model = SelectFromModel(model, prefit=True)
         if name != "pca":
-            print name, "=", [feature_names[i] for i, s in enumerate(model.get_support()) if s]
+            print(name, "=", [feature_names[i] for i, s in enumerate(model.get_support()) if s])
 
     cumsum = np.cumsum(models["pca"][0].explained_variance_ratio_)
     d = np.argmax(cumsum > 0.95) + 1
-    print "pca, n-components: {}; explained variance: {}".format(d, models["pca"][0].explained_variance_ratio_)
+    print("pca, n-components: {}; explained variance: {}".format(d, models["pca"][0].explained_variance_ratio_))
 
 def test_generator(ibis_data, max_iter=100):
     data = IBISGenerator(ibis_data, input_shape=(96,96,96))
     for i, (X, y) in enumerate(data.generate()):
         if i>=max_iter: break
-        print i
-        print "X=", X
-        print "y=", y
-        print
+        print(i)
+        print("X=", X)
+        print("y=", y)
+        print()
 
 def test_features(ibis_data):
     data = IBISGenerator(ibis_data, input_shape=(96,96,96))
     for i, datum in data.data.loc[data.data["pdb"]=="3J7A"].iterrows():
-        print "Running {} ({}.{}): {}".format(datum["unique_obs_int"], datum["pdb"], datum["chain"], ",".join(["{}{}".format(i,n) for i, n in zip(datum["resi"].split(","), datum["resn"].split(","))]))
+        print("Running {} ({}.{}): {}".format(datum["unique_obs_int"], datum["pdb"], datum["chain"], ",".join(["{}{}".format(i,n) for i, n in zip(datum["resi"].split(","), datum["resn"].split(","))])))
         Structure.features_from_string(datum["pdb"], datum["chain"], datum["resi"], id=datum["unique_obs_int"], input_shape=(96,96,96))
 
 def match_resnames(ibis_data):
     data = IBISGenerator(ibis_data, input_shape=(96,96,96,52))
     for i, datum in data.data.loc[data.data["pdb"]=="3B13"].iterrows():
-        print datum["pdb"], datum["chain"], datum["resi"], datum["resn"]
+        print(datum["pdb"], datum["chain"], datum["resi"], datum["resn"])
         for (resi, resn, pdb_resi, ncbi_resi), true_resn in it.izip(map_residues(datum["pdb"], datum["chain"], [datum["resi"]]), datum["resn"].split(",")):
-            print "   ", resi, "{}={}".format(resn, true_resn), pdb_resi, ncbi_resi
-        print
+            print("   ", resi, "{}={}".format(resn, true_resn), pdb_resi, ncbi_resi)
+        print()
 
 
         # s = Structure(datum["pdb"], datum["chain"]).extract_chain()

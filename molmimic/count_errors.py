@@ -1186,7 +1186,7 @@ for id in ids:
     if not id: continue
     slurm_id, ibis_id = id.split()
     try:
-        print "slurm-{}.out".format(slurm_id)
+        print("slurm-{}.out".format(slurm_id))
         with open("slurm-{}.out".format(slurm_id)) as f:
             for last_line in f: pass
             error = last_line.rstrip().split(":")[0]
@@ -1202,11 +1202,11 @@ for id in ids:
               ]:
                 with open("{}.sh".format(ibis_id)) as f2:
                     for last_line_i in f2: pass
-                print last_line_i
+                print(last_line_i)
                 f.seek(0)
-                print f.read()
+                print(f.read())
     except IOError as e:
-        print e
-print
+        print(e)
+print()
 for error, count in errors.iteritems():
-    print error, count
+    print(error, count)

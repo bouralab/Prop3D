@@ -152,13 +152,11 @@ def extract_chain(structure, chain, pdb, write_to_stdout=False):
     writer.save(chain_pdb, select=SelectChain(chain, altloc=altloc))
     chain_pdb.seek(0)
     if write_to_stdout:
-        print chain_pdb.read()
-        print "Using altloc", altloc
         orig = StringIO()
         writer.set_structure(structure)
         writer.save(orig, select=SelectChain(chain, filter_everything=False))
         orig.seek(0)
-        print orig.read()
+        print(orig.read())
     new_structure = pdbparser.get_structure(pdb, chain_pdb)
     new_structure.altloc = altloc
     return new_structure
@@ -176,7 +174,7 @@ class Structure(object):
                     raise InvalidPDB()
                     #Obsolete pdb
                     try:
-                        _, old_new = obsolete_pdbs.loc[obsolete_pdbs["old"] == pdb.upper()].iterrows().next()
+                        _, old_new = next(obsolete_pdbs.loc[obsolete_pdbs["old"] == pdb.upper()].iterrows())
                         if old_new["new"]:
                             pdb = old_new["new"]
                             path = "{}/pdb/{}/pdb{}.ent.gz".format(os.environ.get("PDB_SNAPSHOT", "/pdb"), pdb[1:3].lower(), pdb.lower())
@@ -228,12 +226,6 @@ class Structure(object):
         try:
             only_chain = self.structure[0].get_chains().next()
         except (KeyError, StopIteration):
-            print pdb, self.chain
-            print self.structure
-            for m in self.structure.get_models():
-                print m
-                for c in m.get_chains():
-                    print "   ", chain
             extract_chain(self._structure, self.chain, pdb, write_to_stdout=True)
             raise InvalidPDB
 
@@ -343,7 +335,7 @@ class Structure(object):
 
         if grid:
             if rotate:
-                s.rotate(1).next()
+                next(s.rotate(1))
 
             try:
                 features = s.get_features(
@@ -358,7 +350,7 @@ class Structure(object):
                     include_full_protein=include_full_protein,
                     undersample=undersample)
             except Exception as e:
-                print e
+                print(e)
                 raise
         else:
             features = [s.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features) \
@@ -423,7 +415,7 @@ class Structure(object):
 
     def _get_sasa(self):
         if freesasa is None:
-            print "SASA not installed! SASA will be 0"
+            print("SASA not installed! SASA will be 0")
             return None, None
         if self.sasa is None:
             with silence_stdout(), silence_stderr():
@@ -440,9 +432,6 @@ class Structure(object):
         if self.pqr is None:
             pdbfd, tmp_pdb_path = tempfile.mkstemp()
             with os.fdopen(pdbfd, 'w') as tmp:
-                # writer.set_structure(self.structure)
-                # writer.save(tmp)
-                # tmp.seek(0)
                 self.save_pdb(tmp, True)
 
             _, tmp_pqr_path = tempfile.mkstemp()
@@ -464,7 +453,6 @@ class Structure(object):
                         elif len(fields) == 10:
                             recordName, serial, atomName, residueName, residueNumber, X, Y, Z, charge, radius = fields
                         else:
-                            print len(fields)
                             raise RuntimeError("Invalid PQR File")
 
                         resseq = int("".join([i for i in residueNumber if i.isdigit()]))
@@ -508,7 +496,7 @@ class Structure(object):
                     try:
                         self.cx[int(l[6:11].strip())] = float(l[60:66].strip())
                     except ValueError as e:
-                        print "    Error, maybe the next line contains it?"
+                        print("    Error, maybe the next line contains it?")
             # self.cx = {int(l[6:11].strip()):float(l[60:66].strip()) \
             #     for l in cx_f.splitlines() if l[:6].strip() in ["ATOM", "HETATM"]}
 
@@ -522,7 +510,7 @@ class Structure(object):
 
             pdbqt = mol.write("pdbqt")
             self.autodock_features = {} #defaultdict(lambda: ("  ", False)
-            for atom_index in xrange(mol.OBMol.NumAtoms()):
+            for atom_index in range(mol.OBMol.NumAtoms()):
                 a = mol.OBMol.GetAtom(atom_index + 1)
 
                 if a.IsHydrogen():
@@ -559,7 +547,7 @@ class Structure(object):
                 #print id, a.GetIdx()
                 self.autodock_features[a.GetIdx()] = (element, a.IsHbondDonor())
 
-            for atom_index in xrange(mol.OBMol.NumAtoms()):
+            for atom_index in range(mol.OBMol.NumAtoms()):
                 a = mol.OBMol.GetAtom(atom_index + 1)
                 if not a.IsHydrogen():
                     continue
@@ -584,7 +572,7 @@ class Structure(object):
     def shift_coords_to_volume_center(self):
         mean_coord = self.get_mean_coord()
         coords = self.get_coords()-mean_coord
-        coords += np.array([self.volume/2.]*3)
+        coords += np.array([self.volume/2]*3)
         self.update_coords(coords)
         self.mean_coord_updated = False
         return np.mean(coords, axis=0)
@@ -600,7 +588,7 @@ class Structure(object):
 
     def rotate(self, num=1):
         """Rotate structure in randomly in place"""
-        for r in xrange(num):
+        for r in range(num):
             M = rotation_matrix(random=True)
             coords = np.dot(self.get_coords(), M)
             self.update_coords(coords)
@@ -608,7 +596,7 @@ class Structure(object):
             yield r
 
     def update_coords(self, coords):
-        for atom, coord in it.izip(self.structure.get_atoms(), coords):
+        for atom, coord in zip(self.structure.get_atoms(), coords):
             atom.set_coord(coord)
         self.mean_coord = None
         self.mean_coord_updated = False
@@ -638,7 +626,7 @@ class Structure(object):
             mapped_residues = [self.get_residue_from_resseq(pdbnum) \
                 for current_resi, resn, pdbnum, ncbi in map_residues(self.pdb, self.chain, seq_num)]
 
-            if mapped_residues.count(None) > len(mapped_residues)/2.:
+            if mapped_residues.count(None) > len(mapped_residues)/2:
                 raise InvalidPDB("Binding Site missing from structure")
 
             mapped_residues = [r for r in mapped_residues if r is not None]
@@ -913,7 +901,7 @@ class Structure(object):
                     try:
                         non_binding_site_residues = np.random.choice(non_binding_site_residues, len(binding_site_residues))
                     except ValueError as e:
-                        print e
+                        print(e)
                         #Might give over balance
                         non_binding_site_residues = []
         else:
@@ -943,14 +931,14 @@ class Structure(object):
             try:
                 features = self.get_features_for_residue(residue, only_aa=only_aa, non_geom_features=non_geom_features, use_deepsite_features=False)
             except Exception as e:
-                print e
+                print(e)
                 raise
             for residue_grid in self.get_grid_coords_for_residue_by_kdtree(residue):
                 residue_grid = tuple(residue_grid.tolist())
                 try:
                     data_voxels[residue_grid] = np.maximum(features, data_voxels[residue_grid])
                 except ValueError:
-                    print nFeatures, data_voxels[residue_grid].shape, features.shape
+                    print(nFeatures, data_voxels[residue_grid].shape, features.shape)
                     raise
                 truth_voxels[residue_grid] = truth
 
@@ -1087,11 +1075,10 @@ class Structure(object):
     def get_features_for_residue(self, residue, only_aa=False, non_geom_features=False, use_deepsite_features=False, preload=True):
         """Calculate FEATUREs"""
         if preload and self.precalc_features is not None:
-            print "Using precalc features"
+            print("Using precalc features")
             try:
                 features = self.precalc_features[residue.get_id()[1]-1]
                 if non_geom_features:
-                    print features.shape
                     return np.concatenate((
                         features[15:36],
                         features[0:4],
@@ -1174,7 +1161,6 @@ class Structure(object):
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             atom = atom_or_residue
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
-            print "start charge"
             residue = atom_or_residue
             charge_value = np.sum([self.get_charge(a)[0] for a in residue])
             charge = np.zeros(4)
@@ -1182,7 +1168,6 @@ class Structure(object):
             charge[1] = float(charge_value < 0)
             charge[2] = float(charge_value > 0)
             charge[3] = float(charge_value == 0)
-            print "end charge"
             return charge
         else:
             raise RuntimeError("Input must be Atom or Residue: {}".format(type(atom_or_residue)))
@@ -1410,7 +1395,7 @@ class Structure(object):
 
         if homothetic_transformation:
             new_coord = np.array(atom.coord) - self._mean_coord()
-            adjusted = (int(vsize/2.-1)/float(max_radius))*new_coord
+            adjusted = (int(vsize/2-1)/float(max_radius))*new_coord
             new_coord = adjusted + (vsize-1)/2 # Translate center
             voxel = new_coord.astype(int) # Round components
         else:
@@ -1441,41 +1426,15 @@ class Structure(object):
 
     def get_grid_coords_for_atom_by_kdtree(self, atom, k=4):
         dist = self.get_vdw(atom)[0]
-        neighbors = self.voxel_tree.query_ball_point(atom.coord, r=dist) #k=k, distance_upper_bound=dist)
-        #print dist, neighbors, len(neighbors)
+        neighbors = self.voxel_tree.query_ball_point(atom.coord, r=dist)
         for idx in neighbors:
             yield self.voxel_tree.data[idx]
-        # assert 0
-        # print dist, distances, indices, self.voxel_tree.data[indices] if distances != np.inf else None, atom.coord
-        # if distances == np.inf:
-        #     while distances == np.inf:
-        #         dist += 0.1
-        #         distances, indices = neighbors = self.voxel_tree.query_ball_point(atom.coord, r=dist) #k=k, distance_upper_bound=dist)
-        #         print dist, distances, indices, self.voxel_tree.data[indices] if distances != np.inf else None, atom.coord
-        # if not isinstance(indices, list):
-        #     indices = [indices]
-        #     distances = [distances]
-        # assert 0
-        #return [self.voxel_tree.data[idx] for dist, idx in izip(distances, indices) if distance != np.inf]
 
     def get_grid_coords_for_residue_by_kdtree(self, residue):
         dist = vdw_aa_radii.get(residue.get_resname(), 3.2)
         center = np.mean([a.get_coord() for a in residue], axis=0)
-        neighbors = self.voxel_tree.query_ball_point(center, r=dist) #k=k, distance_upper_bound=dist)
-        # print dist, neighbors, len(neighbors)
+        neighbors = self.voxel_tree.query_ball_point(center, r=dist)
         return [self.voxel_tree.data[idx] for idx in neighbors]
-        # assert 0
-        # print dist, distances, indices, self.voxel_tree.data[indices] if distances != np.inf else None, atom.coord
-        # if distances == np.inf:
-        #     while distances == np.inf:
-        #         dist += 0.1
-        #         distances, indices = neighbors = self.voxel_tree.query_ball_point(atom.coord, r=dist) #k=k, distance_upper_bound=dist)
-        #         print dist, distances, indices, self.voxel_tree.data[indices] if distances != np.inf else None, atom.coord
-        # if not isinstance(indices, list):
-        #     indices = [indices]
-        #     distances = [distances]
-        # assert 0
-        return [self.voxel_tree.data[idx] for dist, idx in izip(distances, indices) if distance != np.inf]
 
     def get_grid_occupancy_for_atom(self, atom):
         a = atom.get_coord()
@@ -1509,24 +1468,9 @@ class Structure(object):
         else:
             self.voxel_size = 10.0
         self.voxels = np.arange(0, self.volume, self.voxel_size)
-        #make_atom_spheres(self.voxel_size)
-        # center = np.floor(self.mean_coord)
-        # min_box = center-128
-        # max_box = center+128
-        # minX = min_box[0]
-        # minY = min_box[1]
-        # minZ = min_box[2]
-        # maxX = max_box[0]
-        # maxY = max_box[1]
-        # maxZ = max_box[2]
-        #self.voxels = np.arange(0, self.volume, voxel_size)
-        #self.voxels_y = np.arange(minY, maxY, voxel_size)
-        #self.voxels_z = np.arange(minZ, maxZ, voxel_size)
-        half_voxel = voxel_size/2.
-        #self.voxel_centers = np.array((self.voxels_x,self.voxels_y,self.voxels_z)).T+half_voxel
 
-        #print "Making KDTree..."
-        #np.multiply((vsize/2.)-1)/float(max_radius), coords)
+        half_voxel = voxel_size/2
+
         coords = self.get_coords()
         min_coord = np.floor(np.min(coords, axis=0))-5
         max_coord = np.ceil(np.max(coords, axis=0)+5)+5
@@ -1534,19 +1478,11 @@ class Structure(object):
         extent_y = np.arange(min_coord[1], max_coord[1], voxel_size)
         extent_z = np.arange(min_coord[2], max_coord[2], voxel_size)
         mx, my, mz = np.meshgrid(extent_x, extent_y, extent_z)
-
         self.voxel_tree = spatial.cKDTree(zip(mx.ravel(), my.ravel(), mz.ravel()))
-        # print "Made KDTree."
-        # self.extent_start = np.array([
-        #     np.digitize(min_coord[0], self.voxels_x)-1,
-        #     np.digitize(min_coord[1], self.voxels_y)-1,
-        #     np.digitize(min_coord[2], self.voxels_z)-1,
-        # ])
 
     def get_atoms_from_grids(self, grids, vsize=96, max_radius=40):
         for atom in self.get_atoms():
             coord = self.get_grid_coord(atom, vsize, max_radius)
-            print coord, grids
             if coord.tolist() in grids:
                 yield atom
 
@@ -1607,7 +1543,7 @@ def grid_for_atom(coord, vdw_radii, centers):
     best_occupancy = None
     for i, grid_center in enumerate(centers):
         dist_to_center = distance(coord, grid_center)
-        x = float(vdw_radii)/dist_to_center
+        x = vdw_radii/dist_to_center
         n = 1-np.exp(-x**12)
         if best_occupancy is None or n>best_occupancy:
             best_occupancy = n

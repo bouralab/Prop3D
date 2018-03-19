@@ -12,7 +12,7 @@ from scipy.ndimage.interpolation import rotate
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_samples, silhouette_score
 
-from Bio.SVDSuperimposer import SVDSuperimposer 
+from Bio.SVDSuperimposer import SVDSuperimposer
 
 import seaborn as sns
 
@@ -265,7 +265,7 @@ def create_figure(n_samples, size=(96,96,96), walls=True, elev=20, azim=135, no_
         fig = plt.figure(figsize=(12,12))
     axes = []
     n_plots = n_samples if no_prediction else 2*n_samples
-    for iax in xrange(n_plots):
+    for iax in range(n_plots):
         ax = fig.add_subplot(1 if no_prediction else 2, n_samples, iax+1, projection='3d')
         ax.set_aspect('equal')
 
@@ -355,10 +355,10 @@ def plot_matrix(ax, matrix, truth=False, colors=False):
         else:
             use_raw_color = False
 
-        half_k = matrix.shape[2]/2.
-        for i in xrange(matrix.shape[0]):
-            for j in xrange(matrix.shape[1]):
-                for k in xrange(matrix.shape[2]):
+        half_k = matrix.shape[2]/2
+        for i in range(matrix.shape[0]):
+            for j in range(matrix.shape[1]):
+                for k in range(matrix.shape[2]):
                     #if matrix[i,j,k] == 1:
                     #print "Plotting voxel at", i, j, k
                     if truth:
@@ -434,7 +434,7 @@ def get_best_rotation(truth_pts, all_pts):
     mean = np.mean(all_pts)
     r, theta, phi = np.degrees(np.mean(to_spherical(truth_pts-mean), axis=0))
 
-    center_pt = np.degrees(sph2cart(np.pi/4., np.pi/4., r))
+    center_pt = np.degrees(sph2cart(np.pi/4, np.pi/4, r))
 
 
     M = rotation_matrix(theta=-phi, phi=-theta, z=1.0)
@@ -474,10 +474,10 @@ def move_to_camera_center(truth_pts, all_pts, rot_z180=None, rot_x45=None, retur
     if rot_z180 is None and rot_x45 is None:
         cluster = KMeans(n_clusters=2).fit(truth_pts)
 
-        #Truth 
+        #Truth
         centroidA = cluster.cluster_centers_[0]
         mean = np.array((48., 48., 48.)) #np.mean(all_pts)
-        
+
         r, theta, phi = to_spherical(centroidA-mean)
 
         if theta < 0:
@@ -550,6 +550,3 @@ def x_axis_rotation(theta):
     return np.array([[1, 0,             0             ],
                      [0, np.cos(theta), -np.sin(theta)],
                      [0, np.sin(theta), np.cos(theta)]])
-
-
-

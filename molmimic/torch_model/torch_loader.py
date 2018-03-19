@@ -93,19 +93,18 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
         add_sample(d["indices"], d["data"], d["truth"])
         if d["truth"].shape[1] == 2:
             num_true = np.sum(d["truth"][:, 0])
-            true_prob = num_true/float(d["truth"].shape[0])
+            true_prob = num_true/d["truth"].shape[0]
             sample_weights.append(np.array((1-true_prob, true_prob)))
             batch_weight += num_true
             num_data += d["truth"].shape[0]
         else:
             num_true = np.sum(d["truth"], axis=0)
             batch_weight += num_true
-            sample_weights.append(num_true/float(d["truth"].shape[0]))
+            sample_weights.append(num_true/d["truth"].shape[0])
             num_data += d["truth"].shape[0]
 
-    batch_weight /= float(num_data)
+    batch_weight /= num_data
 
-    #print "Made batch"
     if create_tensor:
         batch["data"].precomputeMetadata(1)
 
@@ -158,9 +157,9 @@ class IBISDataset(Dataset):
                 skip_ids = [int(l.rstrip()) for l in skip_f if l]
             osize = self.full_data.shape[0]
             self.full_data= self.full_data.loc[~self.full_data["unique_obs_int"].isin(skip_ids)]
-            print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", len(skip_ids), osize, self.full_data.shape[0], osize)
+            print("{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", len(skip_ids), osize, self.full_data.shape[0], osize))
         except IOError:
-            print "No Skip ID file"
+            print("No Skip ID file")
             pass
 
         if 0 < start_index < 1:
@@ -190,7 +189,6 @@ class IBISDataset(Dataset):
 
     @classmethod
     def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(264,264,264), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, oversample=False, undersample=False, random_features=None):
-        print "make undersampe", undersample
         train = cls(
             ibis_data,
             transform=transform,
@@ -246,12 +244,9 @@ class IBISDataset(Dataset):
         pdb_chain = self.data.iloc[index]
 
         binding_sites = self.full_data.loc[(self.full_data["pdb"]==pdb_chain["pdb"])&(self.full_data["chain"]==pdb_chain["chain"])]
-        #pdb_chain = {"pdb":"4CAK", "chain":"B"}
-        #binding_sites = self.full_data.loc[(self.full_data["pdb"]=="4CAK")&(self.full_data["chain"]=="B")]
         binding_site_residues = ",".join([binding_site["resi"] for _, binding_site in binding_sites.iterrows()])
-        gi = binding_sites["gi"].iloc[0] #"{}.{}".format(pdb_chain["pdb"], pdb_chain["chain"]) if self.course_grained else binding_sites["unique_obs_int"].iloc[0]
+        gi = binding_sites["gi"].iloc[0]
 
-        #print "Running {} ({}.{}): {}".format(datum["unique_obs_int"], datum["pdb"], datum["chain"], ",".join(["{}{}".format(i,n) for i, n in zip(datum["resi"].split(","), datum["resn"].split(","))]))
         try:
             indices, data, truth = Structure.features_from_string(
                 pdb_chain["pdb"],
@@ -273,8 +268,8 @@ class IBISDataset(Dataset):
         except InvalidPDB:
             trace = traceback.format_exc()
             with open("{}_{}_{}_{}_{}.error".format(pdb_chain["pdb"], pdb_chain["chain"], gi, self.epoch, self.batch), "w") as ef:
-                print trace
-                print >> ef, trace
+                print(trace)
+                print(trace, file=ef)
 
             #return
             return {"indices": None,
@@ -283,9 +278,9 @@ class IBISDataset(Dataset):
                     }
         except:
             trace = traceback.format_exc()
-            print "Error:", trace
+            print("Error:", trace)
             with open("{}_{}_{}_{}_{}.error".format(pdb_chain["pdb"], pdb_chain["chain"], gi, self.epoch, self.batch), "w") as ef:
-                print >> ef, trace
+                print(trace, file=ef)
             raise
 
         if self.random_features is not None:
@@ -333,7 +328,7 @@ class IBISUnclusteredDataset(Dataset):
                 skip_ids = [int(l.rstrip()) for l in skip_f if l]
             osize = self.data.shape[0]
             self.data= self.data.loc[~self.data["pdb"].isin(skip_ids)]
-            print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", len(skip_ids), osize, self.data.shape[0], osize)
+            print("{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", len(skip_ids), osize, self.data.shape[0], osize))
         except IOError:
             pass
 
@@ -429,7 +424,7 @@ class IBISUnclusteredDataset(Dataset):
         except InvalidPDB:
             trace = traceback.format_exc()
             with open("{}_{}_{}_{}.error".format(data["pdb"], data["chain"], self.epoch, self.batch), "w") as ef:
-                print >> ef, trace
+                print(trace, file=ef)
 
             #return
             return {"indices": None,
@@ -438,9 +433,9 @@ class IBISUnclusteredDataset(Dataset):
                     }
         except:
             trace = traceback.format_exc()
-            print "Error:", trace
+            print("Error:", trace)
             with open("{}_{}_{}_{}.error".format(data["pdb"], data["chain"], self.epoch, self.batch), "w") as ef:
-                print >> ef, trace
+                print(trace, file=ef)
             raise
 
         sample = {
@@ -586,7 +581,7 @@ class SphereDataset(Dataset):
 
         used_points = None
         distances = None
-        for bs_id in xrange(cnt):
+        for bs_id in range(cnt):
             num_search = 0
             while True:
                 idx = np.random.randint(0, indices.shape[0])
@@ -683,45 +678,3 @@ def to_cartesian(az, el, r):
     y = rcos_theta * np.sin(az)
     z = r * np.sin(el)
     return x, y, z
-
-def create_spheres(num_spheres, shape=(96, 96, 96), border=10, min_r=5, max_r=15, hallow=True, train=True):
-    """Create randomly placed and randomy sized spheres inside of a grid
-    """
-    if train:
-        class sphere:
-            indices = []
-            volume = []
-            labels = []
-        def add_indices(_indices, value, truth=1):
-            ind = _indices.T.tolist()
-            sphere.indices += ind
-            sphere.volume += [[value]]*len(ind)
-            sphere.labels += [[truth]]*len(ind)
-    else:
-        class sphere:
-            indices = []
-            volume = np.random.random(list(shape))
-            labels = np.zeros(list(shape))
-        def add_indices(_indices, value, truth=1):
-            sphere.indices += _indices.T.tolist()
-            sphere.volume[_indices] = value
-            sphere.labels[_indices] = truth
-
-    for i in xrange(num_spheres):
-        #Define random center of sphere and radius
-        center = [np.random.randint(border, edge-border) for edge in shape]
-        r = np.random.randint(min_r, max_r)
-        color = np.random.random()
-
-        y, x, z = np.ogrid[-center[0]:shape[0]-center[0], -center[1]:shape[1]-center[1], -center[2]:shape[2]-center[2]]
-        m = x*x + y*y + z*z < r*r
-
-        if hallow:
-            n = x*x + y*y + z*z > (r-1)*(r-1)
-            sphere_indices = np.array(np.where((m==True)&(n==True)))
-        else:
-            sphere_indices = np.array(np.where(m==True))
-
-        add_indices(sphere_indices, color)
-
-    return sphere.indices, sphere.volume, sphere.labels

@@ -6,7 +6,7 @@ import numpy as np
 from Qsub import Qsub
 
 def parse_cluster(cluster_num, num_clusters, members):
-    print cluster_num, "of", num_clusters, ":", members
+    print(cluster_num, "of", num_clusters, ":", members)
 
     protein_grid_f = "/panfs/pan1.be-md.ncbi.nlm.nih.gov/tandemPPI/results/molmimic/piface_v3/cluster_{}.npy".format(cluster_num)
     truth_grid_f = "/panfs/pan1.be-md.ncbi.nlm.nih.gov/tandemPPI/results/molmimic/piface_v3/cluster_{}_truth.npy".format(cluster_num)
@@ -15,7 +15,7 @@ def parse_cluster(cluster_num, num_clusters, members):
     truth_grid = np.memmap(truth_grid_f, dtype='float32', mode='w+', shape=(2*len(members), 144,144,144, num_clusters*2+1))
 
     for protein_num, pdb_chains in enumerate(members):
-        print pdb_chains
+        print(pdb_chains)
         pdb = pdb_chains[:4]
         chain1 = pdb_chains[-2]
         chain2 = pdb_chains[-1]
@@ -34,12 +34,12 @@ def parse_cluster(cluster_num, num_clusters, members):
         binding_site1, binding_site2, distances = protein1.get_interface(protein2)
 
         for chain_num, protein, binding_site in ((0, protein1, binding_site1), (1, protein2, binding_site2)):
-            for atom in protein.pdb_hierarchy.atoms(): 
+            for atom in protein.pdb_hierarchy.atoms():
                 grid = protein1.get_grid_coord(atom)
                 protein_grid[2*protein_num+chain_num, grid[0], grid[1], grid[2], :] = protein.get_features_for_atom(atom)
             for atom in binding_site.pdb_hierarchy.atoms():
                 grid = protein1.get_grid_coord(atom)
-                truth_grid[2*protein_num+chain_num, grid[0], grid[1], grid[2], cluster_num*2+chain_num-1] = 1 
+                truth_grid[2*protein_num+chain_num, grid[0], grid[1], grid[2], cluster_num*2+chain_num-1] = 1
 
         # for binding_site in (binding_site1, binding_site2):
         #     min_coord = binding_site.pdb_hierarchy.atoms().extract_xyz().min()
@@ -49,7 +49,7 @@ def parse_cluster(cluster_num, num_clusters, members):
 
         #     for atom in binding_site.pdb_hierarchy.atoms():
         #         grid_point = (np.floor(atom.xyz[0]), np.floor(atom.xyz[1]), np.floor(atom.xyz[2]))
-                
+
         #         residue = binding_site.get_residue(atom, one_hot=True)
         #         charge = atom.charge_as_int()
         #         kd = binding_site.get_hydrophobicity(atom)
@@ -65,11 +65,11 @@ def parse_cluster(cluster_num, num_clusters, members):
         #             #Interface is too large!
         #             continue
 
-    
+
 
 def parse_full(pdb):
     pass
-   
+
 
 def parse_piface(num_clusters=10, filter=True, min_members=20, max_members=20):
     piface_file = "/panfs/pan1.be-md.ncbi.nlm.nih.gov/tandemPPI/databases/PIface_01_24_2014.txt"
@@ -77,7 +77,7 @@ def parse_piface(num_clusters=10, filter=True, min_members=20, max_members=20):
     if num_clusters is None:
         with open(piface_file) as f:
             num_clusters = sum((1 for line in f))
-    
+
     with open(piface_file) as f:
         curr_cluster = 0
         for cluster_num, line in enumerate(f):

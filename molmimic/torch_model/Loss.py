@@ -27,9 +27,7 @@ class DiceLoss(_Loss):
         return dice
 
     def dice_coef_samples(self, input, target, locations, weight=None):
-        print "dice samples"
         total_size = input.size(0)
-        print input.size()
         samples = locations[:, 3]
         num_samples = samples[-1]+1
         previous_row = 0
@@ -37,7 +35,6 @@ class DiceLoss(_Loss):
         total = input.size(0)
 
         if weight is not None:
-            print weight
             use_sample_weights = weight.shape[0]>1
             if use_sample_weights:
                 assert use_sample_weights and weight.shape[0] == num_samples, "{} {}".format(weight.shape[0], num_samples)
@@ -71,7 +68,7 @@ class DiceLoss(_Loss):
         if weight is not None and not use_sample_weights:
             dice *= weight
 
-        return dice/float(total) if total > 0 else self.smooth
+        return dice/total if total > 0 else self.smooth
 
 class IoULoss(_Loss):
     """A intersect B / A union B = A intersect B / (area(A) + area(B) - A intersect B)
@@ -124,7 +121,7 @@ class IoULoss(_Loss):
         if weight is not None and not use_sample_weights:
             IoU *= weights
 
-        return IoU/float(num_samples)
+        return IoU/num_samples
 
 def dice_loss(input, target, smooth=1.0, weight=None):
     return DiceLoss(smooth=smooth)(input, target)

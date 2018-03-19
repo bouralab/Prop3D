@@ -28,7 +28,7 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
     kappa_combined = 0.0
     f1_combined = 0.0
 
-    for c in xrange(n_classes):
+    for c in range(n_classes):
         iflat = output[:,c].cpu().view(-1)
         tflat = target[:,c].cpu().view(-1)
         intersection = (iflat * tflat).sum()
@@ -71,11 +71,11 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
     weighted_dice_combined /= weight_sum
     logger.update_loss(np.array([weighted_dice_combined]), meter='weighted_dice_wavg')
 
-    dice_combined /= float(n_classes)
-    mcc_combined /= float(n_classes)
-    precision_combined /= float(n_classes)
-    kappa_combined /= float(n_classes)
-    f1_combined /= float(n_classes)
+    dice_combined /= n_classes
+    mcc_combined /= n_classes
+    precision_combined /= n_classes
+    kappa_combined /= n_classes
+    f1_combined /= n_classes
 
     logger.update_loss(np.array([dice_combined]),      meter='dice_avg')
     logger.update_loss(np.array([mcc_combined]),       meter='mcc_avg')
@@ -157,7 +157,7 @@ def format_meter(logger, mode, iepoch=0, ibatch=1, totalbatch=1, meterlist=None,
             pstr += "AUC {:.3f} \n".format(logger.meter[meter].value())
         else:
             pstr += "{} {:.3f} ({:.3f}) \n".format(meter, logger.meter[meter].val, logger.meter[meter].mean)
-    #pstr += "{} {:.2f} s/its".format(" "*space, logger.timer.value())
+
     return pstr
 
 def graph_logger(logger, phase, epoch, final=False, meterlist=None):
@@ -167,7 +167,7 @@ def graph_logger(logger, phase, epoch, final=False, meterlist=None):
     if not final:
         stats_fname = "Sparse3DUnet_statistics_{}.tsv".format(phase)
         with open(stats_fname, "a") as stats_file:
-            print >> stats_file, "epoch {} {}".format(epoch, format_meter(logger, phase))
+            print ("epoch {} {}".format(epoch, format_meter(logger, phase)), file=stats_file)
 
     for meter_name in meterlist:
         if meter_name in ['confusion', 'histogram', 'image']:
@@ -230,7 +230,7 @@ class ModelStats(object):
         predicted_corrects = predicted_corrects_raw.float()
         predicted_corrects_num = predicted_corrects.eq(target).sum().data[0]
         self.running_corrects_num += predicted_corrects_num #TP+TN
-        predicted_corrects_num /= float(batchSize)
+        predicted_corrects_num /= batchSize
 
         iflat = predicted_corrects.view(-1)
         tflat = target.view(-1)
@@ -355,20 +355,20 @@ class ModelStats(object):
 
     def save(self, phase, epoch):
         ModelStats.all_dice[phase] += self.losses
-        ModelStats.all_accuracies[phase].append(self.running_corrects_num/float(self.n))
+        ModelStats.all_accuracies[phase].append(self.running_corrects_num/self.n)
         self.plot(phase, epoch)
 
     def top1pct(self):
-        return 100 * (1 - 1.0 * self.top1 / float(self.n))
+        return 100 * (1 - 1.0 * self.top1 / self.n)
 
     def top5pct(self):
-        return 100 * (1 - 1.0 * self.top5 / float(self.n))
+        return 100 * (1 - 1.0 * self.top5 / self.n)
 
     def nllpct(self):
-        return 100*self.nll/float(self.n)
+        return 100*self.nll/self.n
 
     def correctpct(self):
-        return 100*self.running_corrects_num/float(self.n)
+        return 100*self.running_corrects_num/self.n
 
     def plot_accuracy(self, ax, final_phase=None):
         ax.plot(self.accuracies if final_phase is None else ModelStats.all_accuracies[final_phase])

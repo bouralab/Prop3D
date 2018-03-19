@@ -68,14 +68,14 @@ def plot_stats(stats_files, names=None, prefix=None, metrics=None):
     else:
         names = [str(i) for i in xrange(len(stats_files))]
 
-    print names
+    print(names)
 
     if metrics is None:
         metrics = stats[0].keys()
 
     num_epochs = max(stats[0].keys())+1
 
-    x = range(len(stats_files))
+    x = list(range(len(stats_files)))
 
     #use_raw_color = len(names)<=2**len(names[0])
 
@@ -140,8 +140,6 @@ def parse_args():
         required=True)
 
     args = parser.parse_args()
-
-    print args.stats_file
 
     return args
 
