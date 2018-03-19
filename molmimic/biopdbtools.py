@@ -3,9 +3,8 @@ import gzip
 import itertools as it
 import re
 import subprocess
-from cStringIO import StringIO
+from io import StringIO
 from collections import Iterable, Counter, defaultdict
-from itertools import izip
 import tempfile
 
 import numpy as np
@@ -18,10 +17,6 @@ from Bio import SeqIO
 from Bio.PDB.NeighborSearch import NeighborSearch
 
 try:
-    from pdb2pqr import mainCommand
-except ImportError:
-    mainCommand = None
-try:
     import freesasa
 except ImportError:
     freesasa = None
@@ -31,8 +26,8 @@ try:
 except ImportError:
     pybabel = None
 
-from util import silence_stdout, silence_stderr
-from map_residues import map_residues
+from molmimic.util import silence_stdout, silence_stderr
+from molmimic.map_residues import map_residues
 
 try:
     from numba import jit
@@ -103,7 +98,7 @@ vdw_aa_radii = {
     'VAL': 3.01
  }
 
-surface_areas = {atom:4.*np.pi*(radius**2) for atom, radius in vdw_radii.iteritems()}
+surface_areas = {atom:4.*np.pi*(radius**2) for atom, radius in vdw_radii.items()}
 
 maxASA = {"A": 129.0, "R": 274.0, "N": 195.0, "D": 193.0, "C": 167.0, "E": 223.0, "Q": 225.0, "G": 104.0, "H": 224.0, "I": 197.0, "K": 201.0, "L": 236.0, "M": 224.0, "F": 240.0, "P": 159.0, "S": 155.0, "T": 172.0, "W": 285.0, "Y": 263.0, "V": 174.0}
 
@@ -202,7 +197,7 @@ class Structure(object):
         try:
             if isinstance(path, str) and os.path.isfile(path):
                 if path.endswith(".gz"):
-                    with gzip.open(path, 'rb') as f:
+                    with gzip.open(path, 'rt') as f:
                         self.structure = parser.get_structure(pdb, f)
                     path = path[:-2]
                 else:
@@ -224,7 +219,7 @@ class Structure(object):
         # if self.nResidues > 500:
         #     raise InvalidPDB("{}.{} (residue count > 500)".format(pdb, self.chain))
         try:
-            only_chain = self.structure[0].get_chains().next()
+            only_chain = next(self.structure[0].get_chains())
         except (KeyError, StopIteration):
             extract_chain(self._structure, self.chain, pdb, write_to_stdout=True)
             raise InvalidPDB
@@ -270,16 +265,12 @@ class Structure(object):
             shape = max([a.serial_number for a in self.structure.get_atoms()])
 
         if force_feature_calculation:
-            #print "Calculating features (forced)..."
             self.precalc_features = np.memmap(precalc_features_path, dtype=np.float, mode="w+", shape=(shape, self.nFeatures))
         else:
             try:
-                #print precalc_features_path
                 self.precalc_features = np.memmap(precalc_features_path, dtype=np.float, mode="r", shape=(shape, self.nFeatures))
-                #print "Loaded Features"
             except IOError as e:
-                raise InvalidPDB #print e
-                #print "Calculating features..."
+                raise InvalidPDB
                 self.precalc_features = None
 
     @staticmethod
@@ -436,8 +427,8 @@ class Structure(object):
 
             _, tmp_pqr_path = tempfile.mkstemp()
 
-            if True: #with silence_stdout(), silence_stderr():
-                mainCommand(["pdb2pqr.py", "--ff=amber", "--whitespace", tmp_pdb_path, tmp_pqr_path])
+            with silence_stdout(), silence_stderr():
+                subprocess.call(["/usr/share/pdb2pqr/pdb2pqr.py", "--ff=amber", "--whitespace", tmp_pdb_path, tmp_pqr_path])
 
             os.remove(tmp_pdb_path)
 
@@ -518,8 +509,6 @@ class Structure(object):
                         #Ignore Hydrogens
                         continue
                     else:
-                        # print dir(a.GetResidue())
-                        # print a.GetResidue().GetNumAtoms()
                         # r = a.GetResidue()
                         # atom_iter = r.BeginAtoms()
                         # h_num = int(r.BeginAtom(atom_iter).IsHydrogen())+\
@@ -544,7 +533,6 @@ class Structure(object):
                     element = "".join([c for c in a.GetType() if c.isalnum()])
 
                 #id = (a.GetResidue().GetChain(), a.GetResidue().GetNum(), a.GetType())
-                #print id, a.GetIdx()
                 self.autodock_features[a.GetIdx()] = (element, a.IsHbondDonor())
 
             for atom_index in range(mol.OBMol.NumAtoms()):
@@ -556,7 +544,6 @@ class Structure(object):
                 #atom = Atom(name, coord, b_factor, occupancy, altloc, fullname, serial_number, element)
 
         #id = (atom.get_parent().get_parent().get_id(), atom.get_parent().get_id()[1], atom.get_name().strip())
-        #print id, atom.serial_number
         try:
             return self.autodock_features[atom.serial_number]
         except KeyError:
@@ -717,7 +704,7 @@ class Structure(object):
             for atom in atoms:
                 elems[atom.element.title()] += 1
 
-            num_voxels = sum([atom_spheres[elem].shape[0]*count for elem, count in elems.iteritems()])
+            num_voxels = sum([atom_spheres[elem].shape[0]*count for elem, count in elems.items()])
         else:
             num_voxels = len(atoms)
 
@@ -815,7 +802,7 @@ class Structure(object):
                             for a in r:
                                 non_binding_site_atoms.append(a.get_serial_number())
                     except ValueError as e:
-                        print e
+                        print(e)
                         #Might give over balance
                         non_binding_site_atoms = []
                 else:
@@ -867,24 +854,21 @@ class Structure(object):
 
             for atom_grid in self.get_grid_coords_for_atom_by_kdtree(atom):
                 atom_grid = tuple(atom_grid.tolist())
-                #print atom_grid
                 try:
-                    #print atom_grid
                     data_voxels[atom_grid] = np.maximum(features, data_voxels[atom_grid])
                 except ValueError:
-                    print nFeatures, data_voxels[atom_grid].shape, features.shape
+                    print(nFeatures, data_voxels[atom_grid].shape, features.shape)
                     raise
                 truth_voxels[atom_grid] = np.array([0.,1.]) if truth else np.array([1.,0.])
 
-        #print "#Atoms:", len(data_voxels), "#Skipped:", skipped
         try:
             if binding_site_residues is None:
-                return np.array(data_voxels.keys()), np.array(data_voxels.values())
+                return np.array(list(data_voxels)), np.array(list(data_voxels.values()))
             else:
-                truth = np.array([truth_voxels[grid] for grid in data_voxels.keys()])
-                return np.array(data_voxels.keys()), np.array(data_voxels.values()), truth
+                truth = np.array([truth_voxels[grid] for grid in data_voxels])
+                return np.array(list(data_voxels)), np.array(list(data_voxels.values())), truth
         except Exception as e:
-            print e
+            print(e)
             raise
 
     def map_residues_to_voxel_space(self, binding_site_residues=None, include_full_protein=False, non_geom_features=True, only_aa=False, use_deepsite_features=False, undersample=False):
@@ -921,7 +905,6 @@ class Structure(object):
 
         for residue in residues:
             #assert not residue.get_id()[1] in binding_site_residues
-            #print residue.get_id()[1], binding_site_residues
             truth = residue.get_id()[1] in binding_site_residues
             if not truth and undersample and residue.get_id()[1] not in non_binding_site_residues:
                 continue
@@ -943,10 +926,10 @@ class Structure(object):
                 truth_voxels[residue_grid] = truth
 
         if binding_site_residues is None:
-            return np.array(data_voxels.keys()), np.array(data_voxels.values())
+            return np.array(list(data_voxels)), np.array(list(data_voxels.values()))
         else:
             truth = np.array([truth_voxels[grid] for grid in data_voxels.keys()])
-            return np.array(data_voxels.keys()), np.array(data_voxels.values()), truth
+            return np.array(list(data_voxels)), np.array(list(data_voxels.values())), truth
 
     def voxel_set_insection_and_difference(self, atom1, atom2):
         A = self.atom_spheres[atom1.get_serial_number()]
@@ -1022,7 +1005,6 @@ class Structure(object):
                 pass
 
         if use_deepsite_features:
-            print "deepsite"
             if warn_if_buried:
                 return self.get_deepsite_features(atom), self.get_accessible_surface_area(atom)[-1]
             else:
@@ -1386,13 +1368,6 @@ class Structure(object):
         if voxel_size is not None and voxel_size != self.voxel_size:
             self.set_voxel_size(voxel_size)
 
-
-
-        #Center at origin
-        #print "original:", atom.coord
-        #new_coord = np.array(atom.coord) - self._mean_coord()
-        #print "at origin:", new_coord
-
         if homothetic_transformation:
             new_coord = np.array(atom.coord) - self._mean_coord()
             adjusted = (int(vsize/2-1)/float(max_radius))*new_coord
@@ -1401,7 +1376,6 @@ class Structure(object):
         else:
             #No transformation, just fit inside a (256,256,256) volume
             #new_coord += [self.volume/2]*3
-            #print "at 126:", new_coord
             if round:
                 new_coord = np.around(new_coord)
             voxel = np.array([
@@ -1420,8 +1394,6 @@ class Structure(object):
         #     upper_bound = np.divmod(new_coord, 1)[1]
         #     new_coord = max_gap*p.floor(new_coord)+
 
-
-        #print "voxel:", rounded
         return voxel
 
     def get_grid_coords_for_atom_by_kdtree(self, atom, k=4):
@@ -1450,13 +1422,11 @@ class Structure(object):
         # coord += [self.volume/2]*3
         if round:
             coord = np.around(coord)
-        #print residue.get_resname(), coord,
         voxel = np.array([
             np.digitize([coord[0]], self.voxels_x)[0]-1,
             np.digitize([coord[1]], self.voxels_y)[0]-1,
             np.digitize([coord[2]], self.voxels_z)[0]-1,
             ])
-        #print voxel
         return voxel, coord
 
     def set_volume(self, volume):
@@ -1478,7 +1448,7 @@ class Structure(object):
         extent_y = np.arange(min_coord[1], max_coord[1], voxel_size)
         extent_z = np.arange(min_coord[2], max_coord[2], voxel_size)
         mx, my, mz = np.meshgrid(extent_x, extent_y, extent_z)
-        self.voxel_tree = spatial.cKDTree(zip(mx.ravel(), my.ravel(), mz.ravel()))
+        self.voxel_tree = spatial.cKDTree(list(zip(mx.ravel(), my.ravel(), mz.ravel())))
 
     def get_atoms_from_grids(self, grids, vsize=96, max_radius=40):
         for atom in self.get_atoms():
@@ -1558,4 +1528,4 @@ if __name__ == "__main__":
   num_atoms = sum(1 for a in structure.structure.get_atoms() if a.get_parent().get_id()[0] == " ")
   for atom in structure.get_atoms():
     features = structure.get_features_for_atom(atom)
-    print atom.get_full_id(), atom.serial_number, "of", num_atoms, features, len(features)
+    print(atom.get_full_id(), atom.serial_number, "of", num_atoms, features, len(features))

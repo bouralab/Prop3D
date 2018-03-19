@@ -10,7 +10,6 @@ import time
 import math
 import multiprocessing
 from datetime import datetime
-from itertools import izip
 
 import numpy as np
 import gc
@@ -94,7 +93,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
         batch_size if dataset.train else validation_batch_size,
         shuffle,
         num_workers) \
-        for name, dataset in datasets.iteritems()}
+        for name, dataset in datasets.items()}
 
     dtype = 'torch.cuda.FloatTensor' if torch.cuda.is_available() else 'torch.FloatTensor'
 
@@ -206,7 +205,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     else:
                         raise RuntimeError("invalid datatype")
 
-                    for sample, (indices, features, truth) in enumerate(izip(data["indices"], data["data"], data["truth"])):
+                    for sample, (indices, features, truth) in enumerate(zip(data["indices"], data["data"], data["truth"])):
                         inputs.addSample()
                         labels.addSample()
 
@@ -301,7 +300,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     loss.backward()
                     optimizer.step()
                     b = list(model.parameters())[0].clone().data
-                    if torch.equal(a, b): print "NOT UPDATED"
+                    if torch.equal(a, b): print("NOT UPDATED")
                     del a
                     del b
 

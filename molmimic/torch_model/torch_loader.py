@@ -3,7 +3,7 @@ sys.path.append("/data/draizene/molmimic")
 
 import os
 import traceback
-from itertools import groupby
+from itertools import groupby, product
 
 try:
     import torch
@@ -25,7 +25,6 @@ except:
     scn = None
 
 from molmimic.biopdbtools import Structure, InvalidPDB
-from itertools import product, izip
 
 def dense_collate(data, batch_size=1):
     batch = {"data":None, "truth":None, "scaling":1.0}
@@ -504,7 +503,7 @@ class SphereDataset(Dataset):
         y = np.arange(0, self.shape[1])
         z = np.arange(0, self.shape[2])
         mx, my, mz = np.meshgrid(x, y, z)
-        self.voxel_tree = cKDTree(zip(mx.ravel(), my.ravel(), mz.ravel()))
+        self.voxel_tree = cKDTree(list(zip(mx.ravel(), my.ravel(), mz.ravel())))
 
         if allow_feature_combos:
             self.features = np.array(list(product([0,1], repeat=nFeatures)))

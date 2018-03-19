@@ -22,18 +22,18 @@ def calc_size(ibis_data):
 
     with open("protein_distances.txt", "w") as data_file:
         print("pdb\tchain\tid\tmin\tmax\tdist", file=data_file)
-        for i, row in data.data.iterrows():
+        for i in range(data.data.shape[0]):
             print("Running {}:{}.{} ({} of {})".format(i, row["pdb"], row["chain"], i+1, data.data.shape[0]))
 
             coords = data[i]
             min_coord = np.min(coords["indices"], axis=0)
             max_coord = np.max(coords["indices"], axis=0)
+            print(min_coord, max_coord)
             dist = int(np.ceil(np.linalg.norm(max_coord-min_coord)))
 
-            print("{}\t{}\t{}\t{}\t{}\t{}".format(
+            print("{}\t{}\t{}\t{}\t{}".format(
                 row["pdb"],
                 row["chain"],
-                row["unique_obs_int"],
                 min_coord.tolist(),
                 max_coord.tolist(),
                 dist), file=data_file)

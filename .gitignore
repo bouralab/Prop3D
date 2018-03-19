@@ -6,5 +6,7 @@ molmimic/data/ibisdown/
 molmimic/data/ibisdown_data/
 molmimic/data/ibis_full.tsv
 molmimic/data/ibis_ppi_pli.tsv
+molmimic/data/ibis_luca.tab
+molmimic/data/ibis_luca_skip.tab*
 features/
 features2/

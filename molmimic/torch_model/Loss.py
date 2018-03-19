@@ -45,7 +45,7 @@ class DiceLoss(_Loss):
         for i, sample in groupby(enumerate(samples), key=lambda x:x[1]):
             for voxel_end in sample: pass
 
-            print i, ":", previous_row, "to", voxel_end[0], "of", total_size
+            print(i, ":", previous_row, "to", voxel_end[0], "of", total_size)
             batch_predictions = input[previous_row:voxel_end[0]+1]
             target_values = target[previous_row:voxel_end[0]+1]
             previous_row = voxel_end[0]
@@ -55,7 +55,7 @@ class DiceLoss(_Loss):
             intersection = (iflat * tflat).sum()
 
             dice_val = ((2. * intersection + self.smooth) / ((iflat.sum() + tflat.sum() + self.smooth)))
-            print dice_val
+            print(dice_val)
 
             if use_sample_weights:
                 dice_val *= weight[i]
@@ -219,7 +219,7 @@ class WeightedDiceLossVNet(_Loss):
             self.intersection[i] = torch.sum(CurrResult * CurrGT)
 
             dice[i] = 2 * self.intersection[i] / (self.union[i]+0.00001)
-            print dice[i]
+            print(dice[i])
 
         top[0].data[0]=np.sum(dice)
 

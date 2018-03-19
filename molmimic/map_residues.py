@@ -13,7 +13,7 @@ def map_residues(pdb_name, chain, resi):
 
     resi = iter(sorted(resi))
     parsing = False
-    current_resi = resi.next()
+    current_resi = next(resi)
 
     sifts_path = get_sifts(pdb_name)
     if sifts_path is None:
