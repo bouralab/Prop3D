@@ -18,28 +18,36 @@ import mayavi_vieiwer as mv
 from molmimic.torch_model import torch_infer as infer
 
 
-def infer_spheres(model, shape=(96,96,96), n_samples=3, n_features=3, combinations=False, bs_feature=None, bs_feature2=None, stripes=False, no_prediction=False, use_gpu=False):
-    data = loader.SphereDataset(shape, nFeatures=n_features, allow_feature_combos=combinations, bs_feature=bs_feature, bs_feature2=bs_feature2, stripes=stripes)
+def infer_spheres(model, shape=(96,96,96), n_samples=3, n_features=3, combinations=False, bs_feature=None, bs_feature2=None, stripes=False, no_prediction=False, use_gpu=False, ibis_data=None):
+    if ibis_data is None:
+        data = loader.SphereDataset(shape, nFeatures=n_features, allow_feature_combos=combinations, bs_feature=bs_feature, bs_feature2=bs_feature2, stripes=stripes)
+    else:
+        shape = (264, 264, 264)
+        random_features = (n_features, combinations, bs_feature, bs_feature2)
+        data = loader.IBISDataset(ibis_data, input_shape=shape, random_features=random_features)
 
     fig, axes = mv.create_figure(n_samples, size=shape, no_prediction=no_prediction)
 
     for sample in xrange(n_samples):
+        print "Running", sample
         sphere = loader.sparse_collate([data[sample]])
-        output, logs = infer.infer(model, sphere, input_shape=shape, use_gpu=use_gpu)
+        
+        print "center", np.mean(sphere["indices"][0], axis=0)
 
         ax = axes[sample]
         truth = np.where(sphere["truth"][0][:, 1]==1.0)
         truth_voxels = sphere["indices"][0][truth] 
-        rot_z180, rot_x45 = mv.plot_volume_matplotlib(
+        mv.plot_volume_matplotlib(
             ax, 
             sphere["indices"][0], 
             colors=sphere["data"][0], 
-            truth=truth_voxels)
+            truth=truth_voxels) #sphere["indices"][0] rot_z180, rot_x45 = 
         #ax.set_title("Truth", fontdict={"fontsize":20})
 
         if no_prediction:
             continue
 
+        output, logs = infer.infer(model, sphere, input_shape=shape, use_gpu=use_gpu)
         ax = axes[sample+n_samples]
         _, prediction = (output>=0.7).max(dim=1)
         prediction = prediction.data.cpu().numpy()
@@ -59,8 +67,8 @@ def infer_spheres(model, shape=(96,96,96), n_samples=3, n_features=3, combinatio
         print logs.meter["dice_class1"].val
         print logs.meter["mcc_avg"].val
         print
-    
-    mv.save_fig(fig, "sphere_inder.pdf")
+    print "Saving Figure"
+    mv.save_fig(fig, "sphere_infer.pdf")
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Infer spheres")
@@ -116,12 +124,19 @@ def parse_args(args=None):
         default=False,
         action="store_true"
     )
+    parser.add_argument(
+        "--ibis-data",
+        default=None
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = parse_args()
 
-    model = infer.load_model(args.model, nFeatures=args.n_features, no_batch_norm=args.no_batch_norm, use_resnet_unet=True, dropout_depth=args.dropout_depth, dropout_width=args.dropout_width, dropout_p=args.dropout_p)
-    
-    infer_spheres(model, shape=args.shape, n_samples=args.n_samples, n_features=args.n_features, combinations=args.combination, bs_feature=args.bs_feature, bs_feature2=args.bs_feature2, stripes=args.stripes, no_prediction=args.no_prediction, use_gpu=True)
+    if not args.no_prediction:
+        model = infer.load_model(args.model, nFeatures=args.n_features, no_batch_norm=args.no_batch_norm, use_resnet_unet=True, dropout_depth=args.dropout_depth, dropout_width=args.dropout_width, dropout_p=args.dropout_p)
+    else:
+        model = None
+
+    infer_spheres(model, shape=args.shape, n_samples=args.n_samples, n_features=args.n_features, combinations=args.combination, bs_feature=args.bs_feature, bs_feature2=args.bs_feature2, stripes=args.stripes, no_prediction=args.no_prediction, use_gpu=True, ibis_data=args.ibis_data)
 

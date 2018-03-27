@@ -54,7 +54,7 @@ def parse_stats_file(stats_file):
 
     return stats
 
-def plot_stats(stats_files, names=None, prefix=None, metrics=None):
+def plot_stats(stats_files, names=None, prefix=None, metrics=None, start_epoch=0, end_epoch=None, step_epoch=1):
     stats = [parse_stats_file(f) for f in stats_files]
 
     if names is not None:
@@ -71,13 +71,19 @@ def plot_stats(stats_files, names=None, prefix=None, metrics=None):
     print names
 
     if metrics is None:
-        metrics = stats[0].keys()
+        metrics = stats[0][0].keys()
+
+    print stats[0][0].keys()
+    for stat in stats:
+        print stat.keys()
 
     num_epochs = max(stats[0].keys())+1
 
     x = range(len(stats_files))
-
     #use_raw_color = len(names)<=2**len(names[0])
+    if end_epoch is None or end_epoch>num_epochs:
+        end_epoch = num_epochs
+    epochs = range(start_epoch, end_epoch, step_epoch)
 
     #All Epochs
     for metric in metrics:
@@ -87,7 +93,12 @@ def plot_stats(stats_files, names=None, prefix=None, metrics=None):
         ax.set_xlabel("Epoch #")
         ax.set_ylabel("")
         for i, stat in enumerate(stats):
-            y = [stat[epoch][metric] for epoch in xrange(num_epochs)]
+            #y = [stat[epoch][metric] for epoch in epochs]
+            y=[]
+            for epoch in epochs:
+                print epoch
+                print stat[epoch].keys()
+                y.append(stat[epoch][metric])
             if False and use_raw_color:
             	ax.plot(y, label=names[i], color=[int(x) for x in names[i]])
             else:
@@ -108,7 +119,7 @@ def plot_stats(stats_files, names=None, prefix=None, metrics=None):
         f.suptitle("Sparse 3D Unet Compare Final Epoch".format(metric.title()), fontsize=14)
         ax.set_xlabel("Epoch #")
         ax.set_ylabel("")
-        x = [stat[num_epochs-1][metric] for i, stat in enumerate(stats)]
+        x = [stat[end_epoch-1][metric] for i, stat in enumerate(stats)]
         sns.kdeplot(x, shade=True)
         #plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
         plt.savefig(pp, format='pdf')
@@ -134,10 +145,28 @@ def parse_args():
         nargs="*",
         default=None)
     parser.add_argument(
-        "--stats_file",
+        "--start-epoch",
+        default=0,
+        type=int,
+        help="Epoch to start parsing (inclusive)"
+    )
+    parser.add_argument(
+        "--end-epoch",
+        default=None,
+        type=int,
+        help="Epoch to stop parsing (exclusive). If None, include last epoch."
+    )
+    parser.add_argument(
+        "--step-epoch",
+        default=1,
+        type=int
+    )
+    parser.add_argument(
+        "--stats-file",
         nargs="*",
         type=argparse.FileType("r"),
         required=True)
+
 
     args = parser.parse_args()
 
@@ -147,4 +176,4 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    plot_stats(args.stats_file, names=args.names, prefix=args.prefix, metrics=args.metrics)
+    plot_stats(args.stats_file, names=args.names, prefix=args.prefix, metrics=args.metrics, start_epoch=args.start_epoch, end_epoch=args.end_epoch, step_epoch=args.step_epoch)

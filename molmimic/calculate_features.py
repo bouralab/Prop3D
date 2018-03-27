@@ -140,7 +140,7 @@ def load_ibis(ibis_data, course_grained=False):
         #     id = row["unique_obs_int"]
         #     resi = row["resi"]
 
-        job += "/data/draizene/3dcnn-torch python {} {} {} {} {} {}\n".format(os.path.realpath(__file__), row["pdb"], row["chain"], resi, id, course_grained)
+        job += "/data/draizene/3dcnn-torch-py2 python {} {} {} {} {} {}\n".format(os.path.realpath(__file__), row["pdb"], row["chain"], resi, id, course_grained)
     job.run()
 
 if __name__ == "__main__":

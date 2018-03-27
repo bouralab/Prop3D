@@ -213,8 +213,8 @@ class ResNetUNet(nn.Module):
             ResNetUNetDropout(3, 64, 2, 4, dropout_depth=dropout_depth, dropout_width=dropout_width, dropout_p=dropout_p) \
                if dropout_depth or dropout_width else scn.ResNetUNet(3, 64, 2, 4))
         self.linear = nn.Linear(64, nClasses)
-        self.final = scn.ValidConvolution(3, 64, nClasses, 1, False)
-        self.relu = scn.ReLU()
+        #self.final = scn.ValidConvolution(3, 64, nClasses, 1, False)
+        #self.relu = scn.ReLU()
         self.act = nn.Softmax(dim=1) #scn.Sigmoid()
     def forward(self,x):
         x1 = self.sparseModel(x)

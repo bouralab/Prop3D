@@ -36,7 +36,7 @@ from torchviz import dot
 import subprocess
 subprocess.call("python -c 'import visdom.server as vs; vs.main()' &", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=True, save_final=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, course_grained=False, no_batch_norm=False, use_resnet_unet=False, unclustered=False, undersample=False, oversample=False, nFeatures=3, allow_feature_combos=False, bs_feature=None, bs_feature2=None, bs_features=None, stripes=False, data_parallel=False, dropout_depth=False, dropout_width=False, dropout_p=0.5):
+def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=True, save_final=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, course_grained=False, no_batch_norm=False, use_resnet_unet=False, unclustered=False, undersample=False, oversample=False, nFeatures=None, allow_feature_combos=False, bs_feature=None, bs_feature2=None, bs_features=None, stripes=False, data_parallel=False, dropout_depth=False, dropout_width=False, dropout_p=0.5):
     if model_prefix is None:
         model_prefix = "./molmimic_model_{}".format(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
 
@@ -47,6 +47,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
     if ibis_data == "spheres":
         from torch_loader import SphereDataset
+        nFeatures = nFeatures or 3
         datasets = SphereDataset.get_training_and_validation(input_shape, cnt=1, n_samples=1000, nFeatures=nFeatures, allow_feature_combos=allow_feature_combos, bs_feature=bs_feature, bs_feature2=bs_feature2, bs_features=bs_features, stripes=stripes, data_split=0.99)
         validation_batch_size = 1
         if bs_features is not None:
@@ -55,12 +56,12 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
             nClasses = 2
     elif os.path.isfile(ibis_data):
         dataset = IBISDataset if not unclustered else IBISUnclusteredDataset
-
+        print allow_feature_combos, nFeatures
         if allow_feature_combos and nFeatures is not None:
             random_features = (nFeatures, allow_feature_combos, bs_feature, bs_feature2)
         elif not allow_feature_combos and nFeatures is not None:
             random_features = (nFeatures, False, bs_feature, bs_feature2)
-        elif allow_feature_combos is not None and nFeatures is None:
+        elif not allow_feature_combos and nFeatures is None:
             random_features = None
             print "ignoring --allow-feature-combos"
         else:
@@ -172,16 +173,16 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                 datasets[phase].batch = data_iter_num
                 #print type(data["data"]), data["data"].__class__.__name__, data["data"].__class__.__name__ == "InputBatch"
                 batch_weight = data.get("weight", None)
-                print batch_weight
+                #print batch_weight
                 if batch_weight is not None:
                     batch_weight = torch.from_numpy(batch_weight).float()
-                    # if use_gpu:
-                    #     batch_weight = batch_weight.cuda()
+                    if use_gpu:
+                        batch_weight = batch_weight.cuda()
                 sample_weights = data.get("sample_weights", None)
                 if sample_weights is not None:
                     sample_weights = torch.from_numpy(sample_weights).float()
-                    # if use_gpu:
-                    #     sample_weights = sample_weights.cuda()
+                    if use_gpu:
+                        sample_weights = sample_weights.cuda()
 
                 #print sample_weights, batch_weight
 
@@ -210,7 +211,8 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     else:
                         raise RuntimeError("invalid datatype")
 
-                    for sample, (indices, features, truth) in enumerate(izip(data["indices"], data["data"], data["truth"])):
+
+                    for sample, (indices, features, truth, id) in enumerate(izip(data["indices"], data["data"], data["truth"], data["id"])):
                         inputs.addSample()
                         labels.addSample()
 
@@ -226,7 +228,10 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                             inputs.setLocations(indices, features, 0) #Use 1 to remove duplicate coords?
                             labels.setLocations(indices, truth, 0)
                         except AssertionError:
-                            import pdb; pdb.set_trace()
+                            print "Error with PDB:", id
+                            with open("bad_pdbs.txt", "a") as f:
+                                print >> f, id
+
 
                     del data
                     del indices
@@ -240,6 +245,8 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
                     inputs = inputs.to_variable(requires_grad=True)
                     labels = labels.to_variable()
+
+
 
                 elif isinstance(data["data"], torch.FloatTensor):
                     #Input is dense
@@ -312,9 +319,8 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                 bar.set_description("{}: [{}][{}/{}]".format(phase, epoch, data_iter_num+1, num_batches))
                 bar.set_postfix(
                     loss="{:.4f} ({:.4f})".format(mlog.meter["loss"].val, mlog.meter["loss"].mean),
-                    dice_avg=mlog.meter["dice_avg"].val,
-                    dice_class1=mlog.meter["dice_class1"].val,
-                    weight_dice=mlog.meter["weighted_dice_wavg"].val,
+                    dice_class1="{:.4f} ({:.4f})".format(mlog.meter["dice_class1"].val, mlog.meter["dice_class1"].mean),
+                    weight_dice="{:.4f} ({:.4f})".format(mlog.meter["weighted_dice_wavg"].val, mlog.meter["weighted_dice_wavg"].mean),
                     refresh=False)
                 bar.refresh()
 
@@ -459,7 +465,7 @@ def parse_args():
     )
     parser.add_argument(
         "--nFeatures",
-        default=3,
+        default=None,
         required=False,
         type=int,
         choices=range(3,8),
