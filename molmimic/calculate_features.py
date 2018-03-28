@@ -1,5 +1,4 @@
 import sys
-sys.path.append("/data/draizene/3DUnetCNN")
 sys.path.append("/data/draizene/molmimic")
 sys.path.append("/usr/share/pdb2pqr")
 
@@ -39,7 +38,7 @@ class SwarmJob(object):
 
         if user_parameters is not None and isinstance(user_parameters, (list, tuple)):
             self.parameters += user_parameters
-    
+
 
     def __iadd__(self, new):
         self.cmd += new

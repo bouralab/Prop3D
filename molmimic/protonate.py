@@ -13,7 +13,7 @@ def load_ibis(ibis_data, minimize=True):
     dataset = IBISDataset(ibis_data)
     data = dataset.data
     job = SwarmJob("pdb2pqr", cpus=1)
-    
+
     key = lambda p: p[1:3]
     pdbs = sorted(set(data["pdb"].values.tolist()), key=key)
 
@@ -50,7 +50,7 @@ def load_ibis(ibis_data, minimize=True):
                 job += "-out:path:pdb {0} -out:path:score {0} ; ".format(pdb_path)
 
 
-                job += "mv $base.pqr_0001.pdb $base.min.pdb; "
+                job += "python /data/draizene/pdb-tools/pdb_stripheader.py $base.pqr_0001.pdb > $base.min.pdb; "
                 job += "mv $base.pqr.pdb.propka $base.propka; "
                 #job += "mv $f $f.unminimized.pdb; ".format(pdb_path, pdb.lower())
 

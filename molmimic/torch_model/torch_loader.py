@@ -53,28 +53,32 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
         batch = {
             "indices": [],
             "data": [],
-            "truth": []
+            "truth": [],
+            "id": []
             }
 
-        def add_sample(indices, features, truth):
+        def add_sample(indices, features, truth, id):
             batch["indices"].append(indices)
             batch["data"].append(features)
             batch["truth"].append(truth)
+            batch["id"].append(id)
 
     else:
         inputSpatialSize = torch.LongTensor(input_shape)
         batch = {
             "data": scn.InputBatch(3, inputSpatialSize),
-            "truth": scn.InputBatch(3, inputSpatialSize)
+            "truth": scn.InputBatch(3, inputSpatialSize),
+            "id": []
         }
 
-        def add_sample(indices, features, truth):
+        def add_sample(indices, features, truth, id):
             batch["data"].addSample()
             batch["truth"].addSample()
             indices = torch.from_numpy(indices).long()
             try:
                 batch["data"].setLocations(indices, torch.from_numpy(features).float(), 0) #Use 1 to remove duplicate coords?
                 batch["truth"].setLocations(indices, torch.from_numpy(truth).float(), 0)
+                batch["id"].append(id)
             except AssertionError:
                 #PDB didn't fit in grid?
                 pass
@@ -82,15 +86,14 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
             #del truth
 
     sample_weights = []
-    if data[0]["truth"].shape[1] == 2:
-        batch_weight = 0.0
-        num_data = 0.0
-    else:
-        batch_weight = np.zeros(data[0]["truth"].shape[1])
-        num_data = 0.0
+    batch_weight = None
+    num_data = 0.0
     for i, d in enumerate(data):
         if d["data"] is None: continue
-        add_sample(d["indices"], d["data"], d["truth"])
+        if batch_weight is None:
+            batch_weight = 0.0 if d["truth"].shape[1] == 2 else np.zeros(data[0]["truth"].shape[1])
+
+        add_sample(d["indices"], d["data"], d["truth"], d["id"])
         if d["truth"].shape[1] == 2:
             num_true = np.sum(d["truth"][:, 0])
             true_prob = num_true/float(d["truth"].shape[0])
@@ -109,7 +112,7 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
     if create_tensor:
         batch["data"].precomputeMetadata(1)
 
-    if data[0]["truth"].shape[1] == 2:
+    if isinstance(batch_weight, float):
         batch["sample_weights"] = np.array(sample_weights)
         batch["weight"] = np.array([1-batch_weight, batch_weight]) #None #1.-float(num_true)/len(data) #(256*256*256)
     else:
@@ -155,9 +158,10 @@ class IBISDataset(Dataset):
         try:
             skip = "{}_skip.tab".format(os.path.splitext(ibis_data)[0])
             with open(skip) as skip_f:
-                skip_ids = [int(l.rstrip()) for l in skip_f if l]
+                skip_ids = [int(l.rstrip()) for l in skip_f if l if not l.startswith("#") and len(l.rstrip())>0]
             osize = self.full_data.shape[0]
-            self.full_data= self.full_data.loc[~self.full_data["unique_obs_int"].isin(skip_ids)]
+            self.full_data = self.full_data.loc[~self.full_data["unique_obs_int"].isin(skip_ids)]
+            self.full_data = self.full_data.loc[~self.full_data["gi"].isin(skip_ids)]
             print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", len(skip_ids), osize, self.full_data.shape[0], osize)
         except IOError:
             print "No Skip ID file"
@@ -176,6 +180,9 @@ class IBISDataset(Dataset):
 
         if start_index != 0 or end_index != self.full_data.shape[0]:
             self.full_data = self.full_data.iloc[start_index:end_index]
+
+        #MMDB splits separate molecules in one chain, get original chain back by removing "_"
+        self.full_data["chain"] = self.full_data["chain"].apply(lambda chain: chain.split("_")[0])
 
         self.data = self.full_data[["pdb", "chain"]].drop_duplicates()
         self.data["include_negatives"] = True
@@ -279,7 +286,8 @@ class IBISDataset(Dataset):
             #return
             return {"indices": None,
                     "data": None,
-                    "truth": None
+                    "truth": None,
+                    "id": gi
                     }
         except:
             trace = traceback.format_exc()
@@ -297,7 +305,8 @@ class IBISDataset(Dataset):
         sample = {
             "indices": indices,
             "data": data,
-            "truth": truth #np.ones((len(grid_indices), 1), dtype=int).tolist()
+            "truth": truth,
+            "id": gi
             }
 
         return sample
@@ -630,7 +639,8 @@ class SphereDataset(Dataset):
         sample = {
             "indices": indices,
             "data": colors,
-            "truth": truth
+            "truth": truth,
+            "id":index
             }
 
         return sample

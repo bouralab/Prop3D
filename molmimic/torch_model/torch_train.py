@@ -271,7 +271,10 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
                 # forward
                 try:
+                    print inputs
+                    print inputs.features.data.sum()
                     outputs = model(inputs)
+                    print outputs
                 except AssertionError:
                     print nFeatures, inputs
                     raise
@@ -284,7 +287,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     loss_fn = torch.nn.CrossEntropyLoss(weight=weight) #DiceLoss(size_average=use_size_average) #LossFunctions.dice_loss #(criterion()
 
                     loss = loss_fn(outputs, torch.max(labels.features, 1)[1]) #, inputs.getSpatialLocations(), weight) #.long())#.features, labels.features) #, inputs.getSpatialLocations(), scaling)
-
+                    print loss
                     if draw_graph:
                         var_dot = dot.make_dot(loss) #, params=dict(model.named_parameters()))
                         var_dot.render('{}_{}_graph.pdf'.format(epoch, data_iter_num))

@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 from scipy import spatial
 from sklearn.decomposition import PCA
-from scipy.interpolate import RegularGridInterpolator
 from Bio import PDB
 from Bio import SeqIO
 from Bio.PDB.NeighborSearch import NeighborSearch
@@ -26,6 +25,7 @@ try:
 except ImportError:
     pybabel = None
 
+from get_pdb import get_pdb
 from molmimic.util import silence_stdout, silence_stderr
 from molmimic.map_residues import map_residues
 
@@ -102,155 +102,48 @@ surface_areas = {atom:4.*np.pi*(radius**2) for atom, radius in vdw_radii.items()
 
 maxASA = {"A": 129.0, "R": 274.0, "N": 195.0, "D": 193.0, "C": 167.0, "E": 223.0, "Q": 225.0, "G": 104.0, "H": 224.0, "I": 197.0, "K": 201.0, "L": 236.0, "M": 224.0, "F": 240.0, "P": 159.0, "S": 155.0, "T": 172.0, "W": 285.0, "Y": 263.0, "V": 174.0}
 
-obsolete_pdbs = pd.read_table(os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "obsolete.dat"), delim_whitespace=True, skiprows=1, names=["status", "data", "old", "new"], header=None,)
-
-pdbparser = PDB.PDBParser()
-writer = PDB.PDBIO()
-
-_hydrogen = re.compile("[123 ]*H.*")
-
 class InvalidPDB(RuntimeError):
     pass
 
-class SelectChain(PDB.Select):
-    """ Only accept the specified chain and remove hydruogens and hetatms when saving. """
-    def __init__(self, chain, altloc=" ", filter_everything=True):
-        self.chain = chain
-        self.altloc = altloc
-        self.filter_everything = filter_everything
-
-    def accept_model(self, model):
-        # model - only keep model 0
-        return model.get_id() == 0
-
-    def accept_chain(self, chain):
-        return chain.get_id() == self.chain
-
-    def accept_residue(self, residue):
-        """Remove HETATMS"""
-        hetatm_flag, resseq, icode = residue.get_id()
-        return not self.filter_everything or (hetatm_flag == " " and residue.get_resname() in PDB.Polypeptide.aa3)
-
-    def accept_atom(self, atom):
-        """Remove hydrogens"""
-        name = atom.get_id()
-        return not self.filter_everything or atom.altloc == self.altloc
-
-def extract_chain(structure, chain, pdb, write_to_stdout=False):
-    chain = chain.upper()
-    chain_pdb = StringIO()
-    try:
-        altloc = sorted(set([a.altloc for a in structure[0][chain].get_atoms()]))[0]
-    except KeyError:
-        raise InvalidPDB
-    writer.set_structure(structure)
-    writer.save(chain_pdb, select=SelectChain(chain, altloc=altloc))
-    chain_pdb.seek(0)
-    if write_to_stdout:
-        orig = StringIO()
-        writer.set_structure(structure)
-        writer.save(orig, select=SelectChain(chain, filter_everything=False))
-        orig.seek(0)
-        print(orig.read())
-    new_structure = pdbparser.get_structure(pdb, chain_pdb)
-    new_structure.altloc = altloc
-    return new_structure
-
 class Structure(object):
-    def __init__(self, pdb, chain, path=None, id=None, snapshot=True, course_grained=False, volume=264, voxel_size=1.0, rotate=True, input_format="pdb", force_feature_calculation=False, unclustered=False):
-        if path is None and not os.path.isfile(pdb) and len(pdb) == 4:
-            #First try custom database of split chains, protonated, and minimized
-            path = "/data/draizene/molmimic/pdb2pqr_structures/pdbs/{}/{}_{}".format(pdb[1:3].lower(), pdb.lower(), chain)
+    def __init__(self, path, pdb, chain, id=None, course_grained=False, volume=264, voxel_size=1.0, rotate=True, input_format="pdb", force_feature_calculation=False, unclustered=False):
+        self.path = path
 
-            if os.path.isfile(path+".min.pdb"):
-                #Get chain split, protinated, and minimized structure
-                path += ".min.pdb"
-                #print "chain split, protinated, and minimized structure exists"
-            elif os.path.isfile(path+".pqr.pdb"):
-                #Get chain split, and protinated structure
-                #Shouldn't be here
-                path += ".pqr.pdb"
-                #print "chain split, and protinated structure exists"
+        if not os.path.isfile(self.path):
+            raise InvalidPDB("Cannot find file {}".format(self.path))
 
-            elif os.path.isfile(path+".pdb"):
-                #Get chain split structure
-                #Shouldn't be here
-                path += ".pdb"
-                #print "chain split structure exists"
+        if self.path.endswith(".gz"):
+            raise InvalidPDB("Gzipped archives not allowed. Please use constructor or util.get_pdb")
 
-            else:
-                #Structure not seen before, will split chains, protonate, and minimized (only once)
-                path = "{}/pdb/{}/pdb{}.ent.gz".format(os.environ.get("PDB_SNAPSHOT", "/pdb"), pdb[1:3].lower(), pdb.lower())
-
-                if snapshot:
-                    if not os.path.isfile(path):
-                        path, input_format = download_pdb(pdb)
-
-                    if not os.path.isfile(path):
-                        raise InvalidPDB()
-                        #Obsolete pdb
-                        try:
-                            _, old_new = next(obsolete_pdbs.loc[obsolete_pdbs["old"] == pdb.upper()].iterrows())
-                            if old_new["new"]:
-                                pdb = old_new["new"]
-                                path = "{}/pdb/{}/pdb{}.ent.gz".format(os.environ.get("PDB_SNAPSHOT", "/pdb"), pdb[1:3].lower(), pdb.lower())
-                                if not os.path.isfile(path):
-                                    raise StopIteration
-                            else:
-                                raise StopIteration
-                        except StopIteration:
-                            path, input_format = download_pdb(pdb)
-                else:
-                    path, input_format = download_pdb(pdb)
-            pdb = pdb.lower()
-        elif path is None:
-            path = pdb
-
-        if input_format == "pdb":
-            parser = pdbparser
-        elif input_format == "mmcif":
+        self.input_format = input_format
+        if self.input_format in ["pdb", "pqr"]:
+            parser = PDB.PDBParser()
+        elif self.input_format == "mmcif":
             parser = PDB.FastMMCIFParser()
-        elif input_format == "mmtf":
+        elif self.input_format == "mmtf":
             parser = PDB.MMTFParser()
         else:
             raise RuntimeError("Invalid PDB parser (pdb, mmcif, mmtf)")
 
         try:
-            if isinstance(path, str) and os.path.isfile(path):
-                if path.endswith(".gz"):
-                    with gzip.open(path, 'rt') as f:
-                        self.structure = parser.get_structure(pdb, f)
-                    path = path[:-2]
-                else:
-                    self.structure = parser.get_structure(pdb, path)
-            elif isinstance(path, Iterable):
-                self.structure = parser.get_structure(pdb, path)
-            else:
-                raise InvalidPDB("Invalid PDB id or file: {} (path={})".format(pdb, path))
+            self.structure = parser.get_structure(pdb, self.path)    
         except KeyError:
             #Invalid mmcif file
-            raise InvalidPDB("Invalid PDB id or file: {} (path={})".format(pdb, path))
+            raise InvalidPDB("Invalid PDB file: {} (path={})".format(pdb, self.path))
 
         self.chain = chain.split("_", 1)[0]
 
-        all_chains = list(self.structure[0].get_chains())
+        try:
+            all_chains = list(self.structure[0].get_chains())
+        except (KeyError, StopIteration):
+            raise InvalidPDB("Error get chains for {} {}".format(pdb, self.path))
 
         if len(all_chains) > 1:
-            print "multiple chains", all_chains
-            self._structure = self.structure
-            self.structure = extract_chain(self.structure, self.chain, pdb)
+            raise InvalidPDB("Only accepts PDBs with 1 chain")
 
-            try:
-                only_chain = next(self.structure[0].get_chains())
-            except (KeyError, StopIteration):
-                extract_chain(self._structure, self.chain, pdb, write_to_stdout=True)
-                raise InvalidPDB
-        else:
-            print "one chain"
-            try:
-                only_chain = next(self.structure[0].get_chains())
-            except (KeyError, StopIteration):
-                raise InvalidPDB
+        only_chain = all_chains[0]
+        
+        self.modified_pdb_file = False
 
         if self.chain != only_chain.get_id():
             #Reset chain if Bio.PDB changes name after extraction
@@ -259,7 +152,6 @@ class Structure(object):
         self.altloc = getattr(self.structure, "altloc", " ")
 
         self.pdb = pdb
-        self.path = path
         self.dssp = None
         self.pqr = None
         self.cx = None
@@ -298,13 +190,17 @@ class Structure(object):
 
         self.precalc_features = None
         if force_feature_calculation:
+            print "force features"
             self.precalc_features = np.memmap(precalc_features_path, dtype=np.float, mode="w+", shape=(shape, self.nFeatures))
+            self.force_feature_calculation = True
         else:
             try:
                 self.precalc_features = np.memmap(precalc_features_path, dtype=np.float, mode="r", shape=(shape, self.nFeatures))
+                self.force_feature_calculation = False
             except IOError as e:
                 print e
                 self.precalc_features = None
+                self.force_feature_calculation = True
 
     @staticmethod
     def number_of_features(only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False):
@@ -325,7 +221,22 @@ class Structure(object):
             elif use_deepsite_features:
                 return 8
             else:
-                return 65
+                return 67
+
+    @classmethod
+    def from_pdb(cls, pdb, chain, id=None, input_shape=(96,96,96), batch_index=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, grid=True, return_data=True, return_truth=True, rotate=True, force_feature_calculation=False, expand_atom=False, include_full_protein=False, undersample=False, unclustered=False):
+        path, pdb, chain, input_format = get_pdb(pdb, chain)
+        return cls(
+            path,
+            pdb,
+            chain,
+            id=id,
+            volume=np.max(input_shape),
+            course_grained=course_grained,
+            force_feature_calculation=force_feature_calculation,
+            input_format=input_format,
+            unclustered=unclustered,
+            rotate=rotate)
 
     @staticmethod
     def features_from_string(pdb, chain, resi=None, id=None, input_shape=(96,96,96), batch_index=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, grid=True, return_data=True, return_truth=True, rotate=True, force_feature_calculation=False, expand_atom=False, include_full_protein=False, undersample=False, unclustered=False):
@@ -342,13 +253,16 @@ class Structure(object):
         input_shape : 3-tuple
         rotations : int
         """
+        path, pdb, chain, input_format = get_pdb(pdb, chain)
         s = Structure(
+            path,
             pdb,
             chain,
             id=id,
             volume=np.max(input_shape),
             course_grained=course_grained,
             force_feature_calculation=force_feature_calculation,
+            input_format=input_format,
             unclustered=unclustered,
             rotate=rotate)
 
@@ -384,13 +298,6 @@ class Structure(object):
         return features
 
     def get_atoms(self, include_hetatms=False, exclude_atoms=None):
-        # for a in self.structure.get_atoms():
-        #     hetflag, resseq, icode = a.get_parent().get_id()
-        #     if not include_hetatms and hetflag is not ' ':
-        #         continue
-        #     if exclude_atoms is not None and atom.get_name().strip() in exclude_atoms:
-        #         continue
-        #     yield a
         for a in self.filter_atoms(self.structure.get_atoms(), include_hetatms=include_hetatms, exclude_atoms=exclude_atoms):
             yield a
 
@@ -408,6 +315,7 @@ class Structure(object):
         if path is None:
             path = StringIO()
 
+        writer = PDB.PDBIO()
         writer.set_structure(self.structure)
         writer.save(path)
 
@@ -421,17 +329,20 @@ class Structure(object):
 
     def _get_dssp(self):
         if self.dssp is None:
-            pdbfd, tmp_pdb_path = tempfile.mkstemp()
-            with os.fdopen(pdbfd, 'w') as tmp:
-                writer.set_structure(self.structure)
-                writer.save(tmp)
+            if self.modified_pdb_file:
+                pdbfd, tmp_pdb_path = tempfile.mkstemp()
+                with os.fdopen(pdbfd, 'w') as tmp:
+                    self.save_pdb(tmp)
+            else:
+                tmp_pdb_path = self.path
 
             try:
                 self.dssp = PDB.DSSP(self.structure[0], tmp_pdb_path, dssp='mkdssp')
             except NameError:
                 self.dssp = None
 
-            os.remove(tmp_pdb_path)
+            if self.modified_pdb_file:
+                os.remove(tmp_pdb_path)
 
         return self.dssp
 
@@ -441,7 +352,32 @@ class Structure(object):
             return None, None
         if self.sasa is None:
             with silence_stdout(), silence_stderr():
-                self.sasa_struct = freesasa.structureFromBioPDB(self.structure)
+                if self.modified_pdb_file:
+                    #Note: need to remove hydrogens
+                    #self.sasa_struct = freesasa.structureFromBioPDB(self.structure)
+                    structure = Structure()
+                    classifier = Classifier()
+
+                    atoms = self.structure.get_atoms()
+
+                    for a in atoms:
+                        if a.element == "H":
+                            #Ignore Hydrogens
+                            continue
+
+                        r = a.get_parent()
+                        hetflag, resseq, icode = r.get_id()
+
+                        c = r.get_parent()
+                        v = a.get_vector()
+
+                        structure.addAtom(a.get_fullname(), r.get_resname(), resseq, c.get_id(),
+                                          v[0], v[1], v[2])
+
+                    structure.setRadiiWithClassifier(classifier)
+                else:
+                    #Automatically removes hydrogens
+                    self.sasa_struct = freesasa.Structure(self.path)
                 self.sasa = freesasa.calc(self.sasa_struct)
 
         return self.sasa, self.sasa_struct
@@ -452,22 +388,37 @@ class Structure(object):
         TODO: figure out why unknown residues fro hetatms are absent
         """
         if self.pqr is None:
-            pdbfd, tmp_pdb_path = tempfile.mkstemp()
-            with os.fdopen(pdbfd, 'w') as tmp:
-                self.save_pdb(tmp, True)
+            if not self.modified_pdb_file and self.input_format == "pqr":
+                #Don't recalculate, just use occupancy field!
+                self.pqr = {a.get_id():a.occupancy for a in self.get_atoms()}
+                return self.pqr
 
-            _, tmp_pqr_path = tempfile.mkstemp()
+            if not self.modified_pdb_file and self.path.endswith(".min.pdb") and os.path.isfile("{}.pqr.pdb".format(self.path[:-8])):
+                remove_pqr = False
+                tmp_pqr_path = "{}.pqr.pdb".format(self.path[:-8])
+            else:
+                remove_pqr = True
 
-            with silence_stdout(), silence_stderr():
-                subprocess.call(["/usr/share/pdb2pqr/pdb2pqr.py", "--ff=amber", "--whitespace", tmp_pdb_path, tmp_pqr_path])
+                if self.modified_pdb_file:
+                    pdbfd, tmp_pdb_path = tempfile.mkstemp()
+                    with os.fdopen(pdbfd, 'w') as tmp:
+                        self.save_pdb(tmp, True)
+                else:
+                    tmp_pdb_path = self.path
 
-            os.remove(tmp_pdb_path)
+                _, tmp_pqr_path = tempfile.mkstemp()
+
+                with silence_stdout(), silence_stderr():
+                    subprocess.call(["/usr/share/pdb2pqr/pdb2pqr.py", "--ff=amber", "--whitespace", tmp_pdb_path, tmp_pqr_path])
+
+                if self.modified_pdb_file:
+                    os.remove(tmp_pdb_path)
 
             self.pqr = {}
             with open(tmp_pqr_path) as pqr:
                 for line in pqr:
                     for line in pqr:
-                        if line.startswith("REMARK"): continue
+                        if not line.startswith("ATOM  ") or line.startswith("HETATM"): continue
 
                         fields = line.rstrip().split()
                         if len(fields) == 11:
@@ -475,6 +426,7 @@ class Structure(object):
                         elif len(fields) == 10:
                             recordName, serial, atomName, residueName, residueNumber, X, Y, Z, charge, radius = fields
                         else:
+                            print fields
                             raise RuntimeError("Invalid PQR File")
 
                         resseq = int("".join([i for i in residueNumber if i.isdigit()]))
@@ -494,20 +446,26 @@ class Structure(object):
 
                         key = (residue_id, (atomName.strip(), ' '))
                         self.pqr[key] = float(charge)
-            os.remove(tmp_pqr_path)
+
+            if remove_pqr:
+                os.remove(tmp_pqr_path)
 
         return self.pqr
 
     def _get_cx(self):
         if self.cx is None:
-            pdbfd, tmp_pdb_path = tempfile.mkstemp()
-            with os.fdopen(pdbfd, 'w') as tmp:
-                self.save_pdb(tmp, True)
+            if self.modified_pdb_file:
+                pdbfd, tmp_pdb_path = tempfile.mkstemp()
+                with os.fdopen(pdbfd, 'w') as tmp:
+                    self.save_pdb(tmp, True)
+            else:
+                tmp_pdb_path = self.path
 
             with open(tmp_pdb_path) as f:
                 cx_f = subprocess.check_output("cx", stdin=f)
 
-            os.remove(tmp_pdb_path)
+            if self.modified_pdb_file:
+                os.remove(tmp_pdb_path)
 
             #Read in b-factor from PDB file. CX sometimes introduces invalid characters
             #so the Bio.PDB parser cannot be used
@@ -524,33 +482,20 @@ class Structure(object):
 
         return self.cx
 
-    def get_autodock_features(self, atom, add_h=False):
+    def get_autodock_features(self, atom):
         """Modified from pybel write PDBQT c++"""
         if not hasattr(self, "autodock_features"):
-            mol = pybel.readstring("pdb", self.save_pdb(file_like=True).read())
+            if self.modified_pdb_file:
+                mol = pybel.readstring("pdb", self.save_pdb(file_like=True).read())
+            else:
+                mol = next(pybel.readfile("pdb", self.path))
+
             mol.addh()
 
             pdbqt = mol.write("pdbqt")
             self.autodock_features = {} #defaultdict(lambda: ("  ", False)
             for atom_index in range(mol.OBMol.NumAtoms()):
                 a = mol.OBMol.GetAtom(atom_index + 1)
-
-                if a.IsHydrogen():
-                    if not add_h:
-                        #Ignore Hydrogens
-                        continue
-                    else:
-                        # r = a.GetResidue()
-                        # atom_iter = r.BeginAtoms()
-                        # h_num = int(r.BeginAtom(atom_iter).IsHydrogen())+\
-                        #     sum([int(r.NextAtom(atom_iter).IsHydrogen()) \
-                        #         for _ in xrange(a.GetResidue().GetNumAtoms()-1)])
-                        r = a.GetResidue().GetNum()
-                        r = self.structure[0][self.chain][r]
-                        h_num = sum([int(_a.element == "H") for _a in r])
-                        new_atom = PDB.Atom.Atom("HD{}".format(h_num), np.array((a.GetX(), a.GetY(), a.GetZ())), 20.0, 1.0, self.altloc, " HD ", atom_index, "H")
-                        r.add(new_atom)
-                        autodock_name ='HD'
 
                 if a.IsCarbon() and a.IsAromatic():
                     element = 'A'
@@ -563,23 +508,12 @@ class Structure(object):
                 else:
                     element = "".join([c for c in a.GetType() if c.isalnum()])
 
-                #id = (a.GetResidue().GetChain(), a.GetResidue().GetNum(), a.GetType())
                 self.autodock_features[a.GetIdx()] = (element, a.IsHbondDonor())
 
-            for atom_index in range(mol.OBMol.NumAtoms()):
-                a = mol.OBMol.GetAtom(atom_index + 1)
-                if not a.IsHydrogen():
-                    continue
-
-
-                #atom = Atom(name, coord, b_factor, occupancy, altloc, fullname, serial_number, element)
-
-        #id = (atom.get_parent().get_parent().get_id(), atom.get_parent().get_id()[1], atom.get_name().strip())
         try:
             return self.autodock_features[atom.serial_number]
         except KeyError:
             return "  ", False
-
 
     def get_mean_coord(self):
         if not self.mean_coord_updated:
@@ -679,16 +613,6 @@ class Structure(object):
         return features
 
     def get_features(self, input_shape=(96, 96, 96), residue_list=None, batch_index=None, return_data=True, return_truth=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, include_full_protein=False, undersample=False, voxel_size=1.0):
-        # return self.get_features_in_grid(
-        #     input_shape=input_shape,
-        #     residue_list=residue_list,
-        #     batch_index=batch_index,
-        #     return_data=return_data,
-        #     return_truth=return_truth,
-        #     only_aa=only_aa,
-        #     expand_atom=expand_atom,
-        #     include_full_protein=include_full_protein,
-        #     voxel_size=voxel_size)
         if self.course_grained:
             return self.map_residues_to_voxel_space(
                 binding_site_residues=residue_list,
@@ -996,16 +920,10 @@ class Structure(object):
             #All altlocs have been removed so onlt one remains
             atom = atom.disordered_get_list()[0]
 
-        if not preload:
-            print "Calculating features: preload False", self.pdb, self.chain
-
-        if self.precalc_features is None:
-            print "Calculating features: Precalc is None", self.pdb, self.chain
-
-        if preload and self.precalc_features is not None:
+        if preload and not self.force_feature_calculation and self.precalc_features is not None:
             try:
                 features = self.precalc_features[atom.serial_number-1]
-                is_buried = bool(features[33]) #Residue asa #[self.precalc_features[a.serial_number-1][31] for a in atom.get_parent()]
+                is_buried = bool(features[35]) #Residue asa #[self.precalc_features[a.serial_number-1][31] for a in atom.get_parent()]
                 # if asa > 0.0:
                 #     asa /= surface_areas.get(atom.element.title(), 1.0)
                 #     is_buried = asa <= 0.2
@@ -1014,7 +932,7 @@ class Structure(object):
 
                 if use_deepsite_features:
                     feats = np.concatenate((
-                        features[59:65],
+                        features[61:67],
                         features[20:22]))
                     if warn_if_buried:
                         return feats, is_buried
@@ -1027,7 +945,7 @@ class Structure(object):
                     else:
                         return feats
                 elif only_aa:
-                    feats = features[35:56]
+                    feats = features[37:58]
                     if warn_if_buried:
                         return feats, is_buried
                     else:
@@ -1054,12 +972,12 @@ class Structure(object):
 
         if use_deepsite_features:
             if warn_if_buried:
-                return self.get_deepsite_features(atom), self.get_accessible_surface_area(atom)[-1]
+                return self.get_deepsite_features(atom), self.get_accessible_surface_area(atom)[-2]
             else:
                 return self.get_deepsite_features(atom)
         elif only_atom:
             if warn_if_buried:
-                return self.get_element_type(atom), self.get_accessible_surface_area(atom)[-1]
+                return self.get_element_type(atom), self.get_accessible_surface_area(atom)[-2]
             else:
                 return self.get_element_type(atom)
         elif only_aa:
@@ -1070,35 +988,30 @@ class Structure(object):
             features[5:9] = self.get_charge(atom)
             features[9:13] = self.get_hydrophobicity(atom)
             if warn_if_buried:
-                return features, self.get_accessible_surface_area(atom)[-1]
+                return features, self.get_accessible_surface_area(atom)[-2]
             else:
                 return features
         else:
+            print "getting full features"
             features = np.zeros(self.nFeatures)
 
             #atom_type
             features[0:13]  = self.get_atom_type(atom)
             features[13:18] = self.get_element_type(atom)
-            #hydroxyl              = None
-            #amide                 = None
-            #amine                 = None
-            #carbonyl              = None
-            #ring_system           = None
-            #peptide               = None
             features[18:19] = self.get_vdw(atom)
             features[19:23] = self.get_charge(atom)
             features[23:27] = self.get_concavity(atom)
             features[27:31] = self.get_hydrophobicity(atom)
-            features[31:35] = self.get_accessible_surface_area(atom)
-            features[35:56] = self.get_residue(atom)
-            features[56:59] = self.get_ss(atom)
-            features[59:65] = self.get_deepsite_features(atom, calc_charge=False)
+            features[31:37] = self.get_accessible_surface_area(atom)
+            features[37:58] = self.get_residue(atom)
+            features[58:61] = self.get_ss(atom)
+            features[61:67] = self.get_deepsite_features(atom, calc_charge=False)
 
             if self.precalc_features is not None:
                 self.precalc_features[atom.serial_number-1] = features
 
             if warn_if_buried:
-                return features, bool(features[34])
+                return features, bool(features[35])
             else:
                 return features
 
@@ -1212,6 +1125,7 @@ class Structure(object):
 
         charge = np.zeros(4)
         charge[0] = charge_value
+        print "charge", charge_value, float(charge_value < 0)
         charge[1] = float(charge_value < 0)
         charge[2] = float(charge_value > 0)
         charge[3] = float(charge_value == 0)
@@ -1297,6 +1211,7 @@ class Structure(object):
                     atom_area = selections["sele"]
                 fraction = atom_area/total_area
             except (KeyError, AssertionError, AttributeError, TypeError):
+                raise
                 atom_area = np.NaN
                 fraction = np.NaN
 
@@ -1458,16 +1373,6 @@ class Structure(object):
             if coord.tolist() in grids:
                 yield atom
 
-def download_pdb(id):
-    pdbl = PDB.PDBList()
-    try:
-        fname = pdbl.retrieve_pdb_file(id.upper(), file_format="mmCif")
-        if not os.path.isfile(fname):
-            raise InvalidPDB(id)
-        return fname, "mmcif"
-    except IOError:
-        raise InvalidPDB(id)
-
 def flip_around_axis(coords, axis = (0.2, 0.2, 0.2)):
     'Flips coordinates randomly w.r.t. each axis with its associated probability'
     for col in xrange(3):
@@ -1499,29 +1404,6 @@ def rotation_matrix(random = False, theta = 0, phi = 0, z = 0):
     M = (np.outer(V, V) - np.eye(3)).dot(R)
 
     return M, theta, phi, z
-
-@jit
-def distance(a,b):
-    d = (a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2
-    d = np.sqrt(d)
-    return d
-
-@jit
-def grid_for_atom(coord, vdw_radii, centers):
-    """Modified from DeepSite paper
-    """
-    best_center_index = None
-    best_center = None
-    best_occupancy = None
-    for i, grid_center in enumerate(centers):
-        dist_to_center = distance(coord, grid_center)
-        x = vdw_radii/dist_to_center
-        n = 1-np.exp(-x**12)
-        if best_occupancy is None or n>best_occupancy:
-            best_occupancy = n
-            best_center = grid_center
-            best_ceter_index = i
-    return i, best_center
 
 if __name__ == "__main__":
   import sys
