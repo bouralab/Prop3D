@@ -2,6 +2,9 @@ import os
 import sys
 from contextlib import contextmanager
 
+class InvalidPDB(RuntimeError):
+    pass
+
 def download_pdb(id):
     pdbl = PDB.PDBList()
     try:
@@ -14,7 +17,7 @@ def download_pdb(id):
 
 def get_first_chain(pdb_file):
     try:
-        with open(pdb_file) in f:
+        with open(pdb_file) as f:
             for line in f:
                 if line.startswith("ATOM"):
                     return line[21]
@@ -22,6 +25,18 @@ def get_first_chain(pdb_file):
         pass
 
     return None
+
+def get_all_chains(pdb_file):
+    chains = set()
+    try:
+        with open(pdb_file) as f:
+            for line in f:
+                if line.startswith("ATOM"):
+                    chains.add(line[21])
+    except IOError:
+        pass
+
+    return chains
 
 @contextmanager
 def silence_stdout():

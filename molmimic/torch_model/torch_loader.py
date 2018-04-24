@@ -121,7 +121,7 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
     return batch
 
 class IBISDataset(Dataset):
-    def __init__(self, ibis_data, transform=True, input_shape=(264,264,264), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, start_index=0, end_index=None, undersample=False, oversample=False, random_features=None, train=True):
+    def __init__(self, ibis_data, transform=True, input_shape=(264,264,264), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, start_index=0, end_index=None, undersample=False, oversample=False, remove_multimers=False, cellular_organisms=False, random_features=None, train=True):
         self.transform = transform
         self.only_aa = only_aa
         self.only_atom = only_atom
@@ -153,16 +153,35 @@ class IBISDataset(Dataset):
 
         # Open and load text file including the whole training data
         data = pd.read_table(ibis_data, sep="\t")
-        self.full_data = data.loc[(data["tax_glob_group"] == tax_glob_group) & (data["n"] >= num_representatives)]
+        if len(data.columns) == 1:
+            data = pd.read_table(ibis_data, sep=",")
+
+        print "using cellular_organisms", cellular_organisms
+        data.columns = [col.lower() for col in data.columns]
+        print data.columns
+        try:
+            if cellular_organisms:
+                self.full_data = data.loc[(data["tax_glob_group"] == tax_glob_group) | (data["tax_glob_group"] == "cellular")]
+                self.full_data = self.full_data.loc[self.full_data["n"] >= num_representatives]
+                print "cellular_organisms"
+            else:
+                self.full_data = data.loc[(data["tax_glob_group"] == tax_glob_group) & (data["n"] >= num_representatives)]
+        except KeyError:
+            self.full_data = data
 
         try:
             skip = "{}_skip.tab".format(os.path.splitext(ibis_data)[0])
             with open(skip) as skip_f:
                 skip_ids = [int(l.rstrip()) for l in skip_f if l if not l.startswith("#") and len(l.rstrip())>0]
             osize = self.full_data.shape[0]
+            skip_size = len(skip_ids)
             self.full_data = self.full_data.loc[~self.full_data["unique_obs_int"].isin(skip_ids)]
             self.full_data = self.full_data.loc[~self.full_data["gi"].isin(skip_ids)]
-            print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", len(skip_ids), osize, self.full_data.shape[0], osize)
+            if remove_multimers:
+                multimers = [648375,660939,660938,668915,659919,513280,666570,535768,17338,654986,631439,656314,532931,665852,545875,513834,640379,511746,606239,509681,618577,527589,530024,630491,360637,511758,660132,660138,652064,651818,639149,630492,630493,634831,634826,647996,647997,643192,614273,614267,647151,617702,616098,516702,478916,461717,640385,661187,547577,541160,493657,493658,641974,541196,541453,447450,428933,514064,372904,372906,514011,514060,545252,401694,549817,299853,514062,514066,661242,635739,642241,614531,549815,549803,483520,483519,338893,174920,661197,554878,661250,622610,92851,563706,562371,632146,592870,658319,615442,542548,573967,123213,575823,621426,376703,576582,608295,579900,579888,533721,473097,504981,642845,647951,327972,642859,647950,267698,617700,627019,642808,642798,635782,227110,372997,284288,231335,231345,600901,231343,476220,476224,237050,243070,497904,453293,404236,404238,384495,395891]
+                skip_size += len(multimers)
+                self.full_data = self.full_data.loc[~self.full_data["unique_obs_int"].isin(multimers)]
+            print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", skip_size, osize, self.full_data.shape[0], osize)
         except IOError:
             print "No Skip ID file"
             pass
@@ -196,8 +215,7 @@ class IBISDataset(Dataset):
             self.n_samples = self.data.shape[0]
 
     @classmethod
-    def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(264,264,264), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, oversample=False, undersample=False, random_features=None):
-        print "make undersampe", undersample
+    def get_training_and_validation(cls, ibis_data, transform=True, input_shape=(264,264,264), tax_glob_group="A_eukaryota", num_representatives=2, data_split=0.8, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, oversample=False, undersample=False, random_features=None, cellular_organisms=False):
         train = cls(
             ibis_data,
             transform=transform,
@@ -214,6 +232,7 @@ class IBISDataset(Dataset):
             undersample=undersample,
             oversample=oversample,
             random_features=random_features,
+            cellular_organisms=cellular_organisms,
             train=True)
         validate = cls(
             ibis_data,
@@ -231,6 +250,7 @@ class IBISDataset(Dataset):
             undersample=False,
             oversample=False,
             random_features=random_features,
+            cellular_organisms=cellular_organisms,
             train=False)
         return {"train":train, "val":validate}
 
@@ -256,7 +276,7 @@ class IBISDataset(Dataset):
         #pdb_chain = {"pdb":"4CAK", "chain":"B"}
         #binding_sites = self.full_data.loc[(self.full_data["pdb"]=="4CAK")&(self.full_data["chain"]=="B")]
         binding_site_residues = ",".join([binding_site["resi"] for _, binding_site in binding_sites.iterrows()])
-        gi = binding_sites["gi"].iloc[0] #"{}.{}".format(pdb_chain["pdb"], pdb_chain["chain"]) if self.course_grained else binding_sites["unique_obs_int"].iloc[0]
+        gi = "{}.{}".format(pdb_chain["pdb"], pdb_chain["chain"]) #binding_sites["gi"].iloc[0] #"{}.{}".format(pdb_chain["pdb"], pdb_chain["chain"]) if self.course_grained else binding_sites["unique_obs_int"].iloc[0]
 
         #print "Running {} ({}.{}): {}".format(datum["unique_obs_int"], datum["pdb"], datum["chain"], ",".join(["{}{}".format(i,n) for i, n in zip(datum["resi"].split(","), datum["resn"].split(","))]))
         try:
@@ -264,7 +284,7 @@ class IBISDataset(Dataset):
                 pdb_chain["pdb"],
                 pdb_chain["chain"],
                 binding_site_residues,
-                id=gi,
+                #id=gi,
                 input_shape=self.input_shape,
                 rotate=self.transform,
                 only_aa=self.only_aa,
@@ -555,6 +575,7 @@ class SphereDataset(Dataset):
             self.n_classes = 2
 
         if stripes:
+            print "Making stripes"
             self.color_patch = make_stripes
         else:
             self.color_patch = alternate_colors

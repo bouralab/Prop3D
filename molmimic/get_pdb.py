@@ -1,13 +1,14 @@
 import os
 
 import prepare_protein
-from util import get_first_chain
+from util import InvalidPDB, download_pdb, get_first_chain
 
-CUSTOM_DATABASE = "/data/draizene/molmimic/pdb2pqr_structures/pdbs/"
+CUSTOM_DATABASE = "/data/draizene/molmimic/pdb2pqr_structures/Ig"
+#CUSTOM_DATABASE2 = CUSTOM_DATABASE+"3"
 
-def get_pdb(pdb, chain=None, prepare=True):
-    """Get the correct PDB file from custom database of protonated and minimized 
-    structures, find the raw PDB file in a local spapshot and prepare the file, 
+def get_pdb(pdb, chain=None, prepare=True, updating=True, allow_download=False):
+    """Get the correct PDB file from custom database of protonated and minimized
+    structures, find the raw PDB file in a local spapshot and prepare the file,
     or download the file from wwwPDB if there is no snapshot and prepare it.
 
     Parameters
@@ -15,7 +16,7 @@ def get_pdb(pdb, chain=None, prepare=True):
     pdb : str
         Either the 4 letter PDB code or path to PDB file to prepare
     chain : str or None
-        Chain ID to extract since molmimic can only one chain at a time. Default 
+        Chain ID to extract since molmimic can only one chain at a time. Default
         (None) is to prepare all chains, but only use first.
     prepare : bool
         Prepare the structure by protonating with pdb2pqr and minimizing using
@@ -32,12 +33,15 @@ def get_pdb(pdb, chain=None, prepare=True):
     input_format : str
         The format of PDB file
     """
+    #if not updating:
+    #    CUSTOM_DATABASE = CUSTOM_DATABASE2
+
     if not os.path.isfile(pdb) and len(pdb) == 4:
         #First try custom database of split chains, protonated, and minimized
-
+        pdb = pdb.lower()
         path = "{}_{}".format(pdb.lower(), chain)
         custom_db_path = os.path.join(CUSTOM_DATABASE, pdb[1:3].lower(), path)
-        
+
         if os.path.isfile(custom_db_path+".min.pdb"):
             #Get chain split, protinated, and minimized structure
             custom_db_path += ".min.pdb"
@@ -73,7 +77,10 @@ def get_pdb(pdb, chain=None, prepare=True):
             path = "{}/pdb/{}/pdb{}.ent.gz".format(os.environ.get("PDB_SNAPSHOT", "/pdb"), pdb[1:3].lower(), pdb.lower())
 
             if not os.path.isfile(path):
-                path, input_format = download_pdb(pdb)
+                if allow_download:
+                    path, input_format = download_pdb(pdb)
+                else:
+                    raise InvalidPDB("PDB not found: {}".format(pdb))
             else:
                 input_format = "pdb"
 
@@ -95,5 +102,5 @@ def get_pdb(pdb, chain=None, prepare=True):
         else:
             pdb, input_format = os.path.splitext(path)
             chain = get_first_chain(path)
-        
+
         return path, pdb, chain, input_format

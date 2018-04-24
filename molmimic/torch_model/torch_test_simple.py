@@ -8,67 +8,150 @@ pgf_with_rc_fonts = {"pgf.texsystem": "pdflatex"}
 matplotlib.rcParams.update(pgf_with_rc_fonts)
 
 import argparse
+from collections import Counter
 
 import numpy as np
 import torch
+
+from Bio.PDB.Selection import unfold_entities
 
 import molmimic.torch_model.torch_loader as loader
 import mayavi_vieiwer as mv
 
 from molmimic.torch_model import torch_infer as infer
+from molmimic.biopdbtools import Structure, InvalidPDB
 
 
-def infer_spheres(model, shape=(96,96,96), n_samples=3, n_features=3, combinations=False, bs_feature=None, bs_feature2=None, stripes=False, no_prediction=False, use_gpu=False, ibis_data=None):
+def infer_spheres(model, shape=(96,96,96), n_samples=3, n_features=3, combinations=False, bs_feature=None, bs_feature2=None, stripes=False, no_prediction=False, use_gpu=False, ibis_data=None, pymol=True):
     if ibis_data is None:
         data = loader.SphereDataset(shape, nFeatures=n_features, allow_feature_combos=combinations, bs_feature=bs_feature, bs_feature2=bs_feature2, stripes=stripes)
     else:
         shape = (264, 264, 264)
-        random_features = (n_features, combinations, bs_feature, bs_feature2)
-        data = loader.IBISDataset(ibis_data, input_shape=shape, random_features=random_features)
+        if bs_feature is None:
+            random_features = None
+        else:
+            random_features = (n_features, combinations, bs_feature, bs_feature2)
+        train_test = loader.IBISDataset.get_training_and_validation(ibis_data, input_shape=shape, random_features=random_features, transform=False, use_deepsite_features=True)
+        data = train_test["val"]
 
-    fig, axes = mv.create_figure(n_samples, size=shape, no_prediction=no_prediction)
+    if ibis_data is None or (ibis_data is not None and not pymol):
+        mpl = True
+        fig, axes = mv.create_figure(n_samples, size=shape, no_prediction=no_prediction)
+    else:
+        mpl = False
+
+    runs = []
 
     for sample in xrange(n_samples):
         print "Running", sample
+
+
+        print data[sample]["id"]
         sphere = loader.sparse_collate([data[sample]])
-        
+
         print "center", np.mean(sphere["indices"][0], axis=0)
 
-        ax = axes[sample]
+        if mpl:
+            ax = axes[sample]
         truth = np.where(sphere["truth"][0][:, 1]==1.0)
-        truth_voxels = sphere["indices"][0][truth] 
-        mv.plot_volume_matplotlib(
-            ax, 
-            sphere["indices"][0], 
-            colors=sphere["data"][0], 
-            truth=truth_voxels) #sphere["indices"][0] rot_z180, rot_x45 = 
-        #ax.set_title("Truth", fontdict={"fontsize":20})
+        truth_voxels = sphere["indices"][0][truth]
+        if mpl:
+            rot_z180, rot_x45 = mv.plot_volume_matplotlib(
+                ax,
+                sphere["indices"][0],
+                colors=sphere["data"][0],
+                truth=truth_voxels) #sphere["indices"][0]
+            #ax.set_title("Truth", fontdict={"fontsize":20})
 
         if no_prediction:
+            if not mpl:
+                view_in_pymol(data[sample]["id"], truth_voxels=truth_voxels)
             continue
 
         output, logs = infer.infer(model, sphere, input_shape=shape, use_gpu=use_gpu)
-        ax = axes[sample+n_samples]
+        if mpl:
+            ax = axes[sample+n_samples]
         _, prediction = (output>=0.7).max(dim=1)
         prediction = prediction.data.cpu().numpy()
         prediction = np.where(prediction==1)[0]
-        prediction_voxels = sphere["indices"][0][prediction] 
+        prediction_voxels = sphere["indices"][0][prediction]
         print prediction.shape, prediction_voxels.shape
         colors = np.tile(np.array([0.95, 0.37, 0.18]), (prediction_voxels.size,1))
-        mv.plot_volume_matplotlib(
-            ax, prediction_voxels, 
-            colors=colors, 
-            truth=truth_voxels, 
-            rot_z180=rot_z180, 
-            rot_x45=rot_x45)
-        #ax.set_title("Prediction", fontdict={"fontsize":20})
-
+        if mpl:
+            mv.plot_volume_matplotlib(
+                ax, prediction_voxels,
+                colors=colors,
+                truth=truth_voxels,
+                rot_z180=rot_z180,
+                rot_x45=rot_x45)
+            #ax.set_title("Prediction", fontdict={"fontsize":20})
+        print data[sample]["id"]
         print logs.meter["dice_avg"].val
         print logs.meter["dice_class1"].val
         print logs.meter["mcc_avg"].val
+        runs.append([data[sample]["id"], logs.meter["dice_avg"].val, logs.meter["dice_class1"].val, logs.meter["mcc_avg"].val])
         print
+
+        if not mpl:
+            view_in_pymol(data[sample]["id"], prediction_voxels, truth_voxels)
     print "Saving Figure"
-    mv.save_fig(fig, "sphere_infer.pdf")
+    print runs
+    if mpl:
+        mv.save_fig(fig, "sphere_infer.pdf")
+
+def view_in_pymol(id, predicted_voxels=None, truth_voxels=None, voxel_atom_ratio=.2):
+    pdb, chain = id.split(".")
+    structure = Structure.from_pdb(pdb, chain, rotate=False)
+
+    cmd = """fetch {id}
+remove hetatm
+hide everything, {id}
+show surface, {id}
+color gray90, {id}
+""".format(id=id)
+
+    if truth_voxels is not None:
+        for v in truth_voxels:
+            atoms = structure.convert_voxels(v, level="A")
+            if len(atoms) > 0:
+                truth_atoms[a[0]] += 1
+
+        truth_atoms = [atom for atom, count in truth_atoms.iteritems() \
+            if float(count)/structrue.get_accessible_surface_area(atom)[0] >= voxel_atom_ratio]
+
+        truth_resiidues = [str(r.get_id()[1]) for r in unfold_entities(predicted_atoms, "R")]
+        truth_resi = "+".join(truth_residues)
+
+        cmd += """select true_binding_site, resi {true_resi}
+color orange, true_binding_site
+""".format(true_resi=truth_resi)
+
+    if predicted_voxels is not None:
+        predicted_atoms = Counter()
+        for v in predicted_voxels:
+            atoms = structure.convert_voxels(v, level="A")
+            if len(atoms) > 0:
+                predicted_atoms[a[0]] += 1
+
+        predicted_atoms = [atom for atom, count in predicted_atoms.iteritems() \
+            if float(count)/structrue.get_accessible_surface_area(atom)[0] >= voxel_atom_ratio]
+
+        predicted_resiidues = [str(r.get_id()[1]) for r in unfold_entities(predicted_atoms, "R")]
+        "+".join(truth_residues)
+
+        cmd += """select predicted_binding_site, resi {predicted_resi}
+color magenta, predicted_binding_site
+""".format(predicted_resi=predicted_resi)
+
+    if truth_voxels is not None and predicted_voxels is not None:
+        false_postive_voxels = set(predicted_residues)-set(truth_residues)
+        fp_resi = "+".join(false_postive_voxels)
+        cmd += """select false_positive_binding_site, resi {fp_resi}
+color blue, false_positive_binding_site
+""".format(fp_resi=fp_resi)
+
+    with open("{}_pymol.cmd".format(id), "w") as f:
+        print >> f, cmd
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Infer spheres")
@@ -76,7 +159,7 @@ def parse_args(args=None):
     parser.add_argument(
         "--n_samples",
         default=3,
-        type=int 
+        type=int
     )
     parser.add_argument(
         "--n_features",
@@ -139,4 +222,3 @@ if __name__ == "__main__":
         model = None
 
     infer_spheres(model, shape=args.shape, n_samples=args.n_samples, n_features=args.n_features, combinations=args.combination, bs_feature=args.bs_feature, bs_feature2=args.bs_feature2, stripes=args.stripes, no_prediction=args.no_prediction, use_gpu=True, ibis_data=args.ibis_data)
-

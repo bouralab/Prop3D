@@ -36,7 +36,7 @@ from molmimic.biopdbtools import Structure
 from torchviz import dot
 #import torchbiomed.loss as bioloss
 
-def load_model(model_file, no_batch_norm=False, use_resnet_unet=True, dropout_depth=False, dropout_width=False, dropout_p=0.5, unclustered=False, nFeatures=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False):
+def load_model(model_file, no_batch_norm=False, use_resnet_unet=True, dropout_depth=False, dropout_width=False, dropout_p=0.5, unclustered=False, nFeatures=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, old_version=False):
     model_prefix = "./molmimic_model_{}".format(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
 
     dtype = 'torch.cuda.FloatTensor' if torch.cuda.is_available() else 'torch.FloatTensor'
@@ -45,12 +45,34 @@ def load_model(model_file, no_batch_norm=False, use_resnet_unet=True, dropout_de
         nFeatures = Structure.number_of_features(only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features)
 
     if use_resnet_unet:
-        model = ResNetUNet(nFeatures, 2, dropout_depth=dropout_depth, dropout_width=dropout_width, dropout_p=dropout_p)
+        model = ResNetUNet(nFeatures, 2, dropout_depth=dropout_depth, dropout_width=dropout_width, dropout_p=dropout_p, old_version=old_version)
     else:
         model = UNet3D(nFeatures, 2, batchnorm=not no_batch_norm)
 
     states =  torch.load(model_file)
-    model.load_state_dict(states)
+    try:
+        model.load_state_dict(states)
+    except KeyError as e:
+        if not old_version:
+            try:
+                return load_model(
+                    model_file,
+                    no_batch_norm=no_batch_norm,
+                    use_resnet_unet=use_resnet_unet,
+                    dropout_depth=dropout_depth,
+                    dropout_width=dropout_width,
+                    dropout_p=dropout_p,
+                    unclustered=unclustered,
+                    nFeatures=nFeatures,
+                    only_aa=only_aa,
+                    only_atom=only_atom,
+                    non_geom_features=non_geom_features,
+                    use_deepsite_features=use_deepsite_features,
+                    old_version=True
+                )
+            except KeyError:
+                pass
+        raise
     model.type(dtype)
     model.train(False)  # Set model to evaluate mode
 
@@ -105,7 +127,7 @@ def infer(model, data, input_shape=(256,256,256), use_gpu=True, course_grained=F
 
         for sample, (indices, features, truth) in enumerate(izip(data["indices"], data["data"], data["truth"])):
             inputs.addSample()
-            if labels is not None: 
+            if labels is not None:
                 labels.addSample()
 
             try:
@@ -118,7 +140,7 @@ def infer(model, data, input_shape=(256,256,256), use_gpu=True, course_grained=F
                 continue
 
             inputs.setLocations(indices, features, 0) #Use 1 to remove duplicate coords?
-            if labels is not None: 
+            if labels is not None:
                 labels.setLocations(indices, truth, 0)
 
         del data
@@ -155,8 +177,9 @@ def infer(model, data, input_shape=(256,256,256), use_gpu=True, course_grained=F
     # forward
     try:
         outputs = model(inputs)
-    except AssertionError:
-        print nFeatures, inputs
+    except AssertionError as e:
+        print e
+        #print nFeatures, inputs
         raise
 
     if labels is None:
