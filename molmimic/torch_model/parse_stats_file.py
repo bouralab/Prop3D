@@ -13,7 +13,7 @@ sns.set_palette(set2)
 
 from matplotlib.backends.backend_pdf import PdfPages
 
-colors = [
+_104_colors = [
     "#000000", "#FFFF00", "#1CE6FF", "#FF34FF", "#FF4A46", "#008941", "#006FA6", "#A30059",
     "#FFDBE5", "#7A4900", "#0000A6", "#63FFAC", "#B79762", "#004D43", "#8FB0FF", "#997D87",
     "#5A0007", "#809693", "#FEFFE6", "#1B4400", "#4FC601", "#3B5DFF", "#4A3B53", "#FF2F80",
@@ -28,6 +28,14 @@ colors = [
     "#549E79", "#FFF69F", "#201625", "#72418F", "#BC23FF", "#99ADC0", "#3A2465", "#922329",
     "#5B4534", "#FDE8DC", "#404E55", "#0089A3", "#CB7E98", "#A4E804", "#324E72", "#6A3A4C"
 ]
+
+flatui = ["#9b59b6", "#3498db", "#95a5a6", "#e74c3c", "#34495e", "#2ecc71"]
+
+meter_names = {"loss_avg":"Loss", "weighted_dice_wavg_avg":"Weighted Dice"}
+format_meter_name = lambda m: meter_names[m] if m in meter_names else m.title()
+
+worst_meter = {"loss_avg":max, "weighted_dice_wavg_avg":min}
+format_worst_meter = lambda m: worst_meter[m] if m in worst_meter else min
 
 def parse_stats_file(stats_file):
     epoch = None
@@ -54,28 +62,46 @@ def parse_stats_file(stats_file):
 
     return stats
 
-def plot_stats(stats_files, names=None, prefix=None, metrics=None, start_epoch=0, end_epoch=None, step_epoch=1):
+def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=None, metrics=None, start_epoch=0, end_epoch=None, step_epoch=1, merge_min=False, combine=False):
+    print "run"
     stats = [parse_stats_file(f) for f in stats_files]
 
+    if stats_file2 is not None:
+        stats2 = [parse_stats_file(f) for f in stats_file2]
+    else:
+        stats2 = None
     if names is not None:
         if isinstance(names, str) or (isinstance(names, (list, tuple)) and len(names) == 1):
             #Format string  with index {i}, {dir}
             name = names[0] if isinstance(names, (list, tuple)) else names
             directory = lambda f: os.path.basename(os.path.dirname(os.path.abspath(f.name)))
-            names = [name.format(i=i+1, dir=directory(f)) for i, f in enumerate(stats_files)]
+            names = [name.format(i=i+1, dir=directory(f), meter="{meter}") for i, f in enumerate(stats_files)]
         elif isinstance(names, (list, tuple)) and len(names) != len(stats_files):
             raise RuntimeError("Names must be the same length as stats_files")
     else:
         names = [str(i) for i in xrange(len(stats_files))]
 
+    if stats_file2 is not None and names2 is not None:
+        if isinstance(names2, str) or (isinstance(names2, (list, tuple)) and len(names2) == 1):
+            #Format string  with index {i}, {dir}
+            name2 = names2[0] if isinstance(names2, (list, tuple)) else names2
+            directory2 = lambda f: os.path.basename(os.path.dirname(os.path.abspath(f.name)))
+            names2 = [name2.format(i=i+1, dir=directory2(f), meter="{meter}") for i, f in enumerate(stats_file2)]
+        elif isinstance(names, (list, tuple)) and len(names) != len(stats_files):
+            raise RuntimeError("Names must be the same length as stats_files")
+    elif stats_file2 is not None:
+        names2 = [str(i) for i in xrange(len(stats_files2))]
+
     print names
+    if merge_min:
+        names = names[:1]
+        if names2 is not None:
+            names2 = names2[:1]
+
+    colors = flatui if len(names) <= 8 else _104_colors
 
     if metrics is None:
         metrics = stats[0][0].keys()
-
-    print stats[0][0].keys()
-    for stat in stats:
-        print stat.keys()
 
     num_epochs = max(stats[0].keys())+1
 
@@ -85,43 +111,76 @@ def plot_stats(stats_files, names=None, prefix=None, metrics=None, start_epoch=0
         end_epoch = num_epochs
     epochs = range(start_epoch, end_epoch, step_epoch)
 
+    if combine:
+        pp = PdfPages('compare_all_epochs.pdf')
+        f, ax = fig, ax = plt.subplots(figsize=(6,6))
+        #f.suptitle("Sparse 3D Unet Compare", fontsize=14)
+
+    start = 0
+
     #All Epochs
     for metric in metrics:
-        pp = PdfPages('compare_{}_all_epochs.pdf'.format(metric))
-        f, ax = fig, ax = plt.subplots(figsize=(9,9))
-        f.suptitle("Sparse 3D Unet Compare {}".format(metric.title()), fontsize=14)
+        if not combine:
+            pp = PdfPages('compare_{}_all_epochs.pdf'.format(metric))
+            f, ax = fig, ax = plt.subplots(figsize=(6,6))
+            #f.suptitle("Sparse 3D Unet Compare {}".format(metric.title()), fontsize=14)
         ax.set_xlabel("Epoch #")
         ax.set_ylabel("")
-        for i, stat in enumerate(stats):
-            #y = [stat[epoch][metric] for epoch in epochs]
-            y=[]
-            for epoch in epochs:
-                print epoch
-                print stat[epoch].keys()
-                y.append(stat[epoch][metric])
-            if False and use_raw_color:
-            	ax.plot(y, label=names[i], color=[int(x) for x in names[i]])
-            else:
-            	ax.plot(y, label=names[i], color=colors[i])
-        plt.legend(loc=2, borderaxespad=0.)
-        plt.savefig(pp, format='pdf')
-        pp.close()
-        plt.close(f)
-        plt.clf()
-        plt.cla()
-        del f
-        del ax
+        if merge_min:
+            print "merging min"
+            all_y = {epoch:format_worst_meter(metric)([stat[epoch][metric] for stat in stats]) for epoch in epochs}
+            all_x, all_y = zip(*sorted(all_y.iteritems(), key=lambda x:x[0]))
+            print metric, all_y            
+            ax.plot(all_y, label=names[0].format(meter=format_meter_name(metric)), color=colors[start])
+            if stats2 is None:
+                start += 1
+        else:
+            for i, stat in enumerate(stats):
+                #y = [stat[epoch][metric] for epoch in epochs]
+                y=[]
+                for epoch in epochs:
+                    y.append(stat[epoch][metric])
+                if False and use_raw_color:
+                    ax.plot(y, label=names[i].format(meter=format_meter_name(metric)), color=[int(x) for x in names[i]])
+                else:
+                    ax.plot(y, label=names[i].format(meter=format_meter_name(metric)), color=colors[start])
+                if stats2 is None:
+                    start += 1
 
-    #Final Epoch
-    for metric in metrics:
-        pp = PdfPages('compare_{}_last_epoch.pdf'.format(metric))
-        f, ax = fig, ax = plt.subplots(figsize=(8.5,11))
-        f.suptitle("Sparse 3D Unet Compare Final Epoch".format(metric.title()), fontsize=14)
-        ax.set_xlabel("Epoch #")
-        ax.set_ylabel("")
-        x = [stat[end_epoch-1][metric] for i, stat in enumerate(stats)]
-        sns.kdeplot(x, shade=True)
-        #plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+        if stats2 is not None:
+            if merge_min:
+                all_y = {epoch:min(stat[epoch][metric] for stat in stats2) for epoch in epochs}
+                all_x, all_y = zip(*sorted(all_y.iteritems(), key=lambda x:x[0]))
+                ax.plot(all_y, label=names2[0].format(meter=format_meter_name(metric)), color=colors[start], linestyle="--", alpha=0.6)
+                start += 1
+            else:
+                for i, stat in enumerate(stats2):
+                    #y = [stat[epoch][metric] for epoch in epochs]
+                    y=[]
+                    for epoch in epochs:
+                        y.append(stat[epoch][metric])
+                    if False and use_raw_color:
+                        ax.plot(y, label=names2[i].format(meter=format_meter_name(metric)), color=[int(x) for x in names2[i]])
+                    else:
+                        ax.plot(y, label=names2[i].format(meter=format_meter_name(metric)), color=colors[start], linestyle="--", alpha=0.6)
+                    start += 1
+
+
+        if not combine:
+            #ax.set_ylim([ax.get_ylim()[0],1.0])
+            plt.legend(loc=2, borderaxespad=0.)
+            plt.savefig(pp, format='pdf')
+            pp.close()
+            plt.close(f)
+            plt.clf()
+            plt.cla()
+            del f
+            del ax
+
+    if combine:
+        ax.set_ylim([ax.get_ylim()[0],ax.get_ylim()[1]+(0.025*(start+1))])
+        plt.legend(loc=2, borderaxespad=0.)
+        plt.tight_layout()
         plt.savefig(pp, format='pdf')
         pp.close()
         plt.close(f)
@@ -145,6 +204,10 @@ def parse_args():
         nargs="*",
         default=None)
     parser.add_argument(
+        "--names2",
+        nargs="*",
+        default=None)
+    parser.add_argument(
         "--start-epoch",
         default=0,
         type=int,
@@ -162,18 +225,43 @@ def parse_args():
         type=int
     )
     parser.add_argument(
+        "--merge-min",
+        default=False,
+        action="store_true")
+    parser.add_argument(
         "--stats-file",
         nargs="*",
         type=argparse.FileType("r"),
         required=True)
+    parser.add_argument(
+        "--stats-file2",
+        nargs="*",
+        type=argparse.FileType("r"),
+        required=False)
+    parser.add_argument(
+        "--combine",
+        default=False,
+        action="store_true"
+    )
 
 
     args = parser.parse_args()
 
-    print args.stats_file
-
     return args
 
+print __name__
 if __name__ == "__main__":
     args = parse_args()
-    plot_stats(args.stats_file, names=args.names, prefix=args.prefix, metrics=args.metrics, start_epoch=args.start_epoch, end_epoch=args.end_epoch, step_epoch=args.step_epoch)
+    print args
+    plot_stats(
+        args.stats_file, 
+        stats_file2=args.stats_file2, 
+        names=args.names, 
+        names2=args.names2, 
+        prefix=args.prefix, 
+        metrics=args.metrics, 
+        start_epoch=args.start_epoch, 
+        end_epoch=args.end_epoch, 
+        step_epoch=args.step_epoch, 
+        combine=args.combine,
+        merge_min=args.merge_min)

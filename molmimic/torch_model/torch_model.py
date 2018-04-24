@@ -206,20 +206,40 @@ class UNet3D(nn.Module):
         return act.features
 
 class ResNetUNet(nn.Module):
-    def __init__(self, nInputFeatures, nClasses, dropout_depth=False, dropout_width=False, dropout_p=0.5):
+    def __init__(self, nInputFeatures, nClasses, dropout_depth=False, dropout_width=False, dropout_p=0.5, wide_model=False, old_version=False):
         nn.Module.__init__(self)
         self.sparseModel = scn.Sequential().add(
             scn.ValidConvolution(3, nInputFeatures, 64, 3, False)).add(
             ResNetUNetDropout(3, 64, 2, 4, dropout_depth=dropout_depth, dropout_width=dropout_width, dropout_p=dropout_p) \
                if dropout_depth or dropout_width else scn.ResNetUNet(3, 64, 2, 4))
-        self.linear = nn.Linear(64, nClasses)
-        #self.final = scn.ValidConvolution(3, 64, nClasses, 1, False)
-        #self.relu = scn.ReLU()
-        self.act = nn.Softmax(dim=1) #scn.Sigmoid()
-    def forward(self,x):
+
+        self.use_wide_model = wide_model
+        if wide_model:
+            self.wide = nn.Linear(nInputFeatures, 1)
+            #self.wide_and_deep = scn.JoinTable()
+            self.linear = nn.Linear(65, nClasses)
+            print "Using wide model"
+        else:
+            self.linear = nn.Linear(64, nClasses)
+
+        self.act = nn.Softmax(dim=1)
+
+        #Some older models still have this in, but it's not called
+        if old_version:
+            self.final = scn.ValidConvolution(3, 64, nClasses, 1, False)
+            self.relu = scn.ReLU()
+
+    def forward(self, x):
         x1 = self.sparseModel(x)
         #x2 = self.final(x1)
-        x2 = self.linear(x1.features)
+        if self.use_wide_model:
+            x1_wide = self.wide(x.features)
+            x_wide_deep = torch.cat((x1.features, x1_wide), 1) #self.wide_and_deep((x1, x1_wide))
+            x2 = self.linear(x_wide_deep)
+            del x1_wide
+            del x_wide_deep
+        else:
+            x2 = self.linear(x1.features)
         del x1
         #x3 = self.relu(x2)
         x3 = self.act(x2)

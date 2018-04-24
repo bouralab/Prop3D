@@ -24,19 +24,16 @@ import sparseconvnet as scn
 
 from tqdm import tqdm
 
-from molmimic.torch_model.Loss import DiceLoss
-import molmimic.torch_model.Loss as LossFunctions
 from molmimic.torch_model.torch_model import UNet3D, ResNetUNet
 from molmimic.torch_model.torch_loader import IBISDataset, IBISUnclusteredDataset
 from molmimic.torch_model.ModelStats import ModelStats, add_to_logger, format_meter, graph_logger
 
 from torchviz import dot
-#import torchbiomed.loss as bioloss
 
 import subprocess
 subprocess.call("python -c 'import visdom.server as vs; vs.main()' &", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=True, save_final=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, course_grained=False, no_batch_norm=False, use_resnet_unet=False, unclustered=False, undersample=False, oversample=False, nFeatures=None, allow_feature_combos=False, bs_feature=None, bs_feature2=None, bs_features=None, stripes=False, data_parallel=False, dropout_depth=False, dropout_width=False, dropout_p=0.5):
+def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=True, save_final=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, course_grained=False, no_batch_norm=False, use_resnet_unet=False, unclustered=False, undersample=False, oversample=False, nFeatures=None, allow_feature_combos=False, bs_feature=None, bs_feature2=None, bs_features=None, stripes=False, data_parallel=False, dropout_depth=False, dropout_width=False, dropout_p=0.5, wide_model=False, cellular_organisms=False):
     if model_prefix is None:
         model_prefix = "./molmimic_model_{}".format(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
 
@@ -61,7 +58,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
             random_features = (nFeatures, allow_feature_combos, bs_feature, bs_feature2)
         elif not allow_feature_combos and nFeatures is not None:
             random_features = (nFeatures, False, bs_feature, bs_feature2)
-        elif not allow_feature_combos and nFeatures is None:
+        elif allow_feature_combos and nFeatures is None:
             random_features = None
             print "ignoring --allow-feature-combos"
         else:
@@ -78,6 +75,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
             course_grained=course_grained,
             oversample=oversample,
             undersample=undersample,
+            cellular_organisms=cellular_organisms,
             random_features=random_features)
         nFeatures = datasets["train"].get_number_of_features()
         nClasses = 2
@@ -100,11 +98,9 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
     dtype = 'torch.cuda.FloatTensor' if torch.cuda.is_available() else 'torch.FloatTensor'
 
     if use_resnet_unet:
-        model = ResNetUNet(nFeatures, nClasses, dropout_depth=dropout_depth, dropout_width=dropout_width, dropout_p=dropout_p)
-        #criterion = torchbiomed.loss.DiceLoss #torch.nn.NLLLoss
+        model = ResNetUNet(nFeatures, nClasses, dropout_depth=dropout_depth, dropout_width=dropout_width, dropout_p=dropout_p, wide_model=wide_model)
     else:
         model = UNet3D(nFeatures, nClasses, batchnorm=not no_batch_norm)
-        #criterion = torchbiomed.loss.DiceLoss
 
     if data_parallel:
         model = torch.nn.DataParallel(model)
@@ -117,10 +113,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
         weight_decay=1e-4,
         nesterov=True)
 
-    if False:
-        scheduler = StepLR(optimizer, step_size=1, gamma=learning_rate_drop)
-    else:
-        scheduler = LambdaLR(optimizer, lambda epoch: math.exp((1 - epoch) * lr_decay))
+    scheduler = LambdaLR(optimizer, lambda epoch: math.exp((1 - epoch) * lr_decay))
 
     check_point_model_file = "{}_checkpoint_model.pth".format(model_prefix)
     check_point_epoch_file = "{}_checkpoint_epoch.pth".format(model_prefix)
@@ -163,28 +156,23 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
             else:
                 model.train(False)  # Set model to evaluate mode
 
-            #stats = ModelStats(phase)
-
             # Iterate over data.
             bar = tqdm(enumerate(dataloaders[phase]), total=num_batches, unit="batch", desc="Loading data", leave=True)
             for data_iter_num, data in bar:
-                #Input will be turned SparseConvNetTensor
-                #print "{} Batch: {} of {}".format(phase.title(), data_iter_num, num_batches-1),
                 datasets[phase].batch = data_iter_num
-                #print type(data["data"]), data["data"].__class__.__name__, data["data"].__class__.__name__ == "InputBatch"
                 batch_weight = data.get("weight", None)
-                #print batch_weight
+                
                 if batch_weight is not None:
                     batch_weight = torch.from_numpy(batch_weight).float()
                     if use_gpu:
                         batch_weight = batch_weight.cuda()
+
                 sample_weights = data.get("sample_weights", None)
+
                 if sample_weights is not None:
                     sample_weights = torch.from_numpy(sample_weights).float()
                     if use_gpu:
                         sample_weights = sample_weights.cuda()
-
-                #print sample_weights, batch_weight
 
                 if data["data"].__class__.__name__ == "InputBatch":
                     sparse_input = True
@@ -211,7 +199,6 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     else:
                         raise RuntimeError("invalid datatype")
 
-
                     for sample, (indices, features, truth, id) in enumerate(izip(data["indices"], data["data"], data["truth"], data["id"])):
                         inputs.addSample()
                         labels.addSample()
@@ -232,7 +219,6 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                             with open("bad_pdbs.txt", "a") as f:
                                 print >> f, id
 
-
                     del data
                     del indices
                     del truth
@@ -245,8 +231,6 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
                     inputs = inputs.to_variable(requires_grad=True)
                     labels = labels.to_variable()
-
-
 
                 elif isinstance(data["data"], torch.FloatTensor):
                     #Input is dense
@@ -271,34 +255,25 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
                 # forward
                 try:
-                    print inputs
-                    print inputs.features.data.sum()
                     outputs = model(inputs)
-                    print outputs
                 except AssertionError:
                     print nFeatures, inputs
                     raise
 
                 if sparse_input:
-                    #criterion = DiceLoss(size_average=False)
                     use_size_average = False
                     weight = sample_weights if use_size_average else batch_weight
 
-                    loss_fn = torch.nn.CrossEntropyLoss(weight=weight) #DiceLoss(size_average=use_size_average) #LossFunctions.dice_loss #(criterion()
+                    loss_fn = torch.nn.CrossEntropyLoss(weight=weight)
 
-                    loss = loss_fn(outputs, torch.max(labels.features, 1)[1]) #, inputs.getSpatialLocations(), weight) #.long())#.features, labels.features) #, inputs.getSpatialLocations(), scaling)
-                    print loss
+                    loss = loss_fn(outputs, torch.max(labels.features, 1)[1])
+                    
                     if draw_graph:
-                        var_dot = dot.make_dot(loss) #, params=dict(model.named_parameters()))
-                        var_dot.render('{}_{}_graph.pdf'.format(epoch, data_iter_num))
+                        var_dot = dot.make_dot(loss)
+                        var_dot.render('SparseUnet3dCNN_graph.pdf')
                         draw_graph = False
                         del var_dot
 
-                    #stats.update(outputs.cpu(), labels.features.cpu(), loss.data[0], inputs.getSpatialLocations(), epoch, since)
-                    #print loss
-                    # if math.isnan(loss.data[0]):
-                    #     print "Loss is Nan?"
-                    #     import pdb; pdb. set_trace()
                 else:
                     outputs = scn.SparseToDense(3, 1)(outputs)
                     criterion = DiceLoss(size_average=False)
@@ -467,6 +442,10 @@ def parse_args():
         help="Undersample non bidning site atoms"
     )
     parser.add_argument(
+        "--cellular-organisms",
+        default=False,
+        action="store_true")
+    parser.add_argument(
         "--nFeatures",
         default=None,
         required=False,
@@ -497,6 +476,12 @@ def parse_args():
         "--dropout-p",
         default=0.5,
         type=float
+    )
+    parser.add_argument(
+        "--wide-model",
+        default=False,
+        action="store_true",
+        help="Add wide model"
     )
     parser.add_argument(
         "--bs-feature",
@@ -584,6 +569,7 @@ if __name__ == "__main__":
         unclustered           = args.unclustered,
         undersample           = args.undersample,
         oversample            = args.oversample,
+        cellular_organisms    = args.cellular_organisms,
         nFeatures             = args.nFeatures,
         allow_feature_combos  = args.allow_feature_combos,
         bs_feature            = args.bs_feature,
@@ -593,5 +579,6 @@ if __name__ == "__main__":
         data_parallel         = args.data_parallel,
         dropout_depth         = args.dropout_depth,
         dropout_width         = args.dropout_width,
-        dropout_p             = args.dropout_p
+        dropout_p             = args.dropout_p,
+        wide_model            = args.wide_model
     )

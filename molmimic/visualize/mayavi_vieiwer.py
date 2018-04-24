@@ -12,7 +12,7 @@ from scipy.ndimage.interpolation import rotate
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_samples, silhouette_score
 
-from Bio.SVDSuperimposer import SVDSuperimposer 
+from Bio.SVDSuperimposer import SVDSuperimposer
 
 import seaborn as sns
 
@@ -329,13 +329,13 @@ def plot_volume_matplotlib(ax, volume, truth=None, rot_z180=None, rot_x45=None, 
     """Plots volume in 3D, interpreting the coordinates as voxels
     From: EnzyNet
     """
-    # if truth is not None:
-    #    truth, volume, rot_z180, rot_x45 = move_to_camera_center(truth, volume)
+    if truth is not None:
+       truth, volume, rot_z180, rot_x45 = move_to_camera_center(truth, volume)
 
     plot_matrix(ax, volume, colors=colors)
 
-    # if truth is not None:
-    #     return rot_z180, rot_x45
+    if truth is not None:
+        return rot_z180, rot_x45
 
 
 def plot_cube_at(pos = (0,0,0), ax = None, color=(0,1,0), alpha=0.4):
@@ -474,10 +474,10 @@ def move_to_camera_center(truth_pts, all_pts, rot_z180=None, rot_x45=None, retur
     if rot_z180 is None and rot_x45 is None:
         cluster = KMeans(n_clusters=2).fit(truth_pts)
 
-        #Truth 
+        #Truth
         centroidA = cluster.cluster_centers_[0]
         mean = np.array((48., 48., 48.)) #np.mean(all_pts)
-        
+
         r, theta, phi = to_spherical(centroidA-mean)
 
         if theta < 0:
@@ -550,6 +550,3 @@ def x_axis_rotation(theta):
     return np.array([[1, 0,             0             ],
                      [0, np.cos(theta), -np.sin(theta)],
                      [0, np.sin(theta), np.cos(theta)]])
-
-
-
