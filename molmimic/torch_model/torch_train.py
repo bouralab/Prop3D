@@ -25,8 +25,9 @@ import sparseconvnet as scn
 from tqdm import tqdm
 
 from molmimic.torch_model.torch_model import UNet3D, ResNetUNet
-from molmimic.torch_model.torch_loader import IBISDataset, IBISUnclusteredDataset
+from molmimic.torch_model.torch_loader import IBISDataset
 from molmimic.torch_model.ModelStats import ModelStats, add_to_logger, format_meter, graph_logger
+from molmimic.util import initialize_data
 
 from torchviz import dot
 
@@ -52,7 +53,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
         else:
             nClasses = 2
     elif os.path.isfile(ibis_data):
-        dataset = IBISDataset if not unclustered else IBISUnclusteredDataset
+        dataset = IBISDataset
         print allow_feature_combos, nFeatures
         if allow_feature_combos and nFeatures is not None:
             random_features = (nFeatures, allow_feature_combos, bs_feature, bs_feature2)
@@ -161,7 +162,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
             for data_iter_num, data in bar:
                 datasets[phase].batch = data_iter_num
                 batch_weight = data.get("weight", None)
-                
+
                 if batch_weight is not None:
                     batch_weight = torch.from_numpy(batch_weight).float()
                     if use_gpu:
@@ -267,7 +268,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     loss_fn = torch.nn.CrossEntropyLoss(weight=weight)
 
                     loss = loss_fn(outputs, torch.max(labels.features, 1)[1])
-                    
+
                     if draw_graph:
                         var_dot = dot.make_dot(loss)
                         var_dot.render('SparseUnet3dCNN_graph.pdf')
@@ -530,6 +531,9 @@ def parse_args():
         default=False)
 
     parser.add_argument(
+        "dataset_name")
+
+    parser.add_argument(
         "ibis_data")
 
     args = parser.parse_args()
@@ -544,6 +548,8 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+
+    initialize_data(args.dataset_name)
 
     train(
         args.ibis_data,

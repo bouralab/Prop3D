@@ -1,0 +1,30 @@
+#TransComp_2. 
+#These sets were taken from CAPRI experiments. For each of
+#the 19 complexes, the PDB-ID or the CAPRI-target-ID for the full complex and chain-IDs constituting
+#one of the two interacting sub-complexes are listed separated by a colon. For the monomers, the CAPRI
+#target-IDs are given together with the chain-IDs involved in complex formation. The specification
+#1KKL ABC:HIJ, CA01 ABC CA01 HIJ indicates that chains A, B and C of CAPRI-target 01 and
+#chains HIJ of CAPRI-target 01 are the protomers that form a complex. The structure of the full complex
+#is deposited in PDB-entry 1KKL and consists of the chains A, B, C and H, I, J.
+
+#Zellner H, Staudigel M, Trenner T, Bittkowski M, Wolowski V, Icking C, Merkl R. Prescont: Predicting protein-protein interfaces utilizing four residue properties. Proteins Struct Funct Bioinforma. 2012; 80(1):154–68. doi:10.1002/prot.23172.
+
+1KKL ABC:HIJ, CA01 ABC CA01 HIJ; 
+1L0X B:A, CA07 A CA07 R; 
+1NPE A:B, CA08 A CA08 B;
+CA09 A:B, CA09 A CA09 B; 
+DA10 A:BC, CA10 A CA10 BC; 
+DA11 A:B, CA11 A CA11 B; 
+DA14 A:B, CA14 A CA14 B; 
+1V74 A:B, CA15 A CA15 B; 
+1TA3 A:B, CA16 A CA16 B; 
+1TE1 A:B, CA17 A CA17 B; 
+DA20 A:B, CA20 A CA20 B; 
+1SYX A:B, CA22 A CA22 B; 
+2B8W A:B, CA23 A CA23 B; 
+2J59 A:M, CA25 A CA25 B; 
+2O25 ABC:D, CA27 AAB CA27 B; 
+2O25 ABD:C, CA27 AAB CA27 B; 
+2VDU BD:EF, CA29 BB CA29 AA; 
+3BX1 AB:CD, CA32 AA CA32 CC; 
+3FM8 AB:CD, CA39 BB CA39 AA;

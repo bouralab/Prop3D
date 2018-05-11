@@ -1,0 +1,1 @@
+IBIS interfaces are organized by their query domain and stored in a direcotry with the name of the dataset they belong to. For information on how to create the dataset, please see the README in the data directory.

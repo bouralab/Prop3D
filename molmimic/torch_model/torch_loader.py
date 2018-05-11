@@ -152,13 +152,23 @@ class IBISDataset(Dataset):
 
 
         # Open and load text file including the whole training data
-        data = pd.read_table(ibis_data, sep="\t")
+        dtype = {'pdb': str, 'chain': str}
+        sep = "\t"
+        data = pd.read_table(ibis_data, sep="\t", dtype=dtype)
         if len(data.columns) == 1:
-            data = pd.read_table(ibis_data, sep=",")
+            sep = ","
+            data = pd.read_table(ibis_data, sep=",", dtype=dtype)
+        if data.columns[0] != "pdb":
+            if len(data.columns) == 5:
+                #Full protein
+                names = ["pdb", "chain", "resi", "is_multimer", "cdd"]
+            else:
+                #Individual chain
+                names = ["pdb", "chain", "sdi", "domNo", "resi"]
+            data = pd.read_table(ibis_data, sep=sep, header=None, names=names, dtype=dtype)
 
-        print "using cellular_organisms", cellular_organisms
         data.columns = [col.lower() for col in data.columns]
-        print data.columns
+
         try:
             if cellular_organisms:
                 self.full_data = data.loc[(data["tax_glob_group"] == tax_glob_group) | (data["tax_glob_group"] == "cellular")]
@@ -201,15 +211,19 @@ class IBISDataset(Dataset):
             self.full_data = self.full_data.iloc[start_index:end_index]
 
         #MMDB splits separate molecules in one chain, get original chain back by removing "_"
-        self.full_data["chain"] = self.full_data["chain"].apply(lambda chain: chain.split("_")[0])
+        self.full_data.loc[:,["chain"]] = self.full_data["chain"].apply(lambda chain: chain.split("_")[0] if isinstance(chain, str) else chain)
+        self.full_data.loc[:, ["pdb"]] = self.full_data["pdb"].apply(lambda pdb: pdb.replace("e+", "E") if len(pdb)==5 else pdb)
 
-        self.data = self.full_data[["pdb", "chain"]].drop_duplicates()
-        self.data["include_negatives"] = True
+        if "sdi" not in self.full_data:
+            self.data = self.full_data[["pdb", "chain"]].drop_duplicates()
+        else:
+            self.data = self.full_data
+        self.data.loc[:, "include_negatives"] = True
         self.n_samples = self.data.shape[0]
 
         if self.oversample:
             d = self.data.copy()
-            d["include_negatives"] = False
+            d.loc[:, "include_negatives"] = False
             d = pd.concat([d]*5, ignore_index=True)
             self.data = pd.concat((self.data, d), ignore_index=True)
             self.n_samples = self.data.shape[0]
@@ -272,18 +286,25 @@ class IBISDataset(Dataset):
     def __getitem__(self, index, verbose=True):
         pdb_chain = self.data.iloc[index]
 
-        binding_sites = self.full_data.loc[(self.full_data["pdb"]==pdb_chain["pdb"])&(self.full_data["chain"]==pdb_chain["chain"])]
-        #pdb_chain = {"pdb":"4CAK", "chain":"B"}
-        #binding_sites = self.full_data.loc[(self.full_data["pdb"]=="4CAK")&(self.full_data["chain"]=="B")]
-        binding_site_residues = ",".join([binding_site["resi"] for _, binding_site in binding_sites.iterrows()])
-        gi = "{}.{}".format(pdb_chain["pdb"], pdb_chain["chain"]) #binding_sites["gi"].iloc[0] #"{}.{}".format(pdb_chain["pdb"], pdb_chain["chain"]) if self.course_grained else binding_sites["unique_obs_int"].iloc[0]
+        if "sdi" not in self.full_data:
+            binding_sites = self.full_data.loc[(self.full_data["pdb"]==pdb_chain["pdb"])&(self.full_data["chain"]==pdb_chain["chain"])]
+            binding_site_residues = ",".join([binding_site["resi"] for _, binding_site in binding_sites.iterrows()])
+            gi = "{}.{}".format(pdb_chain["pdb"], pdb_chain["chain"]) #binding_sites["gi"].iloc[0] #"{}.{}".format(pdb_chain["pdb"], pdb_chain["chain"]) if self.course_grained else binding_sites["unique_obs_int"].iloc[0]
+            sdi = None
+            domain = None
+        else:
+            binding_site_residues = pdb_chain["resi"]
+            gi = "{}.{}.d{}".format(pdb_chain["pdb"], pdb_chain["chain"], pdb_chain["domnum"])
+            sdi = pdb_chain["sdi"]
+            domain = pdb_chain["domnum"]
 
-        #print "Running {} ({}.{}): {}".format(datum["unique_obs_int"], datum["pdb"], datum["chain"], ",".join(["{}{}".format(i,n) for i, n in zip(datum["resi"].split(","), datum["resn"].split(","))]))
         try:
             indices, data, truth = Structure.features_from_string(
                 pdb_chain["pdb"],
                 pdb_chain["chain"],
-                binding_site_residues,
+                sdi = sdi,
+                domain = domain,
+                resi=binding_site_residues,
                 #id=gi,
                 input_shape=self.input_shape,
                 rotate=self.transform,
@@ -297,7 +318,7 @@ class IBISDataset(Dataset):
                 undersample=self.undersample)
         except (KeyboardInterrupt, SystemExit):
             raise
-        except InvalidPDB:
+        except InvalidPDB, RuntimeError:
             trace = traceback.format_exc()
             with open("{}_{}_{}_{}_{}.error".format(pdb_chain["pdb"], pdb_chain["chain"], gi, self.epoch, self.batch), "w") as ef:
                 print trace
@@ -324,158 +345,9 @@ class IBISDataset(Dataset):
 
         sample = {
             "indices": indices,
-            "data": data,
+            "data": np.nan_to_num(data),
             "truth": truth,
             "id": gi
-            }
-
-        return sample
-
-    # Override to give PyTorch size of dataset
-    def __len__(self):
-        return self.n_samples
-
-class IBISUnclusteredDataset(Dataset):
-    def __init__(self, ibis_data, ppi=True, pli=False, transform=True, input_shape=(264,264,264), only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, start_index=0, end_index=None, full=True, undersample=False, oversample=False, train=True):
-        self.ppi = ppi
-        self.pli = pli
-        self.transform = transform
-        self.only_aa = only_aa
-        self.only_atom = only_atom
-        self.non_geom_features = non_geom_features
-        self.use_deepsite_features = use_deepsite_features
-        self.full = full
-        self.undersample = undersample
-        self.oversample = oversample
-        self.train = train
-        self.course_grained = course_grained
-        self.input_shape = input_shape
-        self.epoch = None
-        self.batch = None
-
-        # Open and load text file including the whole training data
-        self.data = pd.read_table(ibis_data)
-
-        try:
-            skip = "{}_skip.tab".format(os.path.splitext(ibis_data)[0])
-            with open(skip) as skip_f:
-                skip_ids = [int(l.rstrip()) for l in skip_f if l]
-            osize = self.data.shape[0]
-            self.data= self.data.loc[~self.data["pdb"].isin(skip_ids)]
-            print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", len(skip_ids), osize, self.data.shape[0], osize)
-        except IOError:
-            pass
-
-        if 0 < start_index < 1:
-            start_index *= self.data.shape[0]
-
-        if end_index is None:
-            end_index = self.data.shape[0]
-        elif end_index < 1:
-            end_index *= self.data.shape[0]
-
-        start_index = int(start_index)
-        end_index = int(end_index)
-
-        if start_index != 0 or end_index != self.data.shape[0]:
-            self.data = self.data.iloc[start_index:end_index]
-
-        self.data["include_negatives"] = True
-        self.n_samples = self.data.shape[0]
-
-        if self.oversample:
-            d = self.data.copy()
-            d["include_negatives"] = False
-            d = pd.concat([d]*5, ignore_index=True)
-            self.data = pd.concat((self.data, d), ignore_index=True)
-            self.n_samples = self.data.shape[0]
-
-    @classmethod
-    def get_training_and_validation(cls, ibis_data, ppi=True, pli=False, transform=True, input_shape=(264,264,264), data_split=0.8, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, undersample=False, oversample=False):
-        train = cls(
-            ibis_data,
-            ppi=ppi,
-            pli=pli,
-            transform=transform,
-            input_shape=input_shape,
-            end_index=data_split,
-            only_aa=only_aa,
-            only_atom=only_atom,
-            non_geom_features=non_geom_features,
-            use_deepsite_features=use_deepsite_features,
-            course_grained=course_grained,
-            undersample=undersample,
-            oversample=oversample,
-            train=True)
-        validate = cls(
-            ibis_data,
-            transform=transform,
-            input_shape=input_shape,
-            start_index=data_split,
-            only_aa=only_aa,
-            non_geom_features=non_geom_features,
-            use_deepsite_features=use_deepsite_features,
-            course_grained=course_grained,
-            only_atom=only_atom,
-            undersample=False,
-            oversample=False,
-            train=False)
-        return {"train":train, "val":validate}
-
-    def get_data_loader(self, batch_size, shuffle, num_workers):
-        return DataLoader(self, batch_size=batch_size, \
-            shuffle=shuffle, num_workers=num_workers, collate_fn=sparse_collate)
-
-    def get_number_of_features(self):
-        return Structure.number_of_features(
-            only_aa=self.only_aa,
-            only_atom=self.only_atom,
-            non_geom_features=self.non_geom_features,
-            use_deepsite_features=self.use_deepsite_features,
-            course_grained=self.course_grained
-            )
-
-    def __getitem__(self, index, verbose=True):
-        data = self.data.iloc[index]
-
-        try:
-            indices, data, truth = Structure.features_from_string(
-                data["pdb"],
-                data["chain"],
-                data["ppi_residues"],
-                input_shape=self.input_shape,
-                rotate=self.transform,
-                only_aa=self.only_aa,
-                only_atom=self.only_atom,
-                non_geom_features=self.non_geom_features,
-                use_deepsite_features=self.use_deepsite_features,
-                course_grained=self.course_grained,
-                include_full_protein=data["include_negatives"],
-                undersample=self.undersample,
-                unclustered=True)
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except InvalidPDB:
-            trace = traceback.format_exc()
-            with open("{}_{}_{}_{}.error".format(data["pdb"], data["chain"], self.epoch, self.batch), "w") as ef:
-                print >> ef, trace
-
-            #return
-            return {"indices": None,
-                    "data": None,
-                    "truth": None
-                    }
-        except:
-            trace = traceback.format_exc()
-            print "Error:", trace
-            with open("{}_{}_{}_{}.error".format(data["pdb"], data["chain"], self.epoch, self.batch), "w") as ef:
-                print >> ef, trace
-            raise
-
-        sample = {
-            "indices": indices,
-            "data": data,
-            "truth": truth #np.ones((len(grid_indices), 1), dtype=int).tolist()
             }
 
         return sample

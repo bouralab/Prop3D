@@ -98,7 +98,7 @@ def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=No
         if names2 is not None:
             names2 = names2[:1]
 
-    colors = flatui if len(names) <= 8 else _104_colors
+    colors = flatui if len(names) <= 6 else _104_colors
 
     if metrics is None:
         metrics = stats[0][0].keys()
@@ -120,6 +120,8 @@ def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=No
 
     #All Epochs
     for metric in metrics:
+        #if not combine:
+        #    start = 0
         if not combine:
             pp = PdfPages('compare_{}_all_epochs.pdf'.format(metric))
             f, ax = fig, ax = plt.subplots(figsize=(6,6))
@@ -130,7 +132,7 @@ def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=No
             print "merging min"
             all_y = {epoch:format_worst_meter(metric)([stat[epoch][metric] for stat in stats]) for epoch in epochs}
             all_x, all_y = zip(*sorted(all_y.iteritems(), key=lambda x:x[0]))
-            print metric, all_y            
+            print metric, all_y
             ax.plot(all_y, label=names[0].format(meter=format_meter_name(metric)), color=colors[start])
             if stats2 is None:
                 start += 1
@@ -143,10 +145,11 @@ def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=No
                 if False and use_raw_color:
                     ax.plot(y, label=names[i].format(meter=format_meter_name(metric)), color=[int(x) for x in names[i]])
                 else:
+                    print i, names[i]
                     ax.plot(y, label=names[i].format(meter=format_meter_name(metric)), color=colors[start])
                 if stats2 is None:
-                    start += 1
-
+                     start += 1
+        #start = 0
         if stats2 is not None:
             if merge_min:
                 all_y = {epoch:min(stat[epoch][metric] for stat in stats2) for epoch in epochs}
@@ -254,14 +257,14 @@ if __name__ == "__main__":
     args = parse_args()
     print args
     plot_stats(
-        args.stats_file, 
-        stats_file2=args.stats_file2, 
-        names=args.names, 
-        names2=args.names2, 
-        prefix=args.prefix, 
-        metrics=args.metrics, 
-        start_epoch=args.start_epoch, 
-        end_epoch=args.end_epoch, 
-        step_epoch=args.step_epoch, 
+        args.stats_file,
+        stats_file2=args.stats_file2,
+        names=args.names,
+        names2=args.names2,
+        prefix=args.prefix,
+        metrics=args.metrics,
+        start_epoch=args.start_epoch,
+        end_epoch=args.end_epoch,
+        step_epoch=args.step_epoch,
         combine=args.combine,
         merge_min=args.merge_min)

@@ -1,0 +1,71 @@
+#PlaneDimers
+#The PDB- and chain-IDs, which were used to deduce PPIs, are
+#listed for each complex. This dataset was compiled as described in Materials. For each dimer, chains
+#constituting the complex are given. The 64 complexes possess a “canonical”, i. e. flat interface.
+
+#Zellner H, Staudigel M, Trenner T, Bittkowski M, Wolowski V, Icking C, Merkl R. Prescont: Predicting protein-protein interfaces utilizing four residue properties. Proteins Struct Funct Bioinforma. 2012; 80(1):154–68. doi:10.1002/prot.23172.
+
+1A5C A:B
+1N4O A:B
+1EGC A:B
+1DQ8 A:D
+1Q98 A:B
+1UFV A:B
+1ALL A:B
+1JAZ A:B
+1EQ9 A:B
+1F0Y A:B
+1H9R A:B
+1JNR A:C
+1F6Y A:B
+1B93 B:C
+1GKP A:B
+1EQW A:C
+1JXH A:B
+1O58 A:B
+1J0B C:D
+1EZR A:D
+1P9L A:B
+1AIP C:D
+1BD3 C:A
+1IZ1 A:Q
+1N20 A:B
+1IU8 A:B
+1HA3 A:B
+1ORR A:C
+1E4N A:B
+1KAQ A:D
+1Q54 A:B
+1MI3 A:B
+6PFK A:D
+1M7W B:C
+1EK6 A:B
+1UEH A:B
+1EMS A:B
+1UQR A:D
+1NC3 A:B
+1INL A:D
+1K9X A:D
+1LHP A:B
+1NI4 B:D
+1JC4 A:B
+1K3F A:E
+1O58 A:C
+1NVM A:C
+1O0Y A:B
+1P6O A:B
+1UAQ A:B
+1QM4 A:B
+1BCF A:B
+1EE0 A:B
+1G2Q A:B
+1F5M A:B
+1MKI A:B
+1N5K A:B
+1GU7 A:B
+1ISV A:B
+1BJF A:B
+1A4I A:B
+1H1Y A:B
+1A00 A:B
+1G5U A:B

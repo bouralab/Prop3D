@@ -1,0 +1,86 @@
+import sys
+sys.path.append("/data/draizene/molmimic")
+
+import pandas as pd
+from molmimic.util import get_interfaces_path, get_structures_path, get_features_path
+
+configfile: "config.yaml"
+
+interfaces_path = get_interfaces_path(config["dataset_name"])
+structures_path = get_structures_path(config["dataset_name"])
+features_path = get_features_path(config["dataset_name"])
+
+sdi_cdd_path = "/data/draizene/molmimic/data/MMDB/cdd"
+
+CDD = pd.read_csv("MMDB/StructDomSfam.csv", usecols=["label"]).drop_duplicates().dropna()
+CDD = CDD["label"].apply(lambda cdd: cdd.replace("/", "")).tolist()
+
+def pdb_fields(wildcards):
+    pass
+
+rule getibis:
+    output:
+        os.path.abspath(interfaces_path+"/../ibisdown")
+    run:
+        print("=> Downloading ibisdown from ftp://ftp.ncbi.nih.gov/pub/mmdb/ibis/ibisdown.tar.gz...")
+        #Downlaod from NCBI
+        import requests, zipfile, StringIO
+        r = requests.get("ftp://ftp.ncbi.nih.gov/pub/mmdb/ibis/ibisdown.tar.gz", stream=True)
+        z = zipfile.ZipFile(StringIO.StringIO(r.content))
+        z.extractall(output)
+
+rule ibis2cdd:
+    """Separate ibis interfaces by the CDD domain
+
+    One to Many
+    """
+    input:
+        os.path.abspath(interfaces_path+"/../ibisdown")
+    output:
+        interfaces_path+"/{cdd}.raw.tsv" #["{}/{}.raw.tsv".format(interfaces_path, cdd) for cdd in CDD] #, cdd=CDD, interfaces_path=interfaces_path)
+    shell:
+        "python ../molmimic/calculate_ibis_datset.py {config[dataset_name]} {input} {wildcards.cdd}"
+
+rule ibiscdd2sdi:
+    input:
+        rules.ibis2cdd.output
+    output:
+        interfaces_path+"/{cdd}.sdi.tsv"
+    shell:
+        "python ../molmimic/split_domains.py {config[dataset_name]} {input} {sdi_cdd_path}/{wildcards.cdd}.csv"
+
+rule prepare_protein:
+    input:
+        rules.ibiscdd2sdi.output
+    output:
+        structures_path+"/atom/{pdb_divided}/{pdb}_{chain}.pdb"
+    shell:
+        "python ../molmimic/prepare_protein.py load {config[dataset_name]} {input}"
+
+rule prepare_chain:
+    input:
+        rules.prepare_protein.output
+    output:
+        structures_path+"/atom/{pdb_divided}/{pdb}_{chain}_sdi{sdi}_d{domNo}.pdb"
+    shell:
+        "python ../molmimic/prepare_protein.py single-chain {config[dataset_name]} {input}"
+
+rule features:
+    input:
+        rules.prepare_chain.output
+    output:
+        features_path+"/{pdb_divided}/{pdb}_{chain}_sdi{sdi}_d{domNo}.npy"
+    shell:
+        "python ../molmimic/calculate_features.py features {config[dataset_name]} {wildcards.pdb} {wildcards.chain} {wildcards.sdi} {wildcards.domNo}"
+
+rule filter:
+    input:
+        rules.ibiscdd2sdi.output
+    output:
+        interfaces_path+"/{cdd}.tsv"
+    shell:
+        "python ../molmimic/filter_ibis_dataset.py {config[dataset_name]} {input}"
+
+rule all:
+    input:
+        expand(rules.filter.output, cdd=CDD)
