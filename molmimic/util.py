@@ -1,6 +1,32 @@
 import os
 import sys
+import re
 from contextlib import contextmanager
+
+data_path_prefix = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+
+structures_path_prefix = os.path.join(data_path_prefix, "structures")
+
+features_path_prefix = os.path.join(data_path_prefix, "features")
+
+interfaces_path_prefix = os.path.join(data_path_prefix, "interfaces")
+
+def get_structures_path(dataset_name):
+    return os.path.join(structures_path_prefix, dataset_name)
+
+def get_features_path(dataset_name):
+    features_path = os.path.join(features_path_prefix, dataset_name)
+    if not os.path.isdir(features_path):
+        features_path = os.path.join(features_path_prefix, "features_{}".format(dataset_name))
+    return features_path
+
+def get_interfaces_path(dataset_name):
+    return os.path.join(interfaces_path_prefix, dataset_name)
+
+def initialize_data(dataset_name):
+    os.environ["MOLMIMIC_STRUCTURES"] = get_structures_path(dataset_name)
+    os.environ["MOLMIMIC_FEATURES"] = get_features_path(dataset_name)
+    os.environ["MOLMIMIC_INTERFACES"] = get_interfaces_path(dataset_name)
 
 class InvalidPDB(RuntimeError):
     pass
@@ -37,6 +63,37 @@ def get_all_chains(pdb_file):
         pass
 
     return chains
+
+def atof(text, use_int=False):
+    converter = int if use_int else float
+    try:
+        retval = converter(text)
+    except ValueError:
+        retval = text
+    return retval
+
+def natural_keys(text, use_int=False):
+    '''
+    alist.sort(key=natural_keys) sorts in human order
+    http://nedbatchelder.com/blog/200712/human_sorting.html
+    (See Toothy's implementation in the comments)
+    float regex comes from https://stackoverflow.com/a/12643073/190597
+    '''
+    return [ atof(c, use_int=use_int) for c in re.split(r'[+-]?([0-9]+(?:[.][0-9]*)?|[.][0-9]+)', str(text)) ]
+
+def to_int(s):
+    if isinstance(s, int):
+        return s
+    elif isinstance(s, str):
+        return int("".join([d for d in s if d.isdigit()]))
+    else:
+        raise RuntimeError("Must be an an in or string")
+
+def number_of_lines(path):
+    numlines = 0
+    with open(path) as f:
+        numlines = sum([1 for line in f])
+    return numlines
 
 @contextmanager
 def silence_stdout():

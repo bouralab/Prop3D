@@ -114,28 +114,31 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
         del tflat
         del intersection
 
-    global values
-    for meter_name, value in logger.meter.iteritems():
-        val = value.value()
-        val = val[0] if isinstance(val, tuple) and val[0] is not None else val
-        val = val if val is not None else 0.0
+    with open("{}_epoch{}_stats.txt".format(phase, epoch), "a+") as statsfile:
+        print >> statsfile, format_meter(logger, phase)
 
-        try:
-            values[meter_name].append(val)
-        except KeyError:
-            values[meter_name] = [val]
+    # global values
+    # for meter_name, value in logger.meter.iteritems():
+    #     val = value.value()
+    #     val = val[0] if isinstance(val, tuple) and val[0] is not None else val
+    #     val = val if val is not None else 0.0
 
-        try:
-            epoch_val = value.mean
-        except AttributeError:
-            ep_val = value.value()
-            ep_val = ep_val[0] if isinstance(val, tuple) else ep_val
-            ev_val = ep_val if ep_val is not None else 0.0
-            epoch_val = ep_val[0] if isinstance(val, tuple) else ep_val
-        try:
-            epoch_values[meter_name][epoch] = epoch_val
-        except KeyError:
-            epoch_values[meter_name] = {epoch: epoch_val}
+    #     try:
+    #         values[meter_name].append(val)
+    #     except KeyError:
+    #         values[meter_name] = [val]
+
+    #     try:
+    #         epoch_val = value.mean
+    #     except AttributeError:
+    #         ep_val = value.value()
+    #         ep_val = ep_val[0] if isinstance(val, tuple) else ep_val
+    #         ev_val = ep_val if ep_val is not None else 0.0
+    #         epoch_val = ep_val[0] if isinstance(val, tuple) else ep_val
+    #     try:
+    #         epoch_values[meter_name][epoch] = epoch_val
+    #     except KeyError:
+    #         epoch_values[meter_name] = {epoch: epoch_val}
 
 def format_meter(logger, mode, iepoch=0, ibatch=1, totalbatch=1, meterlist=None, prefix=True):
     pstr = "{}:\t[{}][{}/{}] ".format(mode, iepoch, ibatch, totalbatch) if prefix else ""
@@ -156,11 +159,11 @@ def format_meter(logger, mode, iepoch=0, ibatch=1, totalbatch=1, meterlist=None,
         elif meter == 'auc':
             pstr += "AUC {:.3f} \n".format(logger.meter[meter].value())
         else:
-            pstr += "{} {:.3f} ({:.3f}) \n".format(meter, logger.meter[meter].val, logger.meter[meter].mean)
+            pstr += "{} {:.3f} (mean={:.3f}; std={:.3f})\n".format(meter, logger.meter[meter].val, logger.meter[meter].mean, logger.meter[meter].std)
     #pstr += "{} {:.2f} s/its".format(" "*space, logger.timer.value())
     return pstr
 
-def graph_logger(logger, phase, epoch, final=False, meterlist=None):
+def graph_logger(logger, phase, epoch, final=False, meterlist=None, graph=False):
     if meterlist is None:
         meterlist = logger.meter.keys()
 
@@ -169,26 +172,27 @@ def graph_logger(logger, phase, epoch, final=False, meterlist=None):
         with open(stats_fname, "a") as stats_file:
             print >> stats_file, "epoch {} {}".format(epoch, format_meter(logger, phase))
 
-    for meter_name in meterlist:
-        if meter_name in ['confusion', 'histogram', 'image']:
-            continue
-        pp = PdfPages('{}_epoch{}_{}.pdf'.format(phase if not final else "final", epoch, meter_name))
-        f, ax = fig, ax = plt.subplots(figsize=(8.5,11))
-        if final:
-            f.suptitle("Sparse 3D Unet {} Final - {}".format(phase.title(), meter_name), fontsize=14)
-        else:
-            f.suptitle("Sparse 3D Unet {} Epoch {} - {}".format(phase.title(), epoch, meter_name), fontsize=14)
-        ax.set_xlabel("Batch #" if not final else "Epoch #")
-        ax.set_ylabel("")
-        ax.plot(values[meter_name] if not final else [epoch_values[meter_name][epoch] \
-            for epoch in sorted(epoch_values[meter_name].keys())])
-        plt.savefig(pp, format='pdf')
-        pp.close()
-        plt.close(f)
-        plt.clf()
-        plt.cla()
-        del f
-        del ax
+    if graph:
+        for meter_name in meterlist:
+            if meter_name in ['confusion', 'histogram', 'image']:
+                continue
+            pp = PdfPages('{}_epoch{}_{}.pdf'.format(phase if not final else "final", epoch, meter_name))
+            f, ax = fig, ax = plt.subplots(figsize=(8.5,11))
+            if final:
+                f.suptitle("Sparse 3D Unet {} Final - {}".format(phase.title(), meter_name), fontsize=14)
+            else:
+                f.suptitle("Sparse 3D Unet {} Epoch {} - {}".format(phase.title(), epoch, meter_name), fontsize=14)
+            ax.set_xlabel("Batch #" if not final else "Epoch #")
+            ax.set_ylabel("")
+            ax.plot(values[meter_name] if not final else [epoch_values[meter_name][epoch] \
+                for epoch in sorted(epoch_values[meter_name].keys())])
+            plt.savefig(pp, format='pdf')
+            pp.close()
+            plt.close(f)
+            plt.clf()
+            plt.cla()
+            del f
+            del ax
 
     global values
     del values

@@ -274,7 +274,7 @@ def ResNetUNetDropout(dimension, nPlanes, reps, depth=4, dropout_p=0.5, dropout_
                    .add(Dropout(p))
                    .add(scn.SubmanifoldConvolution(dimension, a, b, 3, False))
                    .add(scn.BatchNormReLU(b))
-                   .add(Dropout(p))
+                   .add(scn.Dropout(p))
                    .add(scn.SubmanifoldConvolution(dimension, b, b, 3, False))))\
          .add(scn.AddTable())
 
@@ -313,7 +313,7 @@ def ResNetUNetDropout(dimension, nPlanes, reps, depth=4, dropout_p=0.5, dropout_
                                 2,
                                 2,
                                 False)) . add(
-                            Dropout(dropout_p)) .add(
+                            scn.Dropout(dropout_p)) .add(
                                 v(
                                     depth - 1,
                                     nPlanes)) .add(

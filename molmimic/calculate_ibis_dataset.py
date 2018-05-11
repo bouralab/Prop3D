@@ -5,35 +5,67 @@ from itertools import groupby
 import numpy as np
 import pandas as pd
 from calculate_features import SwarmJob
-#from molmimic.biopdbtools import Structure
+from Bio import PDB
+from molmimic.biopdbtools import Structure, InvalidPDB
+from molmimic.util import initialize_data
 
 def split_ibis(f):
     f.next()
     for line in f:
         yield line.rstrip().split(":")
 
-def get_ibis(pdb_ibis_file, multimers=False, max_dist=256.0, use_structure_filters=False, calculate_features=False, save_binding_site_sequences=True):
+def get_ibis(dataset_name, pdb_ibis_file, use_cdd_domain=None, multimers=False, check_binding_sites=False):
+    out_dir = os.path.join(os.path.dirname(__file__), "..", "data", "interfaces", dataset_name)
     with open(pdb_ibis_file) as pdb_ibis:
         for pdb_chain, entries in groupby(split_ibis(pdb_ibis), key=lambda l: l[0]):
             pdb, chain = pdb_chain[:-1], pdb_chain[-1]
 
-            info = []
-            has_interactions = False
+            if check_binding_sites:
+                try:
+                    structure = Structure.from_pdb(pdb, chain)
+                except (KeyboardInterrupt, SystemExit) as e:
+                    raise
+                except InvalidPDB:
+                    continue
+                except:
+                    trace = traceback.format_exc()
+                    print "Error:", trace
+                    continue
+
             for entry in entries:
                 if entry[1] not in ["PPI"]: continue #, "LIG"
 
-                # if not multimers and entry[-6] == entry[-2]:
-                #     #Query domain should not be target domain
-                #     continue
-
-                residues = entry[3].lstrip().replace(" ", ",")
-
-                #is_ppi = "1" if entry[1] == "PPI" else "0"
                 is_multimer = "1" if entry[-6] == entry[-2] else "0"
                 cdd = entry[-2]
+                residues = entry[3].lstrip().replace(" ", ",")
+                residue_str = entry[4]
 
-                with open("/data/draizene/molmimic/molmimic/data/ibis_full_by_cdd/{}.tsv".format(cdd.replace("/", "_")), "a+") as f:
-                    print >> f, "{}\t{}\t{}\t{}\t{}".format(pdb, chain, residues, is_multimer, entry[-2])
+                if multimers and not is_multimer:
+                    #Query domain should not be target domain
+                    continue
+
+                if use_cdd_domain is not None and cdd != use_cdd_domain:
+                    continue
+
+                if check_binding_sites:
+                    #Check if positions match structure
+                    pdb_seq = ""
+                    for i, r in enumerate(residues.split(",")):
+                        if r == "X": continue
+
+                        res = structure.get_residue_from_resseq(r)
+
+                        if res is None:
+                            residue_str = residue_str[:i]+residue_str[i+1:]
+                        else:
+                            pdb_seq += PDB.Polypeptide.three_to_one(res.get_resname())
+
+                    if pdb_seq != residue_str:
+                        print "{} {} does not match {} =/= {}".format(entry[0], residues, pdb_seq, residue_str)
+                        continue
+
+                with open(os.path.join(out_dir, "{}.raw.tsv".format(cdd.replace("/", ""))), "a+") as f:
+                    print >> f, "{}\t{}\t{}\t{}\t{}".format(pdb, chain, residues, is_multimer, cdd)
 
                 #info.append("{}\t{}\t{}\t{}\t{}".format(pdb, chain, residues, is_multimer, entry[-2]))
 
@@ -110,32 +142,32 @@ def post_process(force=True):
     #ppi_pli.to_csv(full_data_dir+"/ibis_ppi_pli.tsv", sep="\t", index=False)
 
 def post2():
+    pass
 
 
-def create_ibis(ibis_dir, csv=True, pdb=False):
+def create_ibis(dataset_name, ibis_dir, cdd=None):
+    initialize_data(dataset_name)
     files = glob.glob("{}/*/*.txt".format(ibis_dir))
     pdbs = []
     for i, ibis in enumerate(files):
-        pdb = os.path.splitext(os.path.basename(ibis))[0]
-        if csv:
-            out_path = "/data/draizene/molmimic/molmimic/data/ibisdown_data/{}".format(pdb[1:3].lower())
-            if not os.path.exists(out_path):
-                os.makedirs(out_path)
-            get_ibis(ibis)
-        if pdb:
-            pdbs.append(pdb)
+        get_ibis(dataset_name, ibis, use_cdd_domain=cdd)
 
 
-def submit_ibis(ibis_data):
-    job = SwarmJob("make_ibis", individual=True)
-    job.add_individual_parameters()
-    job += "python {} create {}\n".format(__file__, ibis_data)
-    print job.submit_individual()
+def submit_ibis(dataset_name, ibis_data, job_name="build_ibis", dependency=None):
+    out_path = os.path.join(os.path.dirname(__file__), "..", "data", "interfaces", dataset_name)
+    if not os.path.exists(out_path):
+        os.makedirs(out_path)
+    job = SwarmJob(job_name, individual=True)
+    job += "python {} create {} {}\n".format(__file__, dataset_name, ibis_data)
+    job_id = job.submit_individual(dependency=dependency)
+    return job_id
 
 if __name__ == "__main__":
-    if len(sys.argv) == 1:
-        submit_ibis("/data/draizene/molmimic/molmimic/data/ibisdown/")
-    elif len(sys.argv) == 2:
-        submit_ibis(sys.argv[1])
-    elif len(sys.argv) == 3 and "create" in sys.argv:
-        create_ibis(sys.argv[2])
+    if len(sys.argv) == 2:
+        submit_ibis(sys.argv[1], "/data/draizene/molmimic/molmimic/data/ibisdown/")
+    elif len(sys.argv) == 3:
+        submit_ibis(sys.argv[1], sys.argv[2])
+    elif len(sys.argv) in [4, 5] and "create" in sys.argv:
+        create_ibis(*sys.argv[2:])
+    elif len(sys.argv) == 4 and "get" in sys.argv:
+        get_ibis(sys.argv[-2], sys.argv[-1])

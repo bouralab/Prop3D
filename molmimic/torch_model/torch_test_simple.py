@@ -22,7 +22,7 @@ from molmimic.torch_model import torch_infer as infer
 from molmimic.biopdbtools import Structure, InvalidPDB
 
 
-def infer_spheres(model, shape=(96,96,96), n_samples=3, n_features=3, combinations=False, bs_feature=None, bs_feature2=None, stripes=False, no_prediction=False, use_gpu=False, ibis_data=None, pymol=True):
+def infer_spheres(model, shape=(96,96,96), n_samples=3, start_index=0, index_step=1, n_features=3, combinations=False, bs_feature=None, bs_feature2=None, stripes=False, no_prediction=False, use_gpu=False, ibis_data=None, pymol=True):
     if ibis_data is None:
         data = loader.SphereDataset(shape, nFeatures=n_features, allow_feature_combos=combinations, bs_feature=bs_feature, bs_feature2=bs_feature2, stripes=stripes)
     else:
@@ -42,7 +42,7 @@ def infer_spheres(model, shape=(96,96,96), n_samples=3, n_features=3, combinatio
 
     runs = []
 
-    for sample in xrange(n_samples):
+    for sample in xrange(start_index, start_index+n_samples, index_step):
         print "Running", sample
 
 
@@ -99,6 +99,9 @@ def infer_spheres(model, shape=(96,96,96), n_samples=3, n_features=3, combinatio
     if mpl:
         mv.save_fig(fig, "sphere_infer.pdf")
 
+def atom_volume(structure, atom):
+    return (4/3.)*np.pi*structure.get_vdw(atom)**3
+
 def view_in_pymol(id, predicted_voxels=None, truth_voxels=None, voxel_atom_ratio=.2):
     pdb, chain = id.split(".")
     structure = Structure.from_pdb(pdb, chain, rotate=False)
@@ -111,15 +114,16 @@ color gray90, {id}
 """.format(id=id)
 
     if truth_voxels is not None:
+        truth_atoms = Counter()
         for v in truth_voxels:
             atoms = structure.convert_voxels(v, level="A")
             if len(atoms) > 0:
-                truth_atoms[a[0]] += 1
+                truth_atoms[atoms[0]] += 1
 
         truth_atoms = [atom for atom, count in truth_atoms.iteritems() \
-            if float(count)/structrue.get_accessible_surface_area(atom)[0] >= voxel_atom_ratio]
+            if float(count)/atom_volume(structure, atom) >= voxel_atom_ratio]
 
-        truth_resiidues = [str(r.get_id()[1]) for r in unfold_entities(predicted_atoms, "R")]
+        truth_residues = [str(r.get_id()[1]) for r in unfold_entities(truth_atoms, "R")]
         truth_resi = "+".join(truth_residues)
 
         cmd += """select true_binding_site, resi {true_resi}
@@ -131,13 +135,13 @@ color orange, true_binding_site
         for v in predicted_voxels:
             atoms = structure.convert_voxels(v, level="A")
             if len(atoms) > 0:
-                predicted_atoms[a[0]] += 1
+                predicted_atoms[atoms[0]] += 1
 
         predicted_atoms = [atom for atom, count in predicted_atoms.iteritems() \
-            if float(count)/structrue.get_accessible_surface_area(atom)[0] >= voxel_atom_ratio]
+            if float(count)/atom_volume(structure, atom) >= voxel_atom_ratio]
 
-        predicted_resiidues = [str(r.get_id()[1]) for r in unfold_entities(predicted_atoms, "R")]
-        "+".join(truth_residues)
+        predicted_residues = [str(r.get_id()[1]) for r in unfold_entities(predicted_atoms, "R")]
+        predicted_resi = "+".join(truth_residues)
 
         cmd += """select predicted_binding_site, resi {predicted_resi}
 color magenta, predicted_binding_site
@@ -211,6 +215,16 @@ def parse_args(args=None):
         "--ibis-data",
         default=None
     )
+    parser.add_argument(
+        "--start-index",
+        default=0,
+        type=int
+    )
+    parser.add_argument(
+        "--index-step",
+        default=1,
+        type=int
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -221,4 +235,4 @@ if __name__ == "__main__":
     else:
         model = None
 
-    infer_spheres(model, shape=args.shape, n_samples=args.n_samples, n_features=args.n_features, combinations=args.combination, bs_feature=args.bs_feature, bs_feature2=args.bs_feature2, stripes=args.stripes, no_prediction=args.no_prediction, use_gpu=True, ibis_data=args.ibis_data)
+    infer_spheres(model, shape=args.shape, n_samples=args.n_samples, start_index=args.start_index, index_step=args.index_step, n_features=args.n_features, combinations=args.combination, bs_feature=args.bs_feature, bs_feature2=args.bs_feature2, stripes=args.stripes, no_prediction=args.no_prediction, use_gpu=True, ibis_data=args.ibis_data)

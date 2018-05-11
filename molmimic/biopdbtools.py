@@ -14,6 +14,7 @@ from sklearn.decomposition import PCA
 from Bio import PDB
 from Bio import SeqIO
 from Bio.PDB.NeighborSearch import NeighborSearch
+import requests
 
 try:
     import freesasa
@@ -26,7 +27,7 @@ except ImportError:
     pybabel = None
 
 from get_pdb import get_pdb
-from molmimic.util import InvalidPDB, silence_stdout, silence_stderr
+from molmimic.util import InvalidPDB, natural_keys, silence_stdout, silence_stderr
 from molmimic.map_residues import map_residues
 
 try:
@@ -103,9 +104,8 @@ surface_areas = {atom:4.*np.pi*(radius**2) for atom, radius in vdw_radii.items()
 maxASA = {"A": 129.0, "R": 274.0, "N": 195.0, "D": 193.0, "C": 167.0, "E": 223.0, "Q": 225.0, "G": 104.0, "H": 224.0, "I": 197.0, "K": 201.0, "L": 236.0, "M": 224.0, "F": 240.0, "P": 159.0, "S": 155.0, "T": 172.0, "W": 285.0, "Y": 263.0, "V": 174.0}
 
 class Structure(object):
-    def __init__(self, path, pdb, chain, id=None, course_grained=False, volume=264, voxel_size=1.0, rotate=True, input_format="pdb", force_feature_calculation=False, unclustered=False):
+    def __init__(self, path, pdb, chain, sdi=None, domain=None, id=None, course_grained=False, volume=264, voxel_size=1.0, rotate=True, input_format="pdb", force_feature_calculation=False, unclustered=False):
         self.path = path
-
         if not os.path.isfile(self.path):
             raise InvalidPDB("Cannot find file {}".format(self.path))
 
@@ -149,6 +149,8 @@ class Structure(object):
         self.altloc = getattr(self.structure, "altloc", " ")
 
         self.pdb = pdb
+        self.sdi = sdi
+        self.domain = domain
         self.dssp = None
         self.pqr = None
         self.cx = None
@@ -162,6 +164,8 @@ class Structure(object):
         self.starting_index_struc = None
         self.volume = volume
         self.id = "{}_{}".format(self.pdb, self.chain) #, "_{}".format(id) if id else "")
+        if sdi is not None and domain is not None:
+            self.id += "_sdi{}_d{}".format(sdi, domain)
         self.course_grained = course_grained
         self.nFeatures = Structure.number_of_features(course_grained=course_grained)
 
@@ -176,12 +180,12 @@ class Structure(object):
         else:
             next(self.rotate())
 
-        clustered_path = "features2" if unclustered else "features3"
-        if force_feature_calculation:
-            precalc_features_path = os.environ.get("MOLMIMIC_FEATURES", os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "features_Ig", "residue" if self.course_grained else "atom"))
-        else:
-            precalc_features_path = os.environ.get("MOLMIMIC_FEATURES", os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "features_Ig", "residue" if self.course_grained else "atom"))
+        try:
+            precalc_features_path = os.environ["MOLMIMIC_FEATURES"]
+        except KeyError:
+            raise RuntimeError("Invalid dataset path for features")
 
+        precalc_features_path = os.path.join(precalc_features_path, "residue" if self.course_grained else "atom")
         precalc_features_path = os.path.join(precalc_features_path, self.pdb[1:3])
         precalc_features_file = os.path.join(precalc_features_path, "{}.npy".format(self.id))
 
@@ -202,7 +206,6 @@ class Structure(object):
                 self.precalc_features = np.memmap(precalc_features_file, dtype=np.float, mode="r", shape=(shape, self.nFeatures))
                 self.force_feature_calculation = False
             except IOError as e:
-                print e
                 self.precalc_features = None
                 self.force_feature_calculation = True
 
@@ -225,16 +228,21 @@ class Structure(object):
             elif use_deepsite_features:
                 return 9
             else:
-                return 70
+                return 73
 
     @classmethod
-    def from_pdb(cls, pdb, chain, id=None, input_shape=(264,264,264), batch_index=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, grid=True, return_data=True, return_truth=True, rotate=True, force_feature_calculation=False, expand_atom=False, include_full_protein=False, undersample=False, unclustered=False):
-        path, pdb, chain, input_format = get_pdb(pdb, chain, updating=force_feature_calculation)
-        print path
+    def from_pdb(cls, pdb, chain, sdi=None, domain=None, id=None, input_shape=(264,264,264), batch_index=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, grid=True, return_data=True, return_truth=True, rotate=True, force_feature_calculation=False, expand_atom=False, include_full_protein=False, undersample=False, unclustered=False):
+        try:
+            path, pdb, chain, (sdi, domain), input_format = get_pdb(pdb, chain, sdi=sdi, domain=domain, updating=force_feature_calculation)
+        except TypeError:
+            raise InvalidPDB
+
         return cls(
             path,
             pdb,
             chain,
+            sdi=sdi,
+            domain=domain,
             id=id,
             volume=np.max(input_shape),
             course_grained=course_grained,
@@ -244,7 +252,7 @@ class Structure(object):
             rotate=rotate)
 
     @staticmethod
-    def features_from_string(pdb, chain, resi=None, id=None, input_shape=(264,264,264), batch_index=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, grid=True, return_data=True, return_truth=True, rotate=True, force_feature_calculation=False, expand_atom=False, include_full_protein=False, undersample=False, unclustered=False):
+    def features_from_string(pdb, chain, sdi=None, domain=None, resi=None, id=None, input_shape=(264,264,264), batch_index=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, grid=True, return_data=True, return_truth=True, rotate=True, force_feature_calculation=False, expand_atom=False, include_full_protein=False, undersample=False, unclustered=False):
         """Get features
 
         Paramters
@@ -258,11 +266,17 @@ class Structure(object):
         input_shape : 3-tuple
         rotations : int
         """
-        path, pdb, chain, input_format = get_pdb(pdb, chain, updating=force_feature_calculation)
+        try:
+            path, pdb, chain, (sdi, domain), input_format = get_pdb(pdb, chain, sdi=sdi, domain=domain, updating=force_feature_calculation)
+        except TypeError:
+            raise InvalidPDB
+
         s = Structure(
             path,
             pdb,
             chain,
+            sdi=sdi,
+            domain=domain,
             id=id,
             volume=np.max(input_shape),
             course_grained=course_grained,
@@ -342,9 +356,13 @@ class Structure(object):
                 tmp_pdb_path = self.path
 
             try:
-                self.dssp = PDB.DSSP(self.structure[0], tmp_pdb_path, dssp='mkdssp')
+                self.dssp = PDB.DSSP(self.structure[0], tmp_pdb_path, dssp='dssp')
+            except KeyboardInterrupt:
+                raise
             except NameError:
                 self.dssp = None
+            except Exception as e:
+                raise InvalidPDB("Cannot run dssp for {}".format(self.id))
 
             if self.modified_pdb_file:
                 os.remove(tmp_pdb_path)
@@ -388,42 +406,48 @@ class Structure(object):
         return self.sasa, self.sasa_struct
 
     def _get_pqr(self):
-        """Run PDB2PQR to get charge for each atom
+        """Run PDB2PQR and APBS to get charge and electrostatics for each atom for each atom
 
         TODO: figure out why unknown residues fro hetatms are absent
         """
+        from molmimic.parsers.APBS import run_apbs
+
         if self.pqr is None:
             if not self.modified_pdb_file and self.input_format == "pqr":
                 #Don't recalculate, just use occupancy field!
                 self.pqr = {a.get_id():a.occupancy for a in self.get_atoms()}
                 return self.pqr
 
-            if False and self.modified_pdb_file and self.path.endswith(".min.pdb") and os.path.isfile("{}.pqr.pdb".format(self.path[:-8])):
-                remove_pqr = False
-                tmp_pqr_path = "{}.pqr.pdb".format(self.path[:-8])
+            remove_pqr = True
+
+            if self.modified_pdb_file:
+                pdbfd, tmp_pdb_path = tempfile.mkstemp()
+                with os.fdopen(pdbfd, 'w') as tmp:
+                    self.save_pdb(tmp, True)
             else:
-                remove_pqr = True
+                tmp_pdb_path = self.path
 
-                if self.modified_pdb_file:
-                    pdbfd, tmp_pdb_path = tempfile.mkstemp()
-                    with os.fdopen(pdbfd, 'w') as tmp:
-                        self.save_pdb(tmp, True)
-                else:
-                    tmp_pdb_path = self.path
+            _, tmp_pqr_path = tempfile.mkstemp()
 
-                _, tmp_pqr_path = tempfile.mkstemp()
+            with silence_stdout(), silence_stderr():
+                subprocess.call(["/usr/share/pdb2pqr/pdb2pqr.py", "--ff=amber", "--whitespace", tmp_pdb_path, tmp_pqr_path])
 
-                with silence_stdout(), silence_stderr():
-                    subprocess.call(["/usr/share/pdb2pqr/pdb2pqr.py", "--ff=amber", "--whitespace", tmp_pdb_path, tmp_pqr_path])
+            if self.modified_pdb_file:
+                os.remove(tmp_pdb_path)
 
-                if self.modified_pdb_file:
-                    os.remove(tmp_pdb_path)
+            atompot_file = run_apbs(tmp_pqr_path)
 
             self.pqr = {}
-            with open(tmp_pqr_path) as pqr:
+            with open(tmp_pqr_path) as pqr, open(atompot_file) as atompot:
+                #Skip first 4 rows of atompot file
+                for _ in xrange(4):
+                    next(atompot)
+
                 for line in pqr:
                     for line in pqr:
                         if not line.startswith("ATOM  ") or line.startswith("HETATM"): continue
+
+                        electrostatic_potentail = float(next(atompot))
 
                         fields = line.rstrip().split()
                         if len(fields) == 11:
@@ -453,7 +477,7 @@ class Structure(object):
                         residue_id = (hetero_flag, resseq, icode)
 
                         key = (residue_id, (atomName.strip(), ' '))
-                        self.pqr[key] = float(charge)
+                        self.pqr[key] = (float(charge), electrostatic_potentail)
 
             if remove_pqr:
                 os.remove(tmp_pqr_path)
@@ -525,8 +549,38 @@ class Structure(object):
 
     def _get_consurf_score(self):
         if self.consurf is None:
-            consurf_db_file = "/data/draizene/ConSurf/ConSurfDB_grades/{}/{}_{}.grades".format(self.pdb[1:3].upper(), self.pdb.upper(), self.chain)
+            consurf_path = "{}/../data/ConSurf".format(os.path.dirname(__file__))
+            consurf_db_file = "{}/ConSurfDB_grades/{}/{}_{}.grades".format(consurf_path, self.pdb[1:3].upper(), self.pdb.upper(), self.chain)
+            print consurf_db_file
             self.consurf = {}
+
+
+            if not os.path.isfile(consurf_db_file):
+                with open(os.path.join(consurf_path, "pdbaa_list.nr")) as f:
+                    for line in f:
+                        pdb_id = "{}_{}".format(self.pdb.upper(), self.chain)
+                        if pdb_id in line:
+                            if line.rstrip().endswith(":"):
+                                cluster_rep_id = pdb_id
+                            else:
+                                cluster_rep_id, cluster_pdbs = line.rstrip().split(":", 1)
+                            cluster_rep_pdb, cluster_rep_chain = cluster_rep_id.split("_")
+                            url = "http://bental.tau.ac.il/new_ConSurfDB/DB/{}/{}/consurf.grades".format(cluster_rep_pdb, cluster_rep_chain)
+                            print url
+                            r = requests.get(url)
+                            if not os.path.exists(os.path.dirname(consurf_db_file)):
+                                os.makedirs(os.path.dirname(consurf_db_file))
+                            with open(consurf_db_file, "w") as f:
+                                print >> f, r.content
+                            break
+                    else:
+                        #Error no ConSurf
+                        return self.consurf
+            try:
+                with open(consurf_db_file) as f:
+                    pass
+            except IOError:
+                return self.consurf
             parsing = False
             with open(consurf_db_file) as f:
                 for line in f:
@@ -544,7 +598,8 @@ class Structure(object):
                             continue
 
                         try:
-                            resseq = int(fields[2].split(":")[0][3:])
+                            resseq_parts = natural_keys(fields[2].split(":")[0][3:])
+                            resseq = (" ", int(resseq_parts[1]), resseq_parts[2].rjust(1))
                             score = (float(fields[3]), int(fields[4].replace("*", "")))
                         except IndexError:
                             break
@@ -617,24 +672,38 @@ class Structure(object):
             return self.structure[model][chain][resseq]
         except KeyError as e:
             for r in self.structure[model][chain]:
-                if r.get_id()[1] == resseq:
+                if r.get_id() == resseq:
                     return r
+                if isinstance(resseq, int) and r.get_id()[1] == resseq:
+                    return r
+                if isinstance(resseq, str):
+                    resseq_parts = natural_keys(resseq)
+                    res_seq = (" ", int(resseq_parts[1]), resseq_parts[2].rjust(1))
+                    try:
+                        return self.structure[model][chain][res_seq]
+                    except KeyError:
+                        print res_seq
+                        return None
             else:
                 return None
 
     def align_seq_to_struc(self, *seq_num, **kwds):
-        return_residue=kwds.get("return_residue", False)
+        return_residue = kwds.get("return_residue", False)
+        use_mmdb_index = kwds.get("return_residue", False)
+
+        residues = map_residues(self.pdb, self.chain, seq_num, use_mmdb_index=use_mmdb_index)
 
         if return_residue:
             mapped_residues = [self.get_residue_from_resseq(pdbnum) \
-                for current_resi, resn, pdbnum, ncbi in map_residues(self.pdb, self.chain, seq_num)]
+                for current_resi, resn, pdbnum, ncbi in residues]
 
-            if mapped_residues.count(None) > len(mapped_residues)/2:
-                raise InvalidPDB("Binding Site ({:4}%) missing from structure ({}.{})".format(mapped_residues.count(None)/float(len(mapped_residues)), self.pdb, self.chain))
+            if mapped_residues.count(None) > len(mapped_residues)/2.:
+                pct_missing = 100*mapped_residues.count(None)/float(len(mapped_residues))
+                raise InvalidPDB("Binding Site ({:4}%) missing from structure ({}.{})".format(pct_missing, self.pdb, self.chain))
 
             mapped_residues = [r for r in mapped_residues if r is not None]
         else:
-            mapped_residues = [pdb for current_resi, resn, pdb, ncbi in map_residues(self.pdb, self.chain, seq_num)]
+            mapped_residues = [pdb for current_resi, resn, pdb, ncbi in residues]
 
         return mapped_residues
 
@@ -648,6 +717,7 @@ class Structure(object):
             "C", "CT", "CA", "N", "N2", "N3", "NA", "O", "O2", "OH", "S", "SH", "Unk_atom",
             "C", "N", "O", "S", "Unk_element",
             "vdw_volume", "charge", "neg_charge", "pos_charge", "neutral_charge",
+            "electrostatic_potential", "is_electropositive", "is_electronegative"
             "cx", "is_concave", "is_convex", "is_concave_and_convex",
             "hydrophobicity", "is_hydrophbic", "is_hydrophilic", "hydrophobicity_is_0"
             "atom_asa", "atom_is_buried", "atom_exposed",
@@ -913,9 +983,9 @@ class Structure(object):
 
                 if use_deepsite_features:
                     feats = np.concatenate((
-                        features[61:67],
+                        features[64:70],
                         features[20:22],
-                        features[69:]))
+                        features[72:]))
                     if warn_if_buried:
                         return feats, is_buried
                     else:
@@ -927,7 +997,7 @@ class Structure(object):
                     else:
                         return feats
                 elif only_aa:
-                    feats = features[37:58]
+                    feats = features[40:61]
                     if warn_if_buried:
                         return feats, is_buried
                     else:
@@ -936,7 +1006,7 @@ class Structure(object):
                     feats = np.concatenate((
                         features[13:18],
                         features[19:23],
-                        features[27:30], #1]))
+                        features[30:33], #1]))
                         np.array([float(is_buried)])))
                     if warn_if_buried:
                         return feats, is_buried
@@ -967,7 +1037,7 @@ class Structure(object):
         elif non_geom_features:
             features = np.zeros(13)
             features[0:5] = self.get_element_type(atom)
-            features[5:9] = self.get_charge(atom)
+            features[5:9] = self.get_charge_and_electrostatics(atom)
             features[9:13] = self.get_hydrophobicity(atom)
             if warn_if_buried:
                 return features, self.get_accessible_surface_area(atom)[-2]
@@ -980,14 +1050,14 @@ class Structure(object):
             features[0:13]  = self.get_atom_type(atom)
             features[13:18] = self.get_element_type(atom)
             features[18:19] = self.get_vdw(atom)
-            features[19:23] = self.get_charge(atom)
-            features[23:27] = self.get_concavity(atom)
-            features[27:31] = self.get_hydrophobicity(atom)
-            features[31:37] = self.get_accessible_surface_area(atom)
-            features[37:58] = self.get_residue(atom)
-            features[58:61] = self.get_ss(atom)
-            features[61:67] = self.get_deepsite_features(atom, calc_charge=False, calc_conservation=False)
-            features[67:70] = self.get_evolutionary_conservation_score(atom)
+            features[19:26] = self.get_charge_and_electrostatics(atom)
+            features[26:30] = self.get_concavity(atom)
+            features[30:34] = self.get_hydrophobicity(atom)
+            features[34:40] = self.get_accessible_surface_area(atom)
+            features[40:61] = self.get_residue(atom)
+            features[61:64] = self.get_ss(atom)
+            features[64:70] = self.get_deepsite_features(atom, calc_charge=False, calc_conservation=False)
+            features[70:73] = self.get_evolutionary_conservation_score(atom)
 
             if self.precalc_features is not None:
                 self.precalc_features[atom.serial_number-1] = features
@@ -1082,7 +1152,7 @@ class Structure(object):
     def get_vdw(self, atom):
         return np.array([vdw_radii.get(atom.element.title(), 2.0)])
 
-    def get_charge(self, atom_or_residue):
+    def get_charge_and_electrostatics(self, atom_or_residue):
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             atom = atom_or_residue
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
@@ -1103,14 +1173,17 @@ class Structure(object):
         if atom_id[1][1] != " ":
             #pdb2pqr removes alternate conformations and only uses the first
             atom_id = (atom_id[0], (atom_id[1][0], " "))
-        charge_value = pqr.get(atom_id, np.NaN)
+        charge_value, electrostatic_pot_value = pqr.get(atom_id, (np.Nan, np.NaN))
 
-        charge = np.zeros(4)
+        charge = np.zeros(7)
         charge[0] = charge_value
         #print "charge", charge_value, float(charge_value < 0)
         charge[1] = float(charge_value < 0)
         charge[2] = float(charge_value > 0)
         charge[3] = float(charge_value == 0)
+        charge[4] = electrostatic_pot_value
+        charge[5] = float(electrostatic_pot_value < 0)
+        charge[6] = float(electrostatic_pot_value > 0)
         return charge
 
     def get_concavity(self, atom_or_residue):
@@ -1280,7 +1353,7 @@ class Structure(object):
             nFeatures += 2
         if calc_conservation:
             nFeatures += 1
-        features = np.zeros(8 if calc_charge else 6, dtype=bool)
+        features = np.zeros(nFeatures, dtype=bool)
 
         #hydrophobic
         features[0] = (element == 'C') | (element == 'A')
@@ -1311,8 +1384,7 @@ class Structure(object):
             features[7] = charge < 0
 
         if calc_conservation:
-            index = 8 if calc_charge else 6
-            features[index] = get_evolutionary_conservation_score(atom)[-1]
+            features[nFeatures-1] = self.get_evolutionary_conservation_score(atom)[-1]
 
         return features.astype(float)
 
