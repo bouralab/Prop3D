@@ -4,6 +4,7 @@
         "time" : "08:00:00",
         "mem"  : "60g",
         "extra": "",
-        "out"  : "{config[dataset_name]}/{rule}_{%j}.out"
+        "out"  : "{config[dataset_name]}/{rule}_%j.out",
+        "partition": "norm"
     }
 }

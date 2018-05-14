@@ -26,6 +26,7 @@ Non python requirements:
 ```
 pdb2pqr
 rosetta
+snakemake
 ```
 Optional:
 ```
@@ -42,6 +43,18 @@ It can downloaded using:
 ```bash
 singularity pull shub://edraizen/SingularityTorch
 ```
+
+#Data Generation
+To create all of the necessary data, please run the Snakemake pipeline in the data directory
+
+```
+cd data
+snakemake all
+```
+
+Feel free to configure a cluster to use with snakemake. Please see the README in the data directory for more information.
+
+![Data Generation Pipeline](figures/data_generation_pipeline.png)
 
 # Running
 Training

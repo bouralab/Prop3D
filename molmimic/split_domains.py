@@ -124,7 +124,7 @@ def load_cdd(cdd_dir, cleanup=True, job_name="add_sdi", dependency=None):
         sdi_cdd = os.path.join(sdi_cdd_dir, "{}.csv".format(cdd))
         job += "python {} run {} {} {}\n".format(__file__, sdi_cdd, f, int(cleanup))
 
-    job.run(dependency=dependency, update_dependencies=True)
+    job.run(dependency=dependency)
 
 def submit_cdd(cdd_dir, job_name="add_sdi", dependency=None):
     job = SwarmJob(job_name, walltime="96:00:00", individual=True)
