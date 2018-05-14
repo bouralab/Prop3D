@@ -1,10 +1,7 @@
 *.pyc
-gromacs_structures
-pdb2pqr_structures
-rosetta_pdbs
-molmimic/data/ibisdown/
-molmimic/data/ibisdown_data/
-molmimic/data/ibis_full.tsv
-molmimic/data/ibis_ppi_pli.tsv
-features/
-features2/
+data/structures
+data/interfaces
+data/features
+data/ConSurf
+data/MMDB
+data/.snakemake
