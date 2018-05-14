@@ -44,7 +44,7 @@ It can downloaded using:
 singularity pull shub://edraizen/SingularityTorch
 ```
 
-#Data Generation
+# Data Generation
 To create all of the necessary data, please run the Snakemake pipeline in the data directory
 
 ```
