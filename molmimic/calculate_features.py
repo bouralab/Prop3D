@@ -97,7 +97,7 @@ class SwarmJob(object):
     def update_dependencies(job_name, old_job_id=None, new_job_id=None):
         old_job_id = old_job_id or os.environ.get("SLURM_JOB_ID", None)
         job_info = subprocess.check_output(["squeue", "-u", os.environ.get("SLURM_JOB_ACCOUNT", os.environ.get("USER", None)), "-o", "%A %j %V %E"])
-        job_info = sorted([line.rstrip("\n").split() for line in job_info.split("\n")[1:]], key=lambda x: x[0])
+        job_info = sorted([line.rstrip("\n").split() for line in job_info.split("\n")[1:]], key=lambda x: x[0] if isinstance(x, (list, tuple)) and len(x)>0 else x)
         set_wait_for_new_job = False
         for _job_name, job_id, starttime, dependency in job_info:
             if _job_name == job_name and _job_id != old_job_id:
@@ -236,9 +236,9 @@ def load_ibis(ibis_data, dataset_name, use_domains=0):
                     print "Running {}/{}: {}.{}".format(i, data.shape[0], pdb["pdb"], pdb["chain"])
                     job += "/data/draizene/3dcnn-torch-py2 python {} features {} {} \n".format(os.path.realpath(__file__), dataset_name, pdb["pdb"], pdb["chain"])
         print
-    return job.run()
+    return job.run(update_dependencies=True)
 
-def submit_ibis(ibis_data, dataset_name, use_domains=0, job_name="build_ibis", dependency=None):
+def submit_ibis(ibis_data, dataset_name, use_domains=2, job_name="build_ibis", dependency=None):
     domains = ["", " --only-domains ", " --domains "]
     job = SwarmJob(job_name, individual=True)
     job += "python {} run{}{} {}\n".format(__file__, domains[use_domains], dataset_name, ibis_data)
@@ -250,6 +250,8 @@ if __name__ == "__main__":
             use_domains = 2
         elif "--only-domains" in sys.argv:
             use_domains = 1
+        else:
+            use_domains = 0
 
         submit_ibis(sys.argv[-1], sys.argv[-2], use_domains)
     elif len(sys.argv) in [4, 5] and sys.argv[1] == "run":
@@ -259,6 +261,15 @@ if __name__ == "__main__":
             use_domains = 1
 
         load_ibis(sys.argv[-1], sys.argv[-2], use_domains)
+    elif len(sys.argv) == 4 and sys.argv[1]=="features":
+        import re
+        f = os.path.splitext(os.path.basename(sys.argv[-1]))
+        m = re.match("^(.{4})_(.{1,2})_sdi(\d+)_d(\d+)\.pdb$", f)
+        if m:
+            calculate_features(sys.argv[2], m.groups(1), m.groups(2), sdi=m.groups(3), domain=m.groups(4))
+        else:
+            raise RuntimeError("PDB file must have the format: {PDB}_{Chain}_sdi{sdi}.d{domNo}.pdb")
+
     elif len(sys.argv) in [5, 7] and sys.argv[1]=="features":
         calculate_features(*sys.argv[2:])
     else:
