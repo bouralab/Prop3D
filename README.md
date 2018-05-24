@@ -56,10 +56,16 @@ Feel free to configure a cluster to use with snakemake. Please see the README in
 
 ![Data Generation Pipeline](figures/data_generation_pipeline.png)
 
-# Running
-Training
+# Running (Examples using singularity)
+## Training 
+```shell
+run_singularity python molmimic/torch_train.py --use_deepsite_features --use-resnet-unet --epochs 100 --dropout-width --dropout-p 0.6 --learning-rate 0.00005 dataset_name /path/to/formated/interfaces.tsv
+```
 
-Inference
+## Inference
+```shell
+run_singularity python molmimic/torch_test_simple.py --use_deepsite_features --use-resnet-unet --dropout-width --dropout-p 0.6 --learning-rate 0.00005 dataset_name path/to/model.pth
+```
 
 # Citations
 1. SparseConvNet: Graham, Engelcke, Maaten. [arXiv:1711.10275](https://arxiv.org/abs/1711.10275)
