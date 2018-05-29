@@ -159,13 +159,18 @@ class IBISDataset(Dataset):
             sep = ","
             data = pd.read_table(ibis_data, sep=",", dtype=dtype)
         if data.columns[0] != "pdb":
-            if len(data.columns) == 5:
+            if len(data.columns) == 7:
+                names = ["pdb", "chain", "resi", "is_multimer", "cdd", "pdb_evidence", "is_observed"]
+            elif len(data.columns) == 5:
                 #Full protein
                 names = ["pdb", "chain", "resi", "is_multimer", "cdd"]
             else:
                 #Individual chain
                 names = ["pdb", "chain", "sdi", "domNo", "resi"]
             data = pd.read_table(ibis_data, sep=sep, header=None, names=names, dtype=dtype)
+
+        if data.shape[0] == 0:
+            raise RuntimeError("Empty interface file {}".format(ibis_data))
 
         data.columns = [col.lower() for col in data.columns]
 
@@ -193,7 +198,6 @@ class IBISDataset(Dataset):
                 self.full_data = self.full_data.loc[~self.full_data["unique_obs_int"].isin(multimers)]
             print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", skip_size, osize, self.full_data.shape[0], osize)
         except IOError:
-            print "No Skip ID file"
             pass
 
         if 0 < start_index < 1:

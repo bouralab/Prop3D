@@ -1,0 +1,3 @@
+[submodule "pdb-tools"]
+	path = pdb-tools
+	url = https://github.com/edraizen/pdb-tools.git

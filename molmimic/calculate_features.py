@@ -10,6 +10,7 @@ from datetime import datetime
 from itertools import groupby
 import subprocess
 import glob
+import shutil
 
 from molmimic.util import get_features_path, initialize_data
 
@@ -30,7 +31,7 @@ class SwarmJob(object):
         self.cmd_file = open(self.cmd_file_name, "w" if cmd_file is None else "a+")
         self.job_id = None
         self.walltime = walltime
-        self.cmd = "#!/bin/sh\n"
+        self += "#!/bin/sh\n"
 
         self.cpu_parameters = "--cpus-per-task={}".format(cpus)
 
@@ -60,6 +61,7 @@ class SwarmJob(object):
             self.gpu_parameters = []
 
         self.threads_per_job = threads_per_job
+        self.user_parameters = user_parameters
 
         if user_parameters is not None and isinstance(user_parameters, (list, tuple)):
             self.parameters += user_parameters
@@ -74,9 +76,9 @@ class SwarmJob(object):
     @staticmethod
     def slurm_enabled():
         try:
-            subprocess.check_output(["sacct"])
+            subprocess.call(["which", "sacct"])
             return True
-        except:
+        except CalledProcessError:
             return False
 
     @staticmethod
@@ -112,7 +114,6 @@ class SwarmJob(object):
                     subprocess.call(["scontrol", "update", "JobId={}".format(_job_id), "Dependency={}:{}".format(dep_type, dependencies)])
 
     def add_individual_parameters(self):
-        self += "#!/bin/bash\n"
         for param in self.parameters:
             self += "#SBATCH {}\n".format(param)
         if self.modules is not None:
@@ -126,8 +127,8 @@ class SwarmJob(object):
     def submit_individual(self, dependency=None, hold_jid=None, update_dependencies=False):
         self.cmd_file.close()
 
-        while not SwarmJob.can_add_job():
-            time.sleep(0.3)
+        # while not SwarmJob.can_add_job():
+        #     time.sleep(0.3)
 
         cmd = ["/usr/local/slurm/bin/sbatch"]
 
@@ -151,7 +152,7 @@ class SwarmJob(object):
         time.sleep(0.3)
         return self.job_id
 
-    def run(self, filter_unique=False, dependency=None, update_dependencies=False):
+    def run(self, filter_unique=False, split_jobs=False, dependency=None, update_dependencies=False):
         self.cmd_file.close()
 
         if filter_unique:
@@ -159,7 +160,42 @@ class SwarmJob(object):
                 subprocess.call(["uniq", self.cmd_file_name], stdout=uniq)
             self.cmd_file_name = "{}.uniq".format(self.cmd_file_name)
 
-        print self.cmd_file_name
+        if split_jobs:
+            num_subjobs = int(subprocess.check_output(["wc", "-l", self.cmd_file_name]).split()[0])-1
+            if num_subjobs/100. > 100.:
+                bundle_size = num_subjobs/(2*1000)
+                split_by = 2
+                while bundle_size > 60:
+                    split_by += 1
+                    bundle_size = num_subjobs/(split_by*1000)
+                print "Splitting Swarm into", split_by, "jobs"
+                subprocess.call("tail -n +2 {0} > {0}.nohead".format(self.cmd_file_name), shell=True)
+                subprocess.call(["split", "-d", "-l{}".format(int(math.ceil(float(num_subjobs/split_by)))), self.cmd_file_name+".nohead", os.path.splitext(os.path.basename(self.cmd_file_name))[0]+".split"])
+                os.remove(self.cmd_file_name+".nohead")
+
+                jobs = []
+                for job_num in xrange(split_by):
+                    split_file = "{}.split0{}".format(os.path.splitext(os.path.basename(self.cmd_file_name))[0], job_num)
+                    subprocess.call("head -n 1 {0} | cat - {0} > {1}.fix".format(self.cmd_file_name, split_file), shell=True)
+                    os.remove(split_file)
+                    shutil.move(split_file+".fix", split_file)
+
+                    job = SwarmJob(
+                        self.name,
+                        cpus=self.cpus,
+                        mem=self.mem,
+                        walltime=self.walltime,
+                        gpus=self.gpus,
+                        user_parameters=self.user_parameters,
+                        modules=self.modules,
+                        merge_output=self.merge_output,
+                        threads_per_job=self.threads_per_job,
+                        cmd_file=split_file)
+                    jid = job.run(dependency=dependency)
+                    jobs.append(jid)
+                return ",".join(jobs)
+
+
         cmd = ["swarm", "--file", self.cmd_file_name,
                "--logdir", "{}_logs".format(self.name),
                "-g", str(self.mem),
@@ -217,30 +253,42 @@ def load_ibis(ibis_data, dataset_name, use_domains=0):
     job_name = os.environ.get("SLURM_JOB_NAME", "{}_features".format(dataset_name))
     job = SwarmJob(job_name, walltime="06:00:00")
 
-    for ibis_data in ibis_data_files:
-        dataset = IBISDataset(ibis_data, input_shape=(512,512,512))
-        data = dataset.full_data #if course_grained else dataset.full_data
-        i = 0
-        pdb_groups = data.groupby(lambda x: data["pdb"].loc[x][1:3])
-        for pdb_divided, pdb_group in pdb_groups:
-            features_path = os.path.join(get_features_path(dataset_name), "atom")
+    features_path = get_features_path(dataset_name)
+    all_features_file = os.path.join(features_path, "all_features.txt")
+    with open(all_features_file, "w") as all_features:
+        for ibis_data in ibis_data_files:
+            dataset = IBISDataset(ibis_data, input_shape=(512,512,512))
+            data = dataset.full_data #if course_grained else dataset.full_data
+            i = 0
+            pdb_groups = data.groupby(lambda x: data["pdb"].loc[x][1:3])
+            for pdb_divided, pdb_group in pdb_groups:
+                features_path = os.path.join(get_features_path(dataset_name), "atom")
 
-            if not os.path.exists(features_path):
-                os.makedirs(features_path)
-            for _, pdb in pdb_group.iterrows():
-                i += 1
-                if use_domains in [1, 2]:
-                    print "Running {}/{}: {}.{}.{} ({})".format(i, data.shape[0], pdb["pdb"], pdb["chain"], pdb["domnum"], pdb["sdi"])
-                    job += "/data/draizene/3dcnn-torch-py2 python {} features {} {} {} {} {}\n".format(os.path.realpath(__file__), dataset_name, pdb["pdb"], pdb["chain"], pdb["sdi"], pdb["domnum"])
-                if use_domains in [0, 2]:
-                    print "Running {}/{}: {}.{}".format(i, data.shape[0], pdb["pdb"], pdb["chain"])
-                    job += "/data/draizene/3dcnn-torch-py2 python {} features {} {} \n".format(os.path.realpath(__file__), dataset_name, pdb["pdb"], pdb["chain"])
-        print
-    return job.run(update_dependencies=True)
+                if not os.path.exists(features_path):
+                    os.makedirs(features_path)
+                for _, pdb in pdb_group.iterrows():
+                    i += 1
+                    if use_domains in [1, 2]:
+                        print "Running {}/{}: {}.{}.{} ({})".format(i, data.shape[0], pdb["pdb"], pdb["chain"], pdb["domnum"], pdb["sdi"])
+                        job += "/data/draizene/3dcnn-torch-py2 python {} features {} {} {} {} {}\n".format(os.path.realpath(__file__), dataset_name, pdb["pdb"], pdb["chain"], pdb["sdi"], pdb["domnum"])
+                        print >> all_features, os.path.join(features_path, pdb["pdb"][1:3].lower(), "{}_{}_sdi{}_d{}.npy".format(pdb["pdb"], pdb["chain"], pdb["sdi"], pdb["domnum"]))
+                    if use_domains in [0, 2]:
+                        print "Running {}/{}: {}.{}".format(i, data.shape[0], pdb["pdb"], pdb["chain"])
+                        job += "/data/draizene/3dcnn-torch-py2 python {} features {} {} \n".format(os.path.realpath(__file__), dataset_name, pdb["pdb"], pdb["chain"])
+                        print >> all_features, os.path.join(features_path, pdb["pdb"][1:3].lower(), "{}_{}.npy".format(pdb["pdb"], pdb["chain"]))
+            print
+    jid = job.run()
+
+    endjob = SwarmJob(job_name, individual=True)
+    endjob += "touch {}.done\n".format(all_features_file)
+    endjob.submit_individual(dependency="afterany:"+jid)
+
+    while not os.path.isfile(all_features_file+".done"):
+        time.sleep(800)
 
 def submit_ibis(ibis_data, dataset_name, use_domains=2, job_name="build_ibis", dependency=None):
     domains = ["", " --only-domains ", " --domains "]
-    job = SwarmJob(job_name, individual=True)
+    job = SwarmJob(job_name, walltime="96:00:00", mem="1", individual=True)
     job += "python {} run{}{} {}\n".format(__file__, domains[use_domains], dataset_name, ibis_data)
     return job.submit_individual(dependency=dependency)
 

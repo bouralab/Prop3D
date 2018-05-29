@@ -1,7 +1,15 @@
 import os
 import pandas as pd
+import multiprocessing
+from functools import partial
 
 mmdb_path_prefix = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "MMDB"))
+
+def processs_cdd(structural_domains, cdd, cdd_sdis):
+	cdd_dir = os.path.join(mmdb_path_prefix, "cdd")
+	cdd_sdis_positions = pd.merge(cdd_sdis, structural_domains, how="left", on="sdi")
+	cdd_sdis_positions.to_csv(os.path.join(cdd_dir, "{}.csv".format(cdd.replace("/", ""))))
+	del cdd_sdis_positions
 
 def calculate_mmdb_dataset():
 	structural_domains_file = os.path.join(mmdb_path_prefix, "Structural_Domains.csv")
@@ -28,12 +36,16 @@ def calculate_mmdb_dataset():
 	if not os.path.exists(cdd_dir):
 		os.makedirs(cdd_dir)
 
+	if False:
+		num_cores = multiprocessing.cpu_count()-1
+		pool = multiprocessing.Pool(num_cores)
+		pool.map(partial(processs_cdd, structural_domains), )
+
 	for cdd, cdd_sdis in cdd_groups:
+		print "Running:", cdd
 		cdd_sdis_positions = pd.merge(cdd_sdis, structural_domains, how="left", on="sdi")
-		cdd_sdis_positions.to_csv(os.path.join(cdd_dir, "{}.csv".format(cdd)))
+		cdd_sdis_positions.to_csv(os.path.join(cdd_dir, "{}.csv".format(cdd.replace("/", ""))))
 		del cdd_sdis_positions
 
 if __name__ == "__main__":
 	calculate_mmdb_dataset()
-
-
