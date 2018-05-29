@@ -1,3 +1,4 @@
 data/MMDB/Structural_Domains.csv filter=lfs diff=lfs merge=lfs -text
 data/MMDB/StDomain.csv filter=lfs diff=lfs merge=lfs -text
 data/MMDB/StDomainIntvl.csv filter=lfs diff=lfs merge=lfs -text
+data/MMDB/StructDomSfam.csv filter=lfs diff=lfs merge=lfs -text
