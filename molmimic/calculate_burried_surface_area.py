@@ -173,7 +173,7 @@ def get_partner_binding_site(pdb_file, binding_site1, chain2, dist=5.0):
                         if len(resi) == 0 or resi[-1] != _resi:
                             resi.append(_resi)
     if len(resi) > 0:
-        return resi
+        return ",".join(resi)
     else:
         return None
 
@@ -223,6 +223,8 @@ def find_homolog(dataset_name, query_cdd, query_resi, target_pdb, target_chain):
     from Bio.SubsMat.MatrixInfo import blosum62
     interfaces = get_interfaces_path(dataset_name)
 
+    print query_cdd, query_resi, target_pdb, target_chain
+
     target = None
     target_score = 0.
 
@@ -230,7 +232,10 @@ def find_homolog(dataset_name, query_cdd, query_resi, target_pdb, target_chain):
     with open(ipath) as f:
         for line in f:
             fields = line.rstrip().split("\t")
+            if fields[-1] == "0": continue
+            if fields[0] == target_pdb: print fields
             if fields[0] == target_pdb and fields[1] == target_chain:
+                #print "posible match", fields
                 _target_resi = fields[5]
                 try:
                     _target_score = pairwise2.align.globaldx(query_resi, _target_resi, blosum62, score_only=1)
@@ -272,9 +277,13 @@ def add_bsa_to_cdd(dataset_name, cdd, cdd_file):
             except ValueError:
                 continue
 
+            if pdb == "3WBD": continue
+
+            print pdb, chain, sdi1, domNo1, "==>",
+
             if partner_cdd == "No Domain":
                 #FIXME How to find domains with no cdd annotation?
-                #print "Skippeed -- No Domain partner"
+                print "Skipped -- No Domain partner"
                 continue
 
             chain1, chain2 = pdb_evidence.split("_")
@@ -284,15 +293,21 @@ def add_bsa_to_cdd(dataset_name, cdd, cdd_file):
             this_pdb_file = get_pdb(pdb, chain, None)
 
             if chain1 == chain2:
+                print "Skippeed -- Same chain not allowed"
                 continue
 
             if not bool(int(observed)):
                 #FIXME: get obersrved working first
                 #continue
+                print pdb_evidence, evidence_chain2, cdd, partner_cdd,
                 evidence_pdb_file = get_pdb(evidence_pdb, evidence_chain1, evidence_chain2)
                 homolog = find_homolog(dataset_name, cdd, resn1, evidence_pdb, evidence_chain1)
 
                 if homolog is None:
+                    print "Skipped -- Cannot find homolog"
+                    if sdi1 != "635784":
+                        print sdi1
+                        assert 0
                     continue
 
                 evidence_sdi1, evidence_domNo1, evidence_resi1 = homolog[2:5]
@@ -300,11 +315,11 @@ def add_bsa_to_cdd(dataset_name, cdd, cdd_file):
                 evidence_pdb_file = this_pdb_file
                 evidence_sdi1, evidence_domNo1, evidence_resi1 = sdi1, domNo1, resi1
 
-            print line.rstrip()
+            
 
             partner = find_partner(dataset_name, evidence_pdb_file, evidence_pdb, evidence_chain1, evidence_sdi1, cdd, evidence_resi1, evidence_chain2, partner_cdd)
             if partner is None:
-                #print "Skipped -- Cannot find partner"
+                print "Skipped -- Cannot find partner"
                 continue
 
             sdi2, domNo2, resi2 = partner[2:5]
@@ -312,10 +327,12 @@ def add_bsa_to_cdd(dataset_name, cdd, cdd_file):
             try:
                 bsa, all_results, ppi_type = calculate_buried_surface_area(evidence_pdb_file, evidence_chain1, evidence_chain2, residues=evidence_resi1 if observed == "1" else None)
             except IOError:
+                print "Skipped -- Cannot open files for BSA calc"
                 continue
 
             bound_source_chain = all_results[frozenset([evidence_chain1, evidence_chain2])]["chains"][evidence_chain1]
-            bsa_monomer = all_results[frozenset([evidence_chain1])]["total"]-bound_source_chain
+            bound_target_chain = all_results[frozenset([evidence_chain1, evidence_chain2])]["chains"][evidence_chain2]
+            bsa_monomer = all_results[frozenset([evidence_chain1])]["total"]-bound_source_chain-bound_target_chain
 
             if ppi_type == "weak transient":
                 write_to.append("weak_transient_bsa_file")
@@ -351,6 +368,8 @@ def add_bsa_to_cdd(dataset_name, cdd, cdd_file):
 
             for f in write_to:
                 print >> open_files[f], "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(line.rstrip(), sdi2, domNo2, resi2, bsa, ppi_type, bs_vs_bsa, infMonomer_vs_obsMonomer)
+
+            print "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(line.rstrip(), sdi2, domNo2, resi2, bsa, ppi_type, bs_vs_bsa, infMonomer_vs_obsMonomer)
 
             os.remove(this_pdb_file)
             try:

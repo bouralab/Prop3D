@@ -14,6 +14,18 @@ import shutil
 
 from molmimic.util import get_features_path, initialize_data
 
+try:
+    subprocess.call(["which", "sacct"])
+    SLURM_AVAIL = True
+except CalledProcessError:
+    SLURM_AVAIL = False
+
+try:
+    subprocess.call(["which", "swarm"])
+    SWARM_AVAIL = True
+except CalledProcessError:
+    SWARM_AVAIL = False
+
 class SwarmJob(object):
     start_date = datetime.today().strftime('%Y-%m-%d')
     max_jobs = 1000
@@ -75,11 +87,7 @@ class SwarmJob(object):
 
     @staticmethod
     def slurm_enabled():
-        try:
-            subprocess.call(["which", "sacct"])
-            return True
-        except CalledProcessError:
-            return False
+        return SWARM_AVAIL
 
     @staticmethod
     def number_of_jobs_running():
@@ -130,7 +138,7 @@ class SwarmJob(object):
         # while not SwarmJob.can_add_job():
         #     time.sleep(0.3)
 
-        cmd = ["/usr/local/slurm/bin/sbatch"]
+        cmd = ["sbatch"]
 
         if dependency is not None:
             cmd.append("--dependency={}".format(dependency))
@@ -195,32 +203,58 @@ class SwarmJob(object):
                     jobs.append(jid)
                 return ",".join(jobs)
 
+        if SWARM_AVAIL:
+            cmd = ["swarm", "--file", self.cmd_file_name,
+                   "--logdir", "{}_logs".format(self.name),
+                   "-g", str(self.mem),
+                   "--job-name", self.name
+                   ]
+            if self.walltime is not None:
+                cmd += ["--time", self.walltime]
 
-        cmd = ["swarm", "--file", self.cmd_file_name,
-               "--logdir", "{}_logs".format(self.name),
-               "-g", str(self.mem),
-               "--job-name", self.name
-               ]
-        if self.walltime is not None:
-            cmd += ["--time", self.walltime]
+            if self.cpus > 1:
+                cmd += ["--sbatch", "'{}'".format(self.cpu_parameters)]
 
-        if self.cpus > 1:
-            cmd += ["--sbatch", "'{}'".format(self.cpu_parameters)]
+            if self.gpus >= 1:
+                cmd += self.gpu_parameters
 
-        if self.gpus >= 1:
-            cmd += self.gpu_parameters
+            if self.threads_per_job:
+                cmd += ["-t", str(self.threads_per_job)]
 
-        if self.threads_per_job:
-            cmd += ["-t", str(self.threads_per_job)]
+            if self.modules is not None:
+                cmd += ["--module", self.modules]
 
-        if self.modules is not None:
-            cmd += ["--module", self.modules]
+            if self.merge_output:
+                cmd += ["--merge-output"]
 
-        if self.merge_output:
-            cmd += ["--merge-output"]
+            if dependency is not None:
+                cmd += ["--dependency={}".format(dependency)]
+        else:
+            num_subjobs = int(subprocess.check_output(["wc", "-l", self.cmd_file_name]).split()[0])-1
+            bundle_size = 1
+            bundle_size_inc = math.log10(num_subjobs)
+            num_jobs = num_subjobs
+            while num_jobs < 10000:
+                bundle_size += bundle_size_inc
+                num_jobs = (num_subjobs/bundle_size)+1
 
-        if dependency is not None:
-            cmd += ["--dependency={}".format(dependency)]
+            self.user_parameters["--array"] = "0-{}".format(num_jobs)
+            
+            job = SwarmJob(
+                self.name, 
+                cpus=self.cpus,
+                mem=self.mem,
+                walltime=self.walltime,
+                gpus=self.gpus,
+                modules=self.modules,
+                merge_output=self.merge_output,
+                threads_per_job=self.threads_per_job,
+                individual = True,
+                user_parameters=self.user_parameters)
+            
+            for i in xrange(bundle_size):
+                job += "eval `awk 'NR==${{SLURM_ARRAY_TASK_ID}}*{}+{} {{print;exit}}' {}`".format(bundle_size, i+2, self.cmd_file_name)
+            job.run()
 
         for _ in xrange(5):
             try:

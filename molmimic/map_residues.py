@@ -8,14 +8,14 @@ from molmimic.util import natural_keys
 class InvalidSIFTS(RuntimeError):
     pass
 
-def map_residues(pdb_name, chain, resi, use_mmdb_index=False):
+def mmdb_to_pdb_resi(pdb_name, chain, resi):
     if len(resi) == 1 and isinstance(resi[0], str) and "," in resi[0]:
         resi = resi[0].split(",")
     complete_resi = ",".join(map(str,resi))
 
     resi = iter(sorted(resi, key=natural_keys))
 
-    if not use_mmdb_index:
+    if False:
         for r in resi:
             yield r
     else:
@@ -40,7 +40,7 @@ def map_residues(pdb_name, chain, resi, use_mmdb_index=False):
                     dbChainId = entity.find(".//{ns}segment/{ns}listResidue/{ns}residue/{ns}crossRefDb[@dbSource='PDB']".format(ns=ns)).attrib["dbChainId"]
                 except (AttributeError, KeyError):
                     raise InvalidSIFTS(pdb_name)
-                if  dbChainId == chain:
+                if  dbChainId == chain or chain == "":
                     for residue in entity.findall(".//{ns}segment/{ns}listResidue/{ns}residue".format(ns=ns)):
                         curr_res = natural_keys(current_resi, use_int=True)
                         if residue.attrib["dbResNum"] == "{}{}".format(curr_res[1]+1, curr_res[2]):
@@ -72,7 +72,10 @@ def get_sifts(pdb):
     else:
         import urllib2
         path = "{}.xml.gz".format(pdb.lower())
-        sifts = urllib2.urlopen("ftp://ftp.ebi.ac.uk/pub/databases/msd/sifts/xml/{}".format(path))
+        try:
+            sifts = urllib2.urlopen("ftp://ftp.ebi.ac.uk/pub/databases/msd/sifts/xml/{}".format(path))
+        except urllib2.HTTPError:
+            return IOError("ftp://ftp.ebi.ac.uk/pub/databases/msd/sifts/xml/{}".format(path))
         with open(path, "w") as f:
             f.write(sifts.read())
         return path

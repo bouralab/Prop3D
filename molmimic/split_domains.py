@@ -11,7 +11,7 @@ from itertools import combinations
 import pandas as pd
 
 from molmimic.calculate_features import SwarmJob
-from molmimic.map_residues import map_residues
+from molmimic.map_residues import mmdb_to_pdb_resi
 from molmimic.util import atof, natural_keys, to_int, get_interfaces_path
 
 def overlap(min1, max1, min2, max2):

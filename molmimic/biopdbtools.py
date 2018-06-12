@@ -28,7 +28,7 @@ except ImportError:
 
 from get_pdb import get_pdb
 from molmimic.util import InvalidPDB, natural_keys, silence_stdout, silence_stderr
-from molmimic.map_residues import map_residues
+from molmimic.map_residues import mmdb_to_pdb_resi
 
 try:
     from numba import jit

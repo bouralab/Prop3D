@@ -3,6 +3,8 @@ import sys
 import re
 from contextlib import contextmanager
 
+import pandas as pd
+
 data_path_prefix = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 
 structures_path_prefix = os.path.join(data_path_prefix, "structures")
@@ -27,6 +29,37 @@ def initialize_data(dataset_name):
     os.environ["MOLMIMIC_STRUCTURES"] = get_structures_path(dataset_name)
     os.environ["MOLMIMIC_FEATURES"] = get_features_path(dataset_name)
     os.environ["MOLMIMIC_INTERFACES"] = get_interfaces_path(dataset_name)
+
+
+def iter_cdd(use_label=True, use_id=False, label=None, id=None):
+    if use_label and use_id:
+        columns = ["label", "sfam_id"]
+    elif use_label and not use_id:
+        columns = ["label"]
+        col = 1
+    elif not use_label and use_id:
+        columns = ["sfam_id"]
+        col = 2
+    else:
+        raise RuntimeError("Invalid options. label or id must be selected")
+
+    CDD = pd.read_hdf(os.path.join(data_path_prefix, "MMDB", "StructDomSfam.h5"), "table")
+    CDD = CDD[columns].drop_duplicates().dropna()
+
+    if label is not None:
+        CDD = CDD[CDD["label"]==label]
+    elif id is not None:
+        CDD = CDD[CDD["sfam_id"]==id]
+
+    CDD["label"] = CDD["label"].apply(lambda cdd: cdd.replace("/", "").replace("'", "\'") if isinstance(cdd, str) else cdd)
+    CDD.sort_values("label", inplace=True)
+    
+    if use_label and use_id:
+        for cdd in CDD.itertuples():
+            yield cdd[1], cdd[2]
+    else:
+        for cdd in CDD.itertuples():
+            yield cdd[col]
 
 class InvalidPDB(RuntimeError):
     pass
