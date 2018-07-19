@@ -16,92 +16,24 @@ from Bio import SeqIO
 from Bio.PDB.NeighborSearch import NeighborSearch
 import requests
 
-try:
-    import freesasa
-except ImportError:
-    freesasa = None
+import warnings
+warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
 
 try:
     import pybel
 except ImportError:
     pybabel = None
 
-from get_pdb import get_pdb
+from molmimic.get_pdb import get_pdb
 from molmimic.util import InvalidPDB, natural_keys, silence_stdout, silence_stderr
-from molmimic.map_residues import mmdb_to_pdb_resi
+from molmimic.parsers.FreeSASA import run_freesasa
+from molmimic.parsers.APBS import run_pdb2pqr_APBS
+from molmimic.parsers.CX import run_cx
+from molmimic.parsers.Consurf import run_consurf
+from molmimic.parsers.DSSP import run_dssp
+from molmimic.parsers.PDBQT import get_autodock_features
 
-try:
-    from numba import jit
-except ImportError:
-    jit = lambda x: x
-
-import warnings
-warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
-
-hydrophobicity_scales = {
-    "kd": {'A': 1.8,'R':-4.5,'N':-3.5,'D':-3.5,'C': 2.5,
-           'Q':-3.5,'E':-3.5,'G':-0.4,'H':-3.2,'I': 4.5,
-           'L': 3.8,'K':-3.9,'M': 1.9,'F': 2.8,'P':-1.6,
-           'S':-0.8,'T':-0.7,'W':-0.9,'Y':-1.3,'V': 4.2 },
-    "biological": {
-           "A": -0.11,"C":  0.13,"D": -3.49,"E": -2.68,"F": 0.32,
-           "G": -0.74,"H": -2.06,"I":  0.60,"K": -2.71,"L": 0.55,
-           "M":  0.10,"N": -2.05,"P": -2.23,"Q": -2.36,"R": -2.58,
-           "S": -0.84,"T": -0.52,"V":  0.31,"W": -0.30,"Y": -0.68},
-    "octanal":{
-           "A": -0.50, "C":  0.02, "D": -3.64, "E": -3.63,
-           "F":  1.71, "G": -1.15, "H": -0.11, "I":  1.12,
-           "K": -2.80, "L":  1.25, "M":  0.67, "N": -0.85,
-           "P": -0.14, "Q": -0.77, "R": -1.81, "S": -0.46,
-           "T": -0.25, "V":  0.46, "W":  2.09, "Y":  0.71,}
-    }
-
-#vdw_radii = {'Ru': 1.2, 'Re': 4.3, 'Ra': 2.57, 'Rb': 2.65, 'Rn': 2.3, 'Rh': 1.22, 'Be': 0.63, 'Ba': 2.41, 'Bi': 1.73, 'Bk': 1.64, 'Br': 1.85, 'D': 1.2, 'H': 1.2, 'P': 1.9, 'Os': 1.58, 'Es': 1.62, 'Hg': 1.55, 'Ge': 1.48, 'Gd': 1.69, 'Ga': 1.87, 'Pr': 1.62, 'Pt': 1.72, 'Pu': 1.67, 'C': 1.775, 'Pb': 2.02, 'Pa': 1.6, 'Pd': 1.63, 'Cd': 1.58, 'Po': 1.21, 'Pm': 1.76, 'Ho': 1.61, 'Hf': 1.4, 'K': 2.75, 'He': 1.4, 'Md': 1.6, 'Mg': 1.73, 'Mo': 1.75, 'Mn': 1.19, 'O': 1.45, 'S': 1.8, 'W': 1.26, 'Zn': 1.39, 'Eu': 1.96, 'Zr': 1.42, 'Er': 1.59, 'Ni': 1.63, 'No': 1.59, 'Na': 2.27, 'Nb': 1.33, 'Nd': 1.79, 'Ne': 1.54, 'Np': 1.71, 'Fr': 3.24, 'Fe': 1.26, 'Fm': 1.61, 'B': 1.75, 'F': 1.47, 'Sr': 2.02, 'N': 1.5, 'Kr': 2.02, 'Si': 2.1, 'Sn': 2.17, 'Sm': 1.74, 'V': 1.06, 'Sc': 1.32, 'Sb': 1.12, 'Se': 1.9, 'Co': 1.13, 'Cm': 1.65, 'Cl': 1.75, 'Ca': 1.95, 'Cf': 1.63, 'Ce': 1.86, 'Xe': 2.16, 'Lu': 1.53, 'Cs': 3.01, 'Cr': 1.13, 'Cu': 1.4, 'La': 1.83, 'Li': 1.82, 'Tl': 1.96, 'Tm': 1.57, 'Lr': 1.58, 'Th': 1.84, 'Ti': 1.95, 'Te': 1.26, 'Tb': 1.66, 'Tc': 2.0, 'Ta': 1.22, 'Yb': 1.54, 'Dy': 1.63, 'I': 1.98, 'U': 1.75, 'Y': 1.61, 'Ac': 2.12, 'Ag': 1.72, 'Ir': 1.22, 'Am': 1.66, 'Al': 1.5, 'As': 0.83, 'Ar': 1.88, 'Au': 1.66, 'At': 1.12, 'In': 1.93}
-vdw_radii = {
-    "H" : 1.2,
-    "Li" : 1.82,
-    "Na" : 2.27,
-    "K" : 2.75,
-    "C" : 1.7,
-    "N" : 1.55,
-    "O" : 1.52,
-    "F" : 1.47,
-    "P" : 1.80,
-    "S" : 1.80,
-    "Cl" : 1.75,
-    "Br" : 1.85,
-    "Se" : 1.90,
-    "Zn" : 1.39,
-    "Cu" : 1.4,
-    "Ni" : 1.63,
-}
-
-vdw_aa_radii = {
-    'ALA': 2.52,
-    'ARG': 3.60,
-    'ASN': 3.0,
-    'ASP': 2.94,
-    'CYS': 2.92,
-    'GLN': 3.25,
-    'GLU': 3.21,
-    'GLY': 2.25,
-    'HIS': 3.308,
-    'ILE': 3.22,
-    'LEU': 3.20,
-    'LYS': 3.42,
-    'MET': 3.37,
-    'PHE': 3.47,
-    'PRO': 2.93,
-    'SER': 2.67,
-    'THR': 2.90,
-    'TRP': 3.73,
-    'TYR': 3.55,
-    'VAL': 3.01
- }
-
-surface_areas = {atom:4.*np.pi*(radius**2) for atom, radius in vdw_radii.items()}
-
-maxASA = {"A": 129.0, "R": 274.0, "N": 195.0, "D": 193.0, "C": 167.0, "E": 223.0, "Q": 225.0, "G": 104.0, "H": 224.0, "I": 197.0, "K": 201.0, "L": 236.0, "M": 224.0, "F": 240.0, "P": 159.0, "S": 155.0, "T": 172.0, "W": 285.0, "Y": 263.0, "V": 174.0}
+from molmimic.ProteinTables import vdw_radii, vdw_aa_radii, surface_areas
 
 class Structure(object):
     def __init__(self, path, pdb, chain, sdi=None, domain=None, id=None, course_grained=False, volume=264, voxel_size=1.0, rotate=True, input_format="pdb", force_feature_calculation=False, unclustered=False):
@@ -151,12 +83,6 @@ class Structure(object):
         self.pdb = pdb
         self.sdi = sdi
         self.domain = domain
-        self.dssp = None
-        self.pqr = None
-        self.cx = None
-        self.consurf = None
-        self.sasa = None
-        self.sasa_struct = None
         self.mean_coord = np.zeros(3)
         self.mean_coord_updated = False
         self.starting_residue = None
@@ -285,31 +211,9 @@ class Structure(object):
             unclustered=unclustered,
             rotate=rotate)
 
-        #s.orient_to_pai()
-        if resi:
-            binding_site = s.align_seq_to_struc(resi, return_residue=True)
-        else:
-            binding_site = None
-
-        if grid:
-            try:
-                features = s.get_features(
-                    input_shape=input_shape,
-                    residue_list=binding_site,
-                    batch_index=batch_index,
-                    only_aa=only_aa,
-                    only_atom=only_atom,
-                    non_geom_features=non_geom_features,
-                    use_deepsite_features=use_deepsite_features,
-                    expand_atom=expand_atom,
-                    include_full_protein=include_full_protein,
-                    undersample=undersample)
-            except Exception as e:
-                print(e)
-                raise
-        else:
-            features = [s.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features) \
-                for atom in s.structure.get_atoms()]
+    def get_flat_features(self, resi=None):
+        features = [s.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features) \
+            for atom in s.structure.get_atoms()]
 
         if s.precalc_features is not None and force_feature_calculation:
             s.precalc_features.flush()
@@ -345,272 +249,6 @@ class Structure(object):
             path = path.read()
 
         return path
-
-    def _get_dssp(self):
-        if self.dssp is None:
-            if self.modified_pdb_file:
-                pdbfd, tmp_pdb_path = tempfile.mkstemp()
-                with os.fdopen(pdbfd, 'w') as tmp:
-                    self.save_pdb(tmp)
-            else:
-                tmp_pdb_path = self.path
-
-            try:
-                self.dssp = PDB.DSSP(self.structure[0], tmp_pdb_path, dssp='dssp')
-            except KeyboardInterrupt:
-                raise
-            except NameError:
-                self.dssp = None
-            except Exception as e:
-                raise InvalidPDB("Cannot run dssp for {}".format(self.id))
-
-            if self.modified_pdb_file:
-                os.remove(tmp_pdb_path)
-
-        return self.dssp
-
-    def _get_sasa(self):
-        if freesasa is None:
-            print("SASA not installed! SASA will be 0")
-            return None, None
-        if self.sasa is None:
-            with silence_stdout(), silence_stderr():
-                if self.modified_pdb_file:
-                    #Note: need to remove hydrogens
-                    #self.sasa_struct = freesasa.structureFromBioPDB(self.structure)
-                    structure = Structure()
-                    classifier = Classifier()
-
-                    atoms = self.structure.get_atoms()
-
-                    for a in atoms:
-                        if a.element == "H":
-                            #Ignore Hydrogens
-                            continue
-
-                        r = a.get_parent()
-                        hetflag, resseq, icode = r.get_id()
-
-                        c = r.get_parent()
-                        v = a.get_vector()
-
-                        structure.addAtom(a.get_fullname(), r.get_resname(), resseq, c.get_id(),
-                                          v[0], v[1], v[2])
-
-                    structure.setRadiiWithClassifier(classifier)
-                else:
-                    #Automatically removes hydrogens
-                    self.sasa_struct = freesasa.Structure(self.path)
-                self.sasa = freesasa.calc(self.sasa_struct)
-
-        return self.sasa, self.sasa_struct
-
-    def _get_pqr(self):
-        """Run PDB2PQR and APBS to get charge and electrostatics for each atom for each atom
-
-        TODO: figure out why unknown residues fro hetatms are absent
-        """
-        from molmimic.parsers.APBS import run_apbs
-
-        if self.pqr is None:
-            if not self.modified_pdb_file and self.input_format == "pqr":
-                #Don't recalculate, just use occupancy field!
-                self.pqr = {a.get_id():a.occupancy for a in self.get_atoms()}
-                return self.pqr
-
-            remove_pqr = True
-
-            if self.modified_pdb_file:
-                pdbfd, tmp_pdb_path = tempfile.mkstemp()
-                with os.fdopen(pdbfd, 'w') as tmp:
-                    self.save_pdb(tmp, True)
-            else:
-                tmp_pdb_path = self.path
-
-            _, tmp_pqr_path = tempfile.mkstemp()
-
-            with silence_stdout(), silence_stderr():
-                subprocess.call(["/usr/share/pdb2pqr/pdb2pqr.py", "--ff=amber", "--whitespace", tmp_pdb_path, tmp_pqr_path])
-
-            if self.modified_pdb_file:
-                os.remove(tmp_pdb_path)
-
-            atompot_file = run_apbs(tmp_pqr_path)
-
-            self.pqr = {}
-            with open(tmp_pqr_path) as pqr, open(atompot_file) as atompot:
-                #Skip first 4 rows of atompot file
-                for _ in xrange(4):
-                    next(atompot)
-
-                for line in pqr:
-                    for line in pqr:
-                        if not line.startswith("ATOM  ") or line.startswith("HETATM"): continue
-
-                        electrostatic_potentail = float(next(atompot))
-
-                        fields = line.rstrip().split()
-                        if len(fields) == 11:
-                            recordName, serial, atomName, residueName, chainID, residueNumber, X, Y, Z, charge, radius = fields
-                        elif len(fields) == 10:
-                            recordName, serial, atomName, residueName, residueNumber, X, Y, Z, charge, radius = fields
-                        else:
-                            print fields
-                            raise RuntimeError("Invalid PQR File")
-
-                        try:
-                            resseq = int("".join([i for i in residueNumber if i.isdigit()]))
-                        except ValueError:
-                            continue
-
-                        icode = "".join([i for i in residueNumber if not i.isdigit()])
-                        if icode == "":
-                            icode = " "
-
-                        if recordName == "HETATM":  # hetero atom flag
-                            if residueName in ["HOH", "WAT"]:
-                                hetero_flag = "W"
-                            else:
-                                hetero_flag = "H_{}".format(residueName)
-                        else:
-                            hetero_flag = " "
-                        residue_id = (hetero_flag, resseq, icode)
-
-                        key = (residue_id, (atomName.strip(), ' '))
-                        self.pqr[key] = (float(charge), electrostatic_potentail)
-
-            if remove_pqr:
-                os.remove(tmp_pqr_path)
-
-        return self.pqr
-
-    def _get_cx(self):
-        if self.cx is None:
-            if self.modified_pdb_file:
-                pdbfd, tmp_pdb_path = tempfile.mkstemp()
-                with os.fdopen(pdbfd, 'w') as tmp:
-                    self.save_pdb(tmp, True)
-            else:
-                tmp_pdb_path = self.path
-
-            with open(tmp_pdb_path) as f:
-                cx_f = subprocess.check_output("cx", stdin=f)
-
-            if self.modified_pdb_file:
-                os.remove(tmp_pdb_path)
-
-            #Read in b-factor from PDB file. CX sometimes introduces invalid characters
-            #so the Bio.PDB parser cannot be used
-            self.cx = {}
-            lines = iter(cx_f.splitlines())
-            for l in lines:
-                if l[:6].strip() in ["ATOM", "HETATM"]:
-                    try:
-                        self.cx[int(l[6:11].strip())] = float(l[60:66].strip())
-                    except ValueError as e:
-                        print("    Error, maybe the next line contains it?")
-            # self.cx = {int(l[6:11].strip()):float(l[60:66].strip()) \
-            #     for l in cx_f.splitlines() if l[:6].strip() in ["ATOM", "HETATM"]}
-
-        return self.cx
-
-    def get_autodock_features(self, atom):
-        """Modified from pybel write PDBQT c++"""
-        if not hasattr(self, "autodock_features"):
-            if self.modified_pdb_file:
-                mol = pybel.readstring("pdb", self.save_pdb(file_like=True).read())
-            else:
-                mol = next(pybel.readfile("pdb", self.path))
-
-            mol.addh()
-
-            pdbqt = mol.write("pdbqt")
-            self.autodock_features = {} #defaultdict(lambda: ("  ", False)
-            for atom_index in range(mol.OBMol.NumAtoms()):
-                a = mol.OBMol.GetAtom(atom_index + 1)
-
-                if a.IsCarbon() and a.IsAromatic():
-                    element = 'A'
-                elif a.IsOxygen():
-                    element = 'OA'
-                elif a.IsNitrogen() and a.IsHbondAcceptor():
-                    element = 'NA'
-                elif a.IsSulfur() and a.IsHbondAcceptor():
-                    element ='SA'
-                else:
-                    element = "".join([c for c in a.GetType() if c.isalnum()])
-
-                self.autodock_features[a.GetIdx()] = (element, a.IsHbondDonor())
-
-        try:
-            return self.autodock_features[atom.serial_number]
-        except KeyError:
-            return "  ", False
-
-    def _get_consurf_score(self):
-        if self.consurf is None:
-            consurf_path = "{}/../data/ConSurf".format(os.path.dirname(__file__))
-            consurf_db_file = "{}/ConSurfDB_grades/{}/{}_{}.grades".format(consurf_path, self.pdb[1:3].upper(), self.pdb.upper(), self.chain)
-            print consurf_db_file
-            self.consurf = {}
-
-
-            if not os.path.isfile(consurf_db_file):
-                with open(os.path.join(consurf_path, "pdbaa_list.nr")) as f:
-                    for line in f:
-                        pdb_id = "{}_{}".format(self.pdb.upper(), self.chain)
-                        if pdb_id in line:
-                            if line.rstrip().endswith(":"):
-                                cluster_rep_id = pdb_id
-                            else:
-                                cluster_rep_id, cluster_pdbs = line.rstrip().split(":", 1)
-                            cluster_rep_pdb, cluster_rep_chain = cluster_rep_id.split("_")
-                            url = "http://bental.tau.ac.il/new_ConSurfDB/DB/{}/{}/consurf.grades".format(cluster_rep_pdb, cluster_rep_chain)
-                            print url
-                            r = requests.get(url)
-                            if not os.path.exists(os.path.dirname(consurf_db_file)):
-                                os.makedirs(os.path.dirname(consurf_db_file))
-                            with open(consurf_db_file, "w") as f:
-                                print >> f, r.content
-                            break
-                    else:
-                        #Error no ConSurf
-                        return self.consurf
-            try:
-                with open(consurf_db_file) as f:
-                    pass
-            except IOError:
-                return self.consurf
-            parsing = False
-            with open(consurf_db_file) as f:
-                for line in f:
-                    print line
-                    if not parsing and line.strip().startswith("(normalized)"):
-                        parsing = True
-                        continue
-
-                    if parsing:
-                        fields = line.rstrip().split()
-
-                        if len(fields) == 0:
-                            break
-                        elif fields[2] == "-":
-                            continue
-
-                        try:
-                            resseq_parts = natural_keys(fields[2].split(":")[0][3:])
-                            resseq = (" ", int(resseq_parts[1]), resseq_parts[2].rjust(1))
-                            score = (float(fields[3]), int(fields[4].replace("*", "")))
-                        except IndexError:
-                            break
-
-                        residue = self.get_residue_from_resseq(resseq)
-
-                        if residue is not None:
-                            for a in residue:
-                                self.consurf[a.get_id()] = score
-
-        return self.consurf
 
     def get_mean_coord(self):
         if not self.mean_coord_updated:
@@ -744,7 +382,7 @@ class Structure(object):
         features = [self.get_features_for_atom(a) for r in residue_list for a in r]
         return features
 
-    def get_features(self, input_shape=(96, 96, 96), residue_list=None, batch_index=None, return_data=True, return_truth=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, include_full_protein=False, undersample=False, voxel_size=1.0):
+    def get_features(self, residue_list=None, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, undersample=False, voxel_size=1.0):
         if self.course_grained:
             return self.map_residues_to_voxel_space(
                 binding_site_residues=residue_list,
@@ -1167,7 +805,7 @@ class Structure(object):
         else:
             raise RuntimeError("Input must be Atom or Residue: {}".format(type(atom_or_residue)))
 
-        pqr = self._get_pqr()
+        pqr = run_pdb2pqr_APBS(self, modified=self.modified_pdb_file)
         atom_id = atom.get_full_id()[3:5]
 
         if atom_id[1][1] != " ":
@@ -1202,7 +840,7 @@ class Structure(object):
         else:
             raise RuntimeErorr("Input must be Atom or Residue")
 
-        cx = self._get_cx()
+        cx = run_cx(self, modified=self.modified_pdb_file)
         concavity_value = cx.get(atom.serial_number, np.NaN)
         #concave, convex, or both
         concavity = np.zeros(4)
@@ -1259,7 +897,7 @@ class Structure(object):
         if is_atom:
             total_area = surface_areas.get(atom.element.title(), 1.0)
             try:
-                sasa, sasa_struct = self._get_sasa()
+                sasa, sasa_struct = run_freesasa(self, modified=self.modified_pdb_file)
                 selection = "sele, chain {} and resi {} and name {}".format(self.chain, atom.get_parent().get_id()[1], atom.get_id()[0])
                 with silence_stdout(), silence_stderr():
                     selections = freesasa.selectArea([selection], sasa_struct, sasa)
@@ -1270,7 +908,7 @@ class Structure(object):
                 atom_area = np.NaN
                 fraction = np.NaN
 
-        dssp = self._get_dssp()
+        dssp = run_dssp(self, modified=self.modified_pdb_file)
         try:
             residue_area = dssp[residue.get_full_id()[2:]][3]
         except (KeyError, AssertionError, AttributeError, TypeError):
@@ -1328,7 +966,7 @@ class Structure(object):
         else:
             raise RuntimeErorr("Input must be Atom or Residue")
 
-        dssp = self._get_dssp()
+        dssp = run_dssp(self, modified=self.modified_pdb_file)
         try:
             atom_ss = dssp[residue.get_full_id()[2:]][2]
         except (KeyError, AssertionError, AttributeError, TypeError):
@@ -1347,7 +985,7 @@ class Structure(object):
     def get_deepsite_features(self, atom, calc_charge=True, calc_conservation=True):
         """Use DeepSites rules for autodock atom types
         """
-        element, is_hbond_donor = self.get_autodock_features(atom)
+        element, is_hbond_donor = get_autodock_features(self, atom)
         nFeatures = 6
         if calc_charge:
             nFeatures += 2
@@ -1389,7 +1027,7 @@ class Structure(object):
         return features.astype(float)
 
     def get_evolutionary_conservation_score(self, atom):
-        consurf = self._get_consurf_score()
+        consurf = run_consurf(self, self.pdb, self.chain)
 
         normalized_score, conservation_score = consurf.get(atom.get_id(), (np.NaN, np.NaN))
 
