@@ -19,7 +19,7 @@ RAW_PDB_PATH = os.path.join(data_path_prefix, "pdb", "pdb")
 PDB_PATH = os.path.join(data_path_prefix, "structures")
 PDB_TOOLS = os.path.join(os.path.dirname(data_path_prefix), "pdb-tools")
 
-def extract_domain(pdb_file, pdb, chain, sdi, domNo, cdd):
+def extract_domain(dataset_name, pdb_file, pdb, chain, sdi, domNo, cdd):
     """Prepare a protein structure for use in molmimic. This will
     0) Unzip if gzipped
     1) Cleanup PDB file and add TER lines in between gaps
@@ -51,7 +51,7 @@ def extract_domain(pdb_file, pdb, chain, sdi, domNo, cdd):
     if sdoms.shape[0] == 0:
         raise RuntimeError("sdi does not exist in "+pdb_file)
 
-    pdb_path = os.path.join(PDB_PATH, cdd, pdb[1:3].upper())
+    pdb_path = os.path.join(PDB_PATH, dataset_name, cdd, pdb[1:3].upper())
     if not os.path.exists(pdb_path):
         os.makedirs(pdb_path)
 
@@ -227,8 +227,8 @@ def run_structure(pdb_file, pdb=None, chain=None, domainNum=None, sdi=None, cdd=
 
     return cleaned_file
 
-def process_domain(job, pdb, chain, sdi, domNo, cdd):
-    pdb_path = os.path.join(PDB_PATH, cdd, pdb[1:3].upper())
+def process_domain(job, dataset_name, pdb, chain, sdi, domNo, cdd):
+    pdb_path = os.path.join(PDB_PATH, dataset_name, cdd, pdb[1:3].upper())
     domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdb, chain, sdi, domNo))
     if os.path.isfile(domain_file):
         return
@@ -253,8 +253,7 @@ def process_domain(job, pdb, chain, sdi, domNo, cdd):
         #job.log("Cannot process {}.{}.d{} ({}), error: {}".format(pdb, chain, domNo, sdi, e))
 
 def toil_cdd(job, dataset_name, cdd, sfam_id):
-    global PDB_PATH
-    PDB_PATH = os.path.join(PDB_PATH, dataset_name)
+    pdb_path = os.path.join(PDB_PATH, dataset_name)
 
     all_sdoms = pd.read_hdf(os.path.join(data_path_prefix, "PDB.h5"), "merged")
     sdoms_groups = all_sdoms.groupby("sfam_id")
@@ -266,7 +265,7 @@ def toil_cdd(job, dataset_name, cdd, sfam_id):
         return
 
     #Make CDD directory
-    pdb_path = os.path.join(PDB_PATH, cdd.replace("/", ""))
+    pdb_path = os.path.join(pdb_path, cdd.replace("/", ""))
     if not os.path.isdir(pdb_path):
         os.makedirs(pdb_path)
 
@@ -283,7 +282,7 @@ def toil_cdd(job, dataset_name, cdd, sfam_id):
         pdb_path = os.path.join(PDB_PATH, cdd, pdbId[1:3].upper())
         domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdbId, chnLett, sdi, domNo))
         if not os.path.isfile(domain_file):
-            job.addChildJobFn(process_domain, pdbId, chnLett, sdi, domNo, cdd)
+            job.addChildJobFn(process_domain, dataset_name, pdbId, chnLett, sdi, domNo, cdd)
 
 def convert_pdb_to_mmtf(job, dataset_name, cdd):
     pdb_path = os.path.join(PDB_PATH, dataset_name, cdd.replace("/", ""))
@@ -296,19 +295,27 @@ def convert_pdb_to_mmtf(job, dataset_name, cdd):
     spark_env["PDB_CACHE_DIR"] = chemcomp
 
     #Convert PDBs to MMTF-Hadoop Sequence file directory
-    subprocess.call(["spark-submit",
-        "--class", "edu.sdsc.mmtf.spark.io.demos.PdbToMmtfFull",
-        "{}/target/mmtf-spark-0.2.0-SNAPSHOT.jar".format(os.environ["MMTFSPARK_HOME"]),
-        pdb_path, os.path.join(data_path_prefix, "mmtf", cdd.replace("/", ""))],
-        env=spark_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        subprocess.call(["spark-submit",
+            "--class", "edu.sdsc.mmtf.spark.io.demos.PdbToMmtfFull",
+            "{}/target/mmtf-spark-0.2.0-SNAPSHOT.jar".format(os.environ["MMTFSPARK_HOME"]),
+            pdb_path, os.path.join(data_path_prefix, "mmtf", cdd.replace("/", ""))],
+            env=spark_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:
+        job.log("Error converting to MMTF: {}".format(e))
+        pass
 
 def cluster(job, dataset_name, cdd, id=0.95):
-    pdb_path = os.path.join(PDB_PATH, dataset_name, cdd.replace("/", ""))
+    cdd = cdd.replace("/", "")
+    pdb_path = os.path.join(PDB_PATH, dataset_name, cdd)
+
+    if not os.path.isdir(pdb_path):
+        return
 
     #Save all domains to fasta
-    cdd = cdd.replace("/", "")
     domain_fasta = os.path.join(pdb_path, cdd+".fasta")
-
     with open(domain_fasta, "w") as fasta:
         for f in glob.glob(os.path.join(pdb_path, "*", "*.pdb")):
             print f
@@ -331,11 +338,12 @@ def cluster(job, dataset_name, cdd, id=0.95):
 
     #Cluster using uclust
     uclust_file = os.path.join(pdb_path, cdd+"_clusters.uc")
+    clusters_file = os.path.join(pdb_path, cdd+"_nr.fasta")
     subprocess.call(["usearch", "-cluster_fast", domain_fasta, "-id", str(id),
-        "-centroids", os.path.join(pdb_path, cdd+"_nr.fasta"), "-uc", uclust_file])
+        "-centroids", clusters_file, "-uc", uclust_file])
 
     #Convert uclust to h5
-    uclust = pd.read_table(uclust_file, comment="#", header=None, names=[
+    uclust = pd.read_table(unicode(uclust_file), comment="#", header=None, names=[
         "record_type",
         "cluster",
         "length",
@@ -352,11 +360,27 @@ def cluster(job, dataset_name, cdd, id=0.95):
     uclust.to_hdf(unicode(os.path.join(pdb_path, cdd+"_clusters.h5")), "table", complevel=9, complib="bzip2")
     os.remove(uclust_file)
 
+    #Copy clustered to new directory
+    cluster_path = os.path.join(pdb_path, "clustered")
+    if not os.path.isdir(cluster_path):
+        os.makedirs(cluster_path)
+
+    for seq in SeqIO.parse(clusters_file, "fasta"):
+        domainId = seq.id[:-2]
+        pdb_group = domainId[1:3].upper()
+        out_dir = os.path.join(cluster_path, pdb_group)
+        if not os.path.isdir(out_dir):
+            os.makedirs(out_dir)
+
+        fname = "{}.fasta".format(domainId)
+        shutil.copy(os.path.join(pdb_path, pdb_group, fname), os.path.join(out_dir, fname))
+
 def start_toil(job, dataset_name, name="prep_protein"):
     for cdd, sfam_id in iter_cdd(use_id=True):
         j = job.addChildJobFn(toil_cdd, dataset_name, cdd, sfam_id)
-        #j.addFollowOnJobFn(convert_pdb_to_mmtf, cdd)
-        j.addFollowOnJobFn(cluster, cdd)
+        j2 = j.addFollowOnJobFn(cluster, dataset_name, cdd)
+        j2.addFollowOnJobFn(convert_pdb_to_mmtf, cdd)
+
 
 if __name__ == "__main__":
     from toil.common import Toil

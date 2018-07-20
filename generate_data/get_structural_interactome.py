@@ -6,6 +6,7 @@ import zlib
 from pyasn1.codec.ber import decoder
 import shutil
 
+import numpy as np
 import pandas as pd
 import dask.dataframe as dd
 
@@ -108,7 +109,8 @@ def get_observed_structural_interactome(job, dataset_name, cdd, sfam_id, cores=N
         meta=meta).compute(scheduler="multiprocessing", num_workers=NUM_WORKERS)
     obs_ints.loc[:, ["mol_res", "int_res"]] = obs_resi
 
-    path = os.path.join(get_interfaces_path(dataset_name), "{}.observed_interactome".format(cdd.replace("/", "")))
+    cdd = cdd.replace("/", "")
+    path = os.path.join(get_interfaces_path(dataset_name), cdd, "{}.observed_interactome".format(cdd))
     job.log("Writing {} ({}) interactome: {}".format(cdd, sfam_id, path))
     try:
         obs_ints.to_hdf(unicode(path), "table", complevel=9, complib="bzip2")
@@ -219,17 +221,24 @@ def get_inferred_structural_interactome_by_table(job, dataset_name, table, cores
         .compute(scheduler="multiprocessing", num_workers=NUM_WORKERS)
 
 def merge_inferred_interactome(job, dataset_name, cdd_name, cdd_id, cores=4):
-    path = get_interfaces_path(dataset_name)
-    if os.path.isfile(os.path.join(path, "{}.inferred_interactome".format(cdd_name))):
+    cdd_name = cdd_name.replace("/", "")
+    path = os.path.join(get_interfaces_path(dataset_name))
+    if os.path.isfile(os.path.join(path, cdd_name, "{}.inferred_interactome".format(cdd_name))):
         return
     for table in xrange(1, 87):
         try:
-            df = pd.read_hdf(os.path.join(path, "Intrac{}".format(table), "{}.inferred_interactome".format(cdd_id)), "table")
+            df = pd.read_hdf(unicode(os.path.join(path, "Intrac{}".format(table), "{}.inferred_interactome".format(cdd_id))), "table")
         except IOError:
-            print "Can't open", os.path.join(path, "Intrac{}".format(table), "{}.inferred_interactome".format(cdd_id))
+            job.log("Can't open {}".format(os.path.join(path, "Intrac{}".format(table), "{}.inferred_interactome".format(cdd_id))))
             continue
-        df.to_hdf(unicode(os.path.join(path, "{}.inferred_interactome".format(cdd_name))), "table", table=True, mode='a', append=True, complevel=9, complib="bzip2", min_itemsize=768)
+        df[["int_superfam_id", "int_taxid"]] = df[["int_superfam_id", "int_taxid"]].astype(np.float64)
+        df.to_hdf(unicode(os.path.join(path, cdd_name, "{}.inferred_interactome.tmp".format(cdd_name))), "table", table=True, mode='a', append=True, complevel=9, complib="bzip2", min_itemsize=768)
         del df
+
+    shutil.move(
+        os.path.join(path, cdd_name, "{}.inferred_interactome.tmp".format(cdd_name)),
+        os.path.join(path, cdd_name, "{}.inferred_interactome".format(cdd_name))
+    )
 
 def start_toil_observed(job, dataset_name):
     for cdd, sfam_id in iter_cdd(use_id=True):
@@ -262,9 +271,23 @@ def start_toil(job, dataset_name):
     if not os.path.isdir(get_interfaces_path(dataset_name)):
         os.makedirs(get_interfaces_path(dataset_name))
 
-    obsjob = job.addChildJobFn(start_toil_observed, dataset_name)
-    infjob = obsjob.addFollowOnJobFn(start_toil_inferred, dataset_name)
-    infmergejob = infjob.addFollowOnJobFn(start_toil_inferred, dataset_name)
+    #obsjob = job.addChildJobFn(start_toil_observed, dataset_name)
+    #infjob = obsjob.addFollowOnJobFn(start_toil_inferred, dataset_name)
+    infmergejob = job.addChildJobFn(start_toil_inferred_merge, dataset_name)
+
+if __name__ == "__main__":
+    from toil.common import Toil
+    from toil.job import Job
+
+    parser = Job.Runner.getDefaultArgumentParser()
+    options = parser.parse_args()
+    options.logLevel = "DEBUG"
+    options.clean = "always"
+    dataset_name = options.jobStore.split(":")[-1]
+
+    job = Job.wrapJobFn(start_toil, dataset_name)
+    with Toil(options) as toil:
+        toil.start(job)
 
 # def submit_jobs(dataset_name, job_type, job_name="interactome", dependency=None):
 #     if not os.path.isdir(get_interfaces_path(dataset_name)):

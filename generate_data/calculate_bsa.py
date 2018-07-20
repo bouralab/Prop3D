@@ -130,15 +130,11 @@ def get_bsa(row):
             (row["int_sdi_from"], row["int_sdi_to"]),
             face1=row["mol_res"], face2=row["int_res"])
 
-    # try:
-    #     os.remove(pdb_file)
-    # except OSError:
-    #     pass
-
     return pd.Series({"bsa":bsa, "ppi_type":ppi_type, "c1_asa":c1_asa, "c2_asa":c2_asa, "complex_asa":complex_asa})
 
 def observed_bsa(job, dataset_name, cdd, cores=NUM_WORKERS):
-    prefix = os.path.join(get_interfaces_path(dataset_name), cdd.replace("/", ""))
+    cdd = cdd.replace("/", "")
+    prefix = os.path.join(get_interfaces_path(dataset_name), cdd, cdd)
     cdd_interactome_path = prefix+".observed_interactome"
 
     cdd_interactome = pd.read_hdf(cdd_interactome_path, "table")
@@ -182,7 +178,8 @@ def get_asa(row):
     return pd.Series({"c2_asa_pred":predicted_bsa, "pred_ratio":ratio, "ppi_type_pred":ppi_type})
 
 def inferred_bsa(job, dataset_name, cdd, cores=NUM_WORKERS):
-    cdd_bsa_path = os.path.join(get_interfaces_path(dataset_name), cdd.replace("/", ""))
+    cdd = cdd.replace("/", "")
+    cdd_bsa_path = os.path.join(get_interfaces_path(dataset_name), cdd, cdd)
     cdd_obs_bsa = pd.read_hdf(cdd_bsa_path+"_bsa.h5", "observed")
     cdd_obs_bsa = cdd_obs_bsa[["obs_int_id", "bsa", "c1_asa", "c2_asa", "complex_asa", "ppi_type"]]
 
@@ -201,32 +198,45 @@ def inferred_bsa(job, dataset_name, cdd, cores=NUM_WORKERS):
 
     inf_bsa.to_hdf(unicode(cdd_bsa_path+"_bsa.h5"), "inferred", complevel=9, complib="bzip2")
 
-def submit_ibis_cdd(dataset_name, job_name="calc_bsa", dependency=None):
-    obsjob = SlurmJob(job_name+"_obs", cpus=14, walltime="8:00:00")
-    infjob = SlurmJob(job_name+"_inf", cpus=14, walltime="8:00:00")
-    for cdd in iter_cdd():
-        obsjob += "{} {} {} obs \"{}\"\n".format(sys.executable, __file__, dataset_name, cdd)
-        infjob += "{} {} {} inf \"{}\"\n".format(sys.executable, __file__, dataset_name, cdd)
-
-
-    obs_jid = obsjob.run(dependency=dependency)
-    #print obs_jid
-
-    inf_jid = obsjob.run(dependency="afterok:"+obs_jid)
-    #print inf_jid
-    return inf_jid
-
 def start_toil(job, dataset_name, name="bsa"):
     for cdd in iter_cdd():
         cjob = job.addChildJobFn(observed_bsa, dataset_name, cdd)
         cjob.addFollowOnJobFn(inferred_bsa, dataset_name, cdd)
 
 if __name__ == "__main__":
-    if len(sys.argv) == 2:
-        submit_ibis_cdd(sys.argv[1])
-    elif len(sys.argv) == 4 and sys.argv[2] == "obs":
-        observed_bsa(sys.argv[1], shlex.split(sys.argv[3])[0])
-    elif len(sys.argv) == 4 and sys.argv[2] == "inf":
-        inferred_bsa(sys.argv[1], shlex.split(sys.argv[3])[0])
-    else:
-        print len(sys.argv), sys.argv
+    from toil.common import Toil
+    from toil.job import Job
+
+    parser = Job.Runner.getDefaultArgumentParser()
+    options = parser.parse_args()
+    options.logLevel = "DEBUG"
+    options.clean = "always"
+    dataset_name = options.jobStore.split(":")[-1]
+
+    job = Job.wrapJobFn(start_toil, dataset_name)
+    with Toil(options) as toil:
+        toil.start(job)
+#
+#     if len(sys.argv) == 2:
+#         submit_ibis_cdd(sys.argv[1])
+#     elif len(sys.argv) == 4 and sys.argv[2] == "obs":
+#         observed_bsa(sys.argv[1], shlex.split(sys.argv[3])[0])
+#     elif len(sys.argv) == 4 and sys.argv[2] == "inf":
+#         inferred_bsa(sys.argv[1], shlex.split(sys.argv[3])[0])
+#     else:
+#         print len(sys.argv), sys.argv
+#
+# def submit_ibis_cdd(dataset_name, job_name="calc_bsa", dependency=None):
+#     obsjob = SlurmJob(job_name+"_obs", cpus=14, walltime="8:00:00")
+#     infjob = SlurmJob(job_name+"_inf", cpus=14, walltime="8:00:00")
+#     for cdd in iter_cdd():
+#         obsjob += "{} {} {} obs \"{}\"\n".format(sys.executable, __file__, dataset_name, cdd)
+#         infjob += "{} {} {} inf \"{}\"\n".format(sys.executable, __file__, dataset_name, cdd)
+#
+#
+#     obs_jid = obsjob.run(dependency=dependency)
+#     #print obs_jid
+#
+#     inf_jid = obsjob.run(dependency="afterok:"+obs_jid)
+#     #print inf_jid
+#     return inf_jid
