@@ -72,12 +72,12 @@ def cluster_interactome(job, df, cdd, sfam_id=None, table="observed"):
     cdd = cdd.replace("/", "")
     if df is None and sfam_id is not None:
         int_path = os.path.join(get_interfaces_path(dataset_name), "{}.h5".format(cdd))
-        df = pd.read_hdf(int_path, table)
+        df = pd.read_hdf(unicode(int_path), table)
     df["pdb_id"] = df.apply(lambda row: "{p}_{c}_sdi{s}_d{d}_{c}".format(
         p=row["int_pdb"], c=row["int_chain"], s=row["int_sdi"], d=row["int_domNo"]), axis=1)
 
     pdb_path = os.path.join(data_path_prefix, "structures", cdd, "{}_clusters.h5".format(cdd))
-    pdb_clusters = pd.read_hdf(pdb_path, "table")
+    pdb_clusters = pd.read_hdf(unicode(pdb_path), "table")
 
     cluster_int = pd.merge(df, pdb_clusters, how="left", left_on="pdb_id", right_on="label_query")
     cluster_int = cluster_int.groupby("label_target").apply(process_cluster)
@@ -120,7 +120,7 @@ def combine(df):
 
 def filter_interfaces(job, interface, status, ppi_type):
     try:
-        df = pd.read_hdf("{}_bsa.h5".format(interface), status)
+        df = pd.read_hdf(unicode("{}_bsa.h5".format(interface)), status)
     except (IOError, KeyError):
         return
 
@@ -149,8 +149,8 @@ def filter_interfaces(job, interface, status, ppi_type):
 
 def filter_mixed_interfaces(job, interface, ppi_type):
     try:
-        obs = dd.read_hdf(interface+".observed.h5", ppi_type)
-        inf = dd.read_hdf(interface+".inferred.h5", ppi_type)
+        obs = dd.read_hdf(unicode(interface+".observed.h5"), ppi_type)
+        inf = dd.read_hdf(unicode(interface+".inferred.h5"), ppi_type)
     except (IOError, KeyError):
         return
 
@@ -165,7 +165,7 @@ def filter_mixed_interfaces(job, interface, ppi_type):
 def filter_data(job, dataset_name, cdd, cores=NUM_WORKERS):
     interface = os.path.join(get_interfaces_path(dataset_name), cdd, cdd)
     # try:
-    #     obs_df = pd.read_hdf(interface+".observed_bsa", "table")
+    #     obs_df = pd.read_hdf(unicode(interface+".observed_bsa"), "table")
     # except (IOError, KeyError):
     #     return
     #
@@ -181,7 +181,7 @@ def filter_data(job, dataset_name, cdd, cores=NUM_WORKERS):
     # filtered_interfaces["resi"] = filtered_interfaces["resi"].astype(str)
 
     #Save interfaces
-    #filtered_interfaces.to_hdf("{}.h5".format(interface), "observed")
+    #filtered_interfaces.to_hdf(unicode("{}.h5".format(interface)), "observed")
     #obs_clustered = cluster_interactome(obs_df)
     #obs_clustered
 

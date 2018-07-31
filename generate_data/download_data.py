@@ -50,7 +50,7 @@ def download_consurf(job):
     consurf_path = os.path.join(data_path_prefix, "ConSurf")
     if True: #len(next(os.walk(consurf_path))[1]) == 0:
         # mmdb_path = os.path.join(data_path_prefix, "MMDB.h5")
-        # pdbs = pd.read_hdf(mmdb_path, "StrucutralDomains")[["pdbId", "chnLett"]].drop_duplicates().dropna()
+        # pdbs = pd.read_hdf(unicode(mmdb_path), "StrucutralDomains")[["pdbId", "chnLett"]].drop_duplicates().dropna()
         # pdbs.apply(lambda r: download_consurf(r["pdbId"], r["chnLett"]), axis=1)
         download_consurf_all()
     job.log("DONE CONSURF")

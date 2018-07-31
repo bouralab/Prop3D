@@ -46,7 +46,7 @@ def extract_domain(dataset_name, pdb_file, pdb, chain, sdi, domNo, cdd):
     if not os.path.isfile(pdb_file):
         raise RuntimeError("Invalid PDB File, cannot find {}".format(pdb_file))
 
-    sdoms = pd.read_hdf(os.path.join(data_path_prefix, "PDB.h5"), "StructuralDomains")
+    sdoms = pd.read_hdf(unicode(os.path.join(data_path_prefix, "PDB.h5")), "StructuralDomains")
     sdoms = sdoms[sdoms["sdi"]==int(sdi)]
     if sdoms.shape[0] == 0:
         raise RuntimeError("sdi does not exist in "+pdb_file)
@@ -240,9 +240,10 @@ def process_domain(job, dataset_name, pdb, chain, sdi, domNo, cdd):
         job.log("Cannot process {}.{}.d{} ({}), pdb DNE".format(pdb, chain, domNo, sdi))
         return
     try:
-        domain_file = extract_domain(pdb_file, pdb, chain, sdi, domNo, cdd)
+        domain_file = extract_domain(dataset_name, pdb_file, pdb, chain, sdi, domNo, cdd)
         try:
             run_structure(domain_file)
+            print "Wrote", domain_file
         except RuntimeError as e:
             job.log(str(e))
             pass
@@ -255,7 +256,7 @@ def process_domain(job, dataset_name, pdb, chain, sdi, domNo, cdd):
 def toil_cdd(job, dataset_name, cdd, sfam_id):
     pdb_path = os.path.join(PDB_PATH, dataset_name)
 
-    all_sdoms = pd.read_hdf(os.path.join(data_path_prefix, "PDB.h5"), "merged")
+    all_sdoms = pd.read_hdf(unicode(os.path.join(data_path_prefix, "PDB.h5")), "merged")
     sdoms_groups = all_sdoms.groupby("sfam_id")
 
     try:
@@ -282,7 +283,11 @@ def toil_cdd(job, dataset_name, cdd, sfam_id):
         pdb_path = os.path.join(PDB_PATH, cdd, pdbId[1:3].upper())
         domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdbId, chnLett, sdi, domNo))
         if not os.path.isfile(domain_file):
-            job.addChildJobFn(process_domain, dataset_name, pdbId, chnLett, sdi, domNo, cdd)
+            #try:
+            #    job.addChildJobFn(process_domain, dataset_name, pdbId, chnLett, sdi, domNo, cdd)
+            #except AttributeError:
+            if True:
+                process_domain(job, dataset_name, pdbId, chnLett, sdi, domNo, cdd)
 
 def convert_pdb_to_mmtf(job, dataset_name, cdd):
     pdb_path = os.path.join(PDB_PATH, dataset_name, cdd.replace("/", ""))
@@ -318,15 +323,20 @@ def cluster(job, dataset_name, cdd, id=0.95):
     domain_fasta = os.path.join(pdb_path, cdd+".fasta")
     with open(domain_fasta, "w") as fasta:
         for f in glob.glob(os.path.join(pdb_path, "*", "*.pdb")):
-            print f
-            print subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_toseq.py"),
+            subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_toseq.py"),
                 f], stdout=fasta, stderr=subprocess.PIPE)
 
     #Order domains by resolution so the ones with the highest resolutions are centroids
     resolutions = pd.read_table(os.path.join(os.path.dirname(RAW_PDB_PATH), "resolu.idx"),
         header=None, names=["pdbId", "resolution"], skiprows=6, sep="\t;\t")
-    pdbs, ids, sequences = zip(*[(s.id.split("_", 1)[0].upper(), s.id, str(s.seq)) \
-        for s in SeqIO.parse(domain_fasta, "fasta")])
+
+    try:
+        pdbs, ids, sequences = zip(*[(s.id.split("_", 1)[0].upper(), s.id, str(s.seq)) \
+            for s in SeqIO.parse(domain_fasta, "fasta")])
+    except ValueError:
+        job.log("Unable to cluster {}. No PDBs passed the protonation/minization steps.".format(cdd))
+        return
+
     domains = pd.DataFrame({"pdbId":pdbs, "domainId":ids, "sequence":sequences})
     domains = pd.merge(domains, resolutions, how="left", on="pdbId")
     xray = domains[domains["resolution"] >= 0.].sort_values("resolution")
@@ -372,14 +382,33 @@ def cluster(job, dataset_name, cdd, id=0.95):
         if not os.path.isdir(out_dir):
             os.makedirs(out_dir)
 
-        fname = "{}.fasta".format(domainId)
+        fname = "{}.pdb".format(domainId)
         shutil.copy(os.path.join(pdb_path, pdb_group, fname), os.path.join(out_dir, fname))
+
+def create_data_loader(job, dataset_name, cdd):
+    cdd = cdd.replace("/", "")
+    pdb_path = os.path.join(PDB_PATH, dataset_name, cdd)
+    clusters_file = os.path.join(pdb_path, cdd+"_nr.fasta")
+    id_format = re.compile("^([A-Z0-9]{4}_([A-Za-z0-9]+)_sdi([0-9]+)_d([0-9]+)$")
+
+    try:
+        pdb, chain, sdi, domain = zip(*[id_format.match(seq.id[:-2]).groups() \
+            for s in SeqIO.parse(clusters_file, "fasta")])
+    except ValueError:
+        job.log("Unable to create data loading file for {}.".format(cdd))
+        return
+
+    domains = pd.DataFrame({"pdb":pdb, "chain":chain, "domNo":domain, "sdi":sdi})
+
+    data_loader = os.path.join(pdb_path, "{}.h5".format(cdd))
+    domains.to_hdf(unicode(data_loader), "table", complevel=9, complib="bzip2")
 
 def start_toil(job, dataset_name, name="prep_protein"):
     for cdd, sfam_id in iter_cdd(use_id=True):
         j = job.addChildJobFn(toil_cdd, dataset_name, cdd, sfam_id)
         j2 = j.addFollowOnJobFn(cluster, dataset_name, cdd)
-        j2.addFollowOnJobFn(convert_pdb_to_mmtf, cdd)
+        j2.addFollowOnJobFn(create_data_loader, dataset_name, cdd)
+        j2.addFollowOnJobFn(convert_pdb_to_mmtf, dataset_name, cdd)
 
 
 if __name__ == "__main__":
@@ -395,6 +424,11 @@ if __name__ == "__main__":
     job = Job.wrapJobFn(start_toil, dataset_name)
     with Toil(options) as toil:
         toil.start(job)
+
+    # for cdd, sfam_id in iter_cdd(use_id=True, label="Ig"):
+    #     toil_cdd(None, "default", cdd, sfam_id)
+    #     cluster(None, "default", cdd)
+    #     convert_pdb_to_mmtf(None, "default", cdd)
 
 
 # if __name__ == "__main__":

@@ -36,7 +36,7 @@ def iter_cdd(use_label=True, use_id=False, label=None, id=None):
     elif not use_label and use_id:
         col = 2
 
-    CDD = pd.read_hdf(os.path.join(data_path_prefix, "MMDB.h5"), "Superfamilies")
+    CDD = pd.read_hdf(unicode(os.path.join(data_path_prefix, "MMDB.h5")), "Superfamilies")
     CDD = CDD[["label", "sfam_id"]].drop_duplicates().dropna()
 
     if label is not None:

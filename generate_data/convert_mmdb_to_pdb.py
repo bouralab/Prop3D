@@ -26,7 +26,7 @@ def convert_row(job, row):
 def mmdb2pdb(job, pdb_group=None, dask=False, cores=NUM_WORKERS):
     mmdb_path = os.path.join(data_path_prefix, "MMDB.h5")
     cols = ["from", "to"]
-    sdoms = pd.read_hdf(mmdb_path, "StrucutralDomains")
+    sdoms = pd.read_hdf(unicode(mmdb_path), "StrucutralDomains")
 
     if pdb_group is not None:
         tmp_path = os.path.join(data_path_prefix, "__mmdb_to_pdb", "{}.h5".format(pdb_group))
@@ -67,23 +67,59 @@ def merge(job, cores=4):
         pdb_group = os.path.basename(pdb_group)
         pdb_group_path = os.path.join(tmp_path, "{}.h5".format(pdb_group.lower()))
         try:
-            df = pd.read_hdf(pdb_group_path, "table")
+            df = pd.read_hdf(unicode(pdb_group_path), "table")
         except IOError:
             continue
         df[['from', 'to']] = df[['from', 'to']].astype(int)
         df.to_hdf(unicode(output+".tmp"), "StructuralDomains", table=True, mode='a', append=True, complevel=9, complib="bzip2", min_itemsize=768)
         del df
 
-    sfams = pd.read_hdf(os.path.join(data_path_prefix, "MMDB.h5"), "Superfamilies")
+    sfams = pd.read_hdf(unicode(os.path.join(data_path_prefix, "MMDB.h5")), "Superfamilies")
     sfams = df[['sdsf_id', 'sdi', 'sfam_id', 'label', 'whole_chn', 'mmdb_id', 'mol_id', 'pssm']]
     sfams.to_hdf(unicode(output+".tmp"), "Superfamilies", complevel=9, complib="bzip2", min_itemsize=768)
 
-    sdoms = pd.read_hdf(output+".tmp", "StructuralDomains")
+    sdoms = pd.read_hdf(unicode(output+".tmp"), "StructuralDomains")
     merged = pd.merge(sdoms, sfams, how="left", on="sdi").dropna()
     merged.to_hdf(unicode(output+".tmp"), "merged", complevel=9, complib="bzip2", min_itemsize=768)
 
     shutil.move(output+".tmp", output)
     shutil.rmtree(tmp_path)
+
+def toil_pdb_groups(job):
+    pdb_dir = os.path.join(data_path_prefix, "pdb", "pdb")
+    tmp_path = os.path.join(data_path_prefix, "__mmdb_to_pdb")
+    if os.path.isdir(tmp_path):
+        shutil.rmtree(tmp_path)
+    os.makedirs(tmp_path)
+
+    for pdb_group in next(os.walk(pdb_dir))[1]:
+        pdb_group = os.path.basename(pdb_group)
+        job.addChildJobFn(mmdb2pdb, pdb_group=pdb_group)
+
+def start_toil(job, name="mdb2pdb"):
+    """Initiate Toil Jobs for converting MMDB to PDB
+
+    Paramters
+    ---------
+    job : toil.Job
+
+    Return
+    ------
+    mmdb2pdb : toil.Job
+    """
+    if os.path.isfile(os.path.join(data_path_prefix, "PDB.h5")):
+        return
+
+    job2 = job.addChildJobFn(toil_pdb_groups)
+    job2.addFollowOnJobFn(merge)
+
+if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        submit_jobs()
+    elif len(sys.argv) == 2 and sys.argv[1] == "merge":
+        merge()
+    elif len(sys.argv) == 2:
+        convert_pdb_group(sys.argv[1])
 
 # def submit_jobs(job_name="mmdb2pdb"):
 #     pdb_dir = os.path.join(data_path_prefix, "pdb", "pdb")
@@ -100,37 +136,3 @@ def merge(job, cores=4):
 #     job2 += "{} {} merge\n".format(sys.executable, __file__)
 #     jid2 = job2.submit_individual(dependency="afterany:"+jid)
 #     return jid2
-
-def start_toil(job, name="mdb2pdb"):
-    """Initiate Toil Jobs for converting MMDB to PDB
-
-    Paramters
-    ---------
-    job : toil.Job
-
-    Return
-    ------
-    mmdb2pdb : toil.Job
-    """
-    if os.path.isfile(os.path.join(data_path_prefix, "PDB.h5")):
-        return
-
-    pdb_dir = os.path.join(data_path_prefix, "pdb", "pdb")
-    tmp_path = os.path.join(data_path_prefix, "__mmdb_to_pdb")
-    if os.path.isdir(tmp_path):
-        shutil.rmtree(tmp_path)
-    os.makedirs(tmp_path)
-
-    for pdb_group in next(os.walk(pdb_dir))[1]:
-        pdb_group = os.path.basename(pdb_group)
-        job.addChildJobFn(mmdb2pdb, pdb_group=pdb_group)
-
-    job.addFollowOnJobFn(merge)
-
-if __name__ == "__main__":
-    if len(sys.argv) == 1:
-        submit_jobs()
-    elif len(sys.argv) == 2 and sys.argv[1] == "merge":
-        merge()
-    elif len(sys.argv) == 2:
-        convert_pdb_group(sys.argv[1])
