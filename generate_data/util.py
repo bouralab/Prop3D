@@ -30,7 +30,7 @@ def initialize_data(dataset_name):
     os.environ["MOLMIMIC_FEATURES"] = get_features_path(dataset_name)
     os.environ["MOLMIMIC_INTERFACES"] = get_interfaces_path(dataset_name)
 
-def iter_cdd(use_label=True, use_id=False, label=None, id=None):
+def iter_cdd(use_label=True, use_id=False, label=None, id=None, group_superfam=False, all_superfam=False):
     if use_label and not use_id:
         col = 1
     elif not use_label and use_id:
@@ -47,12 +47,30 @@ def iter_cdd(use_label=True, use_id=False, label=None, id=None):
     CDD["label"] = CDD["label"].apply(lambda cdd: cdd.replace("/", "").replace("'", "\'") if isinstance(cdd, str) else cdd)
     CDD.sort_values("label", inplace=True)
 
-    if use_label and use_id:
-        for cdd in CDD.itertuples():
-            yield cdd[1], cdd[2]
+    if group_superfam:
+        groups = CDD.groupby("sfam_id")
+        if all_superfam:
+            if use_label and use_id:
+                for superfam_id, families in groups:
+                    yield families.itertuples(), superfam_id
+            else:
+                for superfam_id, families in groups:
+                    yield families.itertuples()
+        else:
+            if use_label and use_id:
+                for superfam_id, families in groups:
+                    yield next(families.itertuples())[1], superfam_id
+            else:
+                for superfam_id, families in groups:
+                    yield next(families.itertuples())[1]
     else:
-        for cdd in CDD.itertuples():
-            yield cdd[col]
+        if use_label and use_id:
+            for cdd in CDD.itertuples():
+                yield cdd[1], cdd[2]
+        else:
+            for cdd in CDD.itertuples():
+                yield cdd[col]
+
 
 class InvalidPDB(RuntimeError):
     pass
