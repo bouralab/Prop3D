@@ -20,13 +20,12 @@ seaborn
 openbabel
 freesasa
 tqdm
-pdb-tools (https://github.com/JoaoRodrigues/pdb-tools)
+toil
 ```
 Non python requirements:
 ```
 pdb2pqr
 rosetta
-snakemake
 ```
 Optional:
 ```
@@ -48,11 +47,12 @@ singularity pull shub://edraizen/SingularityTorch
 To create all of the necessary data, please run the Snakemake pipeline in the data directory
 
 ```
-cd data
-snakemake all
+mkdir scratch & cd scratch
+export SLURM_TOIL_ARGS = "-p PARTITION"...
+python /path/to/molmimic/generate_data/build_full_dataset.py dataset_name
 ```
 
-Feel free to configure a cluster to use with snakemake. Please see the README in the data directory for more information.
+Replace dataset_name with the name of the dataset, or path to aws or google cloud. Please see the README in the data directory for more information.
 
 ![Data Generation Pipeline](figures/data_generation_pipeline.png)
 
