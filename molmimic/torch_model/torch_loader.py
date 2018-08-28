@@ -121,6 +121,178 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
     return batch
 
 class IBISDataset(Dataset):
+    """IBIS Dataset used to train 3D-CNN (Unet) to predict binding site residues.
+    Protein domains are split from protein structures in MMDB using their
+    structural domain ids (sdi) and are grouped by superfamily. Only domains with
+    binding sites defined in IBIS are included. The data generation pipline must
+    be called before using this Dataset.
+
+    Parameters
+    ----------
+    dataset_name : str
+        Name of data to use. Should be "default"
+
+    cdd : str
+        Name of CDD Protein Family
+    """
+    def __init__(self, dataset_name, cdd, ppi_status="mixed", ppi_type="permanent", clustered=True):
+        assert ppi_status in ["mixed", "observed", "inferred"]
+        assert ppi_type in ["all", "strong", "weak_transient", "transient"]
+        self.dataset_name = dataset_name
+        self.cdd = cdd.replace("/", "")
+        self.ppi_status = ppi_status
+        self.ppi_type = ppi_type
+
+        interfaces_path = os.path.join(get_structures_path(dataset_name), cdd, cdd)
+
+        if ppi_status == "mixed":
+            interfaces_path += ".mixed"
+
+        if clustered:
+            interfaces_path += ".clustered"
+
+        self.X = pd.read_hdf(unicode(interfaces_path+".h5"), ppi_type)
+
+    def __getitem__(self, index, verbose=True):
+        datum = self.X.iloc[index]
+        pdb_file = "{}_{}_sdi{}_d{}.pdb".format(datum.pdb, datum.chain, datum.sdi, data.domNo)
+        pdb_file = os.path.join(get_structures_path(self.dataset_name), self.cdd, "clustered", pdb_file)
+
+        try:
+            indices, data, truth = Structure.features_from_string(
+                file                  = pdb_file,
+                pdb                   = datum.pdb,
+                chain                 = datum.chain,
+                sdi                   = datum.sdi,
+                domain                = datum.domNo,
+                resi                  = datum.resi,
+                rotate                = True,
+                use_deepsite_features = True
+            )
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except InvalidPDB, RuntimeError:
+            trace = traceback.format_exc()
+            with open("{}_{}_{}.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
+                print trace
+                print >> ef, trace
+
+            sample = {
+                "indices":      None,
+                "data":         None
+                "truth":        None,
+                "pdb":          datum.pdb,
+                "chain":        datum.chain,
+                "sdi":          datum.sdi,
+                "domain":       datum.domNo,
+                "dataset_name": self.dataset_name,
+                "cdd":          self.cdd
+            }
+        except:
+            trace = traceback.format_exc()
+            print "Error:", trace
+            with open("{}_{}_{}_ibis.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
+                print >> ef, trace
+            raise
+
+        sample = {
+            "indices":      indices,
+            "data":         np.nan_to_num(data),
+            "truth":        truth,
+            "pdb":          datum.pdb,
+            "chain":        datum.chain,
+            "sdi":          datum.sdi,
+            "domain":       datum.domNo,
+            "dataset_name": self.dataset_name,
+            "cdd":          self.cdd
+        }
+
+
+        return sample
+
+    def __len__(self):
+        return self.X.shape[0]
+
+class MMDBDataset(Dataset):
+    """Full MMDB Dataset used to train a protein family autoencoder to learn the
+    ideal representaions according to the NN and feature selection, which can be
+    used for downstream anylysis. Protein domains are slit from protein structures
+    in MMDB using their structural domain ids (sdi) and are grouped by superfamily.
+    A PDB file is included even if no binding sites are defined. The data
+    generation pipline must be called before using this Dataset.
+
+    Parameters
+    ----------
+    dataset_name : str
+        Name of data to use. Should be "default"
+
+    cdd : str
+        Name of CDD Protein Family
+    """
+    def __init__(self, dataset_name, cdd):
+        self.dataset_name = dataset_name
+        self.cdd = cdd
+        self.X = pd.read_hdf(unicode(os.path.join(get_structures_path(dataset_name), cdd, "{}.h5".format(cdd))), "table")
+
+    def __getitem__(self, index, verbose=True):
+        datum = self.X.iloc[index]
+        pdb_file = "{}_{}_sdi{}_d{}.pdb".format(datum.pdb, datum.chain, datum.sdi, data.domNo)
+        pdb_file = os.path.join(get_structures_path(self.dataset_name), self.cdd, "clustered", pdb_file)
+
+        try:
+            indices, data, truth = Structure.features_from_string(
+                file                  = pdb_file
+                pdb                   = datum.pdb,
+                chain                 = datum.chain,
+                sdi                   = datum.sdi,
+                domain                = datum.domNo,
+                rotate                = True,
+                use_deepsite_features = True,
+            )
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except InvalidPDB, RuntimeError:
+            trace = traceback.format_exc()
+            with open("{}_{}_{}.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
+                print trace
+                print >> ef, trace
+
+            sample = {
+                "indices":      None,
+                "data":         None
+                "truth":        None,
+                "pdb":          datum.pdb,
+                "chain":        datum.chain,
+                "sdi":          datum.sdi,
+                "domain":       datum.domNo,
+                "dataset_name": self.dataset_name,
+                "cdd":          self.cdd
+            }
+        except:
+            trace = traceback.format_exc()
+            print "Error:", trace
+            with open("{}_{}_{}_ibis.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
+                print >> ef, trace
+            raise
+
+        sample = {
+            "indices":      indices,
+            "data":         np.nan_to_num(data),
+            "truth":        truth,
+            "pdb":          datum.pdb,
+            "chain":        datum.chain,
+            "sdi":          datum.sdi,
+            "domain":       datum.domNo,
+            "dataset_name": self.dataset_name,
+            "cdd":          self.cdd
+        }
+
+        return sample
+
+    def __len__(self):
+        return self.X.shape[0]
+
+class IBISDataset2(Dataset):
     def __init__(self, ibis_data, transform=True, input_shape=(264,264,264), tax_glob_group="A_eukaryota", num_representatives=2, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, course_grained=False, expand_atom=False, start_index=0, end_index=None, undersample=False, oversample=False, remove_multimers=False, cellular_organisms=False, random_features=None, train=True):
         self.transform = transform
         self.only_aa = only_aa

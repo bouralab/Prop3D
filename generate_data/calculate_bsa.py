@@ -60,7 +60,8 @@ def get_pdb(pdb, chain1, chain2, sdi1, sdi2):
             stdin=splitchain1.stdout,
             stdout=output,
             stderr=subprocess.PIPE)
-        splitdomain1.communicate()
+        out1, err1 = splitdomain1.communicate()
+
         if chain2 is not None and sdi2 is not None:
             splitchain2 = subprocess.Popen(
                 [sys.executable, os.path.join(PDB_TOOLS, "pdb_selchain.py"), "-{}".format(chain2), tmp_pdb_path],
@@ -71,13 +72,16 @@ def get_pdb(pdb, chain1, chain2, sdi1, sdi2):
                 stdin=splitchain2.stdout,
                 stdout=output,
                 stderr=subprocess.PIPE)
-            splitdomain2.communicate()
+            out2, err2 = splitdomain2.communicate()
 
-    os.remove(tmp_pdb.name)
+    print "ERR1", out1, err1, tmp_pdb.name, sdi1
+
+    #os.remove(tmp_pdb.name)
 
     return tmp_pdb2.name
 
 def run_freesasa(command):
+    print " ".join(command)
     FNULL = open(os.devnull, 'w')
     freesasa = subprocess.check_output(command, stderr=FNULL)
     freesasa = "{"+freesasa.split("\n",1)[1]
@@ -140,25 +144,21 @@ def calculate_buried_surface_area(pdb_file, pdb, chain1, chain2, sdi_sel1=None, 
         return bsa, "unknown", c1_asa, c2_asa, complex_asa
 
 def calculate_surface_area_chain(pdb_file, pdb, chain, sdi=None, face=None):
-    sdi_from, sdi_to = sdi
+    command = ["freesasa", "--format=json", "--chain-groups={}".format(chain)]
 
-    command = ["freesasa", "--chain-groups={}".format(chain)]
-
-    if sdi_sel is not None:
+    if sdi is not None:
         command.append("--select=domain, resi {}".format(sdi))
 
     if face is not None:
         residues = face.replace(",", "+")
         selection = "binding-site, chain {} and resi {}".format(chain, residues)
-        command.append("--select={}".format(selection))
+        command.append("--select='{}'".format(selection))
 
     command.append(pdb_file)
 
-    print " ".join(command)
-
     freesasa = run_freesasa(command)
 
-    if sdi_sel is not None:
+    if sdi is not None:
         try:
             return freesasa["results"][1]["structure"][0]["selections"][0]["area"]
         except (IndexError, KeyError):
@@ -166,11 +166,12 @@ def calculate_surface_area_chain(pdb_file, pdb, chain, sdi=None, face=None):
     return freesasa["results"][1]["structure"][0]["area"]["total"]
 
 def get_bsa(df):
+    print "DF is {} {} {} {}".format(type(df), df.shape, df.iloc[0].mol_sdi, df)
     r = df.iloc[0]
 
     if any(r[["mol_chain", "int_chain"]].isna()):
         #Cannot process chain, so bsa is unknown
-        return pd.Series({"bsa":np.nan, "ppi_type":"unknown", "c1_asa":np.nan, "c2_asa":np.nan, "complex_asa":np.nan})
+        return pd.Series({"mol_sdi":np.nan, "bsa":np.nan, "ppi_type":"unknown", "c1_asa":np.nan, "c2_asa":np.nan, "complex_asa":np.nan})
 
     #If interacting domain is not well defined, use the entire chain
     df[["int_sdi_from"]] = df[["int_sdi_from"]].fillna(1)
@@ -183,12 +184,12 @@ def get_bsa(df):
           for row in df.itertuples()])
     except ValueError:
         #There is a NaN in mol sdi or from to: Invalid!
-        return pd.Series({"bsa":np.nan, "ppi_type":"unknown", "c1_asa":np.nan, "c2_asa":np.nan, "complex_asa":np.nan})
+        return pd.Series({"mol_sdi":np.nan, "bsa":np.nan, "ppi_type":"unknown", "c1_asa":np.nan, "c2_asa":np.nan, "complex_asa":np.nan})
 
     try:
         pdb_file = get_pdb(r["mol_pdb"], r["mol_chain"], r["int_chain"], sdi1, sdi2)
     except IOError:
-        return pd.Series({"bsa":np.nan, "ppi_type":"unknown", "c1_asa":np.nan, "c2_asa":np.nan, "complex_asa":np.nan})
+        return pd.Series({"mol_sdi":np.nan, "bsa":np.nan, "ppi_type":"unknown", "c1_asa":np.nan, "c2_asa":np.nan, "complex_asa":np.nan})
 
     bsa, ppi_type, c1_asa, c2_asa, complex_asa = calculate_buried_surface_area(
         pdb_file, r["mol_pdb"], r["mol_chain"], r["int_chain"],
@@ -199,25 +200,51 @@ def get_bsa(df):
     except OSError:
         pass
 
-    return pd.Series({"bsa":bsa, "ppi_type":ppi_type, "c1_asa":c1_asa, "c2_asa":c2_asa, "complex_asa":complex_asa})
+    return pd.Series({"mol_sdi":r.mol_sdi, "bsa":bsa, "ppi_type":ppi_type, "c1_asa":c1_asa, "c2_asa":c2_asa, "complex_asa":complex_asa})
 
 def observed_bsa(job, dataset_name, cdd, cores=NUM_WORKERS):
-    cdd = cdd.replace("/", "")
-    prefix = os.path.join(get_interfaces_path(dataset_name), cdd, cdd)
+    job.log("CDD {}".format(cdd))
+    prefix = os.path.join(get_interfaces_path(dataset_name), "by_superfamily", str(int(cdd)), str(int(cdd)))
+
+    if os.path.isfile(prefix+"_bsa.h5"):
+        store = pd.HDFStore(unicode(prefix+"_bsa.h5"))
+        if "/observed" in store.keys():
+            store.close()
+            return
+        store.close()
+
     cdd_interactome_path = prefix+".observed_interactome"
+    print cdd_interactome_path
 
     cdd_interactome = pd.read_hdf(unicode(cdd_interactome_path), "table")
+
+    if cdd_interactome.shape[0] == 0:
+        job.log("CDD observed interactome is empty -- FIX!!!")
+        return
+
+    job.log("KEYS: {}".format(cdd_interactome.columns))
+    job.log("{}".format(cdd_interactome))
+
     cdd_interactome = cdd_interactome[cdd_interactome["mol_chain"] != cdd_interactome["int_chain"]]
+
+    if cdd_interactome.shape[0] == 0:
+        job.log("CDD observed interactome contains intra-chain PPI, skipped -- FIX!!!")
+        return
 
     #Remove redundant interfaces
     cdd_interactome = cdd_interactome.groupby(["obs_int_id", "mol_sdi_from", "mol_sdi_to"],
-        as_index=False).apply(lambda df: df.iloc[0]).reset_index(drop=True).copy()
+        as_index=False).nth(0).reset_index(drop=True).copy()
 
+    print cdd_interactome
+
+    job.log("KEYS: {} {}".format(cdd_interactome.columns, cdd_interactome.shape))
     bsa = Parallel(n_jobs=NUM_WORKERS)(delayed(get_bsa)(group) for _, group in \
-        cdd_interactome.groupby("mol_sdi_id", as_index=False))
+        cdd_interactome.groupby("mol_sdi", as_index=False))
     bsa = pd.DataFrame(bsa)
 
-    cdd_interactome = pd.concat([cdd_interactome, bsa], axis=1)
+    assert bsa.shape[0] > 0, "{} {}".format(cdd, bsa)
+
+    cdd_interactome = pd.merge(cdd_interactome, bsa, how="left", on="mol_sdi")
 
     # df = dd.from_pandas(cdd_interactome, npartitions=NUM_WORKERS)
     #
@@ -230,15 +257,23 @@ def observed_bsa(job, dataset_name, cdd, cores=NUM_WORKERS):
     cdd_interactome.to_hdf(unicode(prefix+"_bsa.h5"), "observed", complevel=9, complib="bzip2")
 
 def get_asa(df):
+    df = df.reset_index(drop=True)
     r = df.iloc[0]
-    sdi1 = ["{}-{}".format(int(row.mol_sdi_from), int(row.mol_sdi_to)) for row in df.itertuples()]
+
+    try:
+        sdi1 = ["{}:{}".format(int(row.mol_sdi_from), int(row.mol_sdi_to)) for row in df.itertuples()]
+    except:
+        print "Failed due to being Series? {}".format(type(df))
+        print "DF is {}".format(df)
+        raise
+
     try:
         pdb_file = get_pdb(r["mol_pdb"], r["mol_chain"], None, sdi1, None)
     except IOError:
-        return pd.Series({"c2_asa_pred":np.nan, "pred_ratio":np.nan})
+        return pd.Series({"mol_sdi":np.nan, "c2_asa_pred":np.nan, "pred_ratio":np.nan})
 
     asa = calculate_surface_area_chain(
-        pdb_file, r["mol_pdb"], r["mol_chain"], face=row["mol_resi"])
+        pdb_file, r.mol_pdb, r.mol_chain, face=r.mol_resi)
 
     try:
         os.remove(pdb_file)
@@ -254,13 +289,31 @@ def get_asa(df):
     else:
         ppi_type = "unknown"
 
-    return pd.Series({"c2_asa_pred":predicted_bsa, "pred_ratio":ratio, "ppi_type_pred":ppi_type})
+    return pd.Series({"mol_sdi":df.mol_sdi, "c2_asa_pred":predicted_bsa, "pred_ratio":ratio, "ppi_type_pred":ppi_type})
 
 def inferred_bsa(job, dataset_name, cdd, cores=NUM_WORKERS):
-    cdd = cdd.replace("/", "")
-    cdd_bsa_path = os.path.join(get_interfaces_path(dataset_name), cdd, cdd)
-    cdd_obs_bsa = pd.read_hdf(unicode(cdd_bsa_path+"_bsa.h5"), "observed")
-    cdd_obs_bsa = cdd_obs_bsa[["obs_int_id", "bsa", "c1_asa", "c2_asa", "complex_asa", "ppi_type"]]
+    job.log("INF CDD {}".format(cdd))
+    cdd_bsa_path = os.path.join(get_interfaces_path(dataset_name), "by_superfamily", str(int(cdd)), str(int(cdd)))
+
+    if not os.path.isfile(cdd_bsa_path+"_bsa.h5"):
+        job.log("observed bsa must exist")
+        return
+
+    store = pd.HDFStore(unicode(cdd_bsa_path+"_bsa.h5"))
+
+    if "/inferred" in store.keys():
+        return
+
+    try:
+        cdd_obs_bsa = store.get("/observed")
+    except KeyError:
+        raise RuntimeError("Must calculate observed BSAs first")
+
+    try:
+        cdd_obs_bsa = cdd_obs_bsa[["obs_int_id", "bsa", "c1_asa", "c2_asa", "complex_asa", "ppi_type"]]
+    except KeyError:
+        job.log("Failed due to column select {}".format(cdd_obs_bsa.columns))
+        raise
 
     inf_interactome = pd.read_hdf(unicode(cdd_bsa_path+".inferred_interactome"), "table")
 
@@ -268,29 +321,28 @@ def inferred_bsa(job, dataset_name, cdd, cores=NUM_WORKERS):
     del inf_interactome["obs_int_id"]
 
     #Remove redundant interfaces
-    inf_interactome = cdd_interactome.groupby(["obs_int_id", "mol_sdi_from", "mol_sdi_to"],
-        as_index=False).apply(lambda df: df.iloc[0]).reset_index(drop=True).copy()
+    inf_interactome = inf_interactome.groupby(["mol_sdi", "nbr_obs_int_id", "mol_sdi_from", "mol_sdi_to"],
+        as_index=False).nth(0).reset_index(drop=True).copy()
 
     bsa = Parallel(n_jobs=NUM_WORKERS)(delayed(get_asa)(group) for _, group in \
-        inf_interactome.groupby("mol_sdi_id", as_index=False))
+        inf_interactome.groupby(["mol_sdi", "nbr_obs_int_id"], as_index=False))
     bsa = pd.DataFrame(bsa)
+    bsa["mol_sdi"] = bsa["mol_sdi"].astype(float)
 
-    cdd_interactome = pd.concat([cdd_interactome, bsa], axis=1)
+    inf_interactome = pd.merge(inf_interactome, bsa, how="left", on="mol_sdi")
 
-    df = dd.from_pandas(inf_bsa, npartitions=NUM_WORKERS)
-
-    meta = pd.DataFrame({"c2_asa_pred":[1.], "pred_ratio":[1.], "ppi_type_pred":["1"]})
-    bsa = df.map_partitions(lambda _df: _df.apply(get_asa, axis=1), meta=meta)\
-        .compute(scheduler="multiprocessing", num_workers=NUM_WORKERS)
-
-    inf_bsa[bsa.columns] = bsa
-
-    inf_bsa.to_hdf(unicode(cdd_bsa_path+"_bsa.h5"), "inferred", complevel=9, complib="bzip2")
+    inf_interactome.to_hdf(unicode(cdd_bsa_path+"_bsa.h5"), "inferred", complevel=9, complib="bzip2")
 
 def start_toil(job, dataset_name, name="bsa"):
-    for cdd in iter_cdd():
-        cjob = job.addChildJobFn(observed_bsa, dataset_name, cdd)
-        #cjob.addFollowOnJobFn(inferred_bsa, dataset_name, cdd)
+    path = os.path.join(get_interfaces_path(dataset_name), "by_superfamily")
+    for cdd, sfam_id in iter_cdd(use_id=True, group_superfam=True):
+        sfam_path = os.path.join(path, str(int(sfam_id)), str(int(sfam_id)))
+        if not os.path.isfile(sfam_path+".observed_interactome"):
+            continue
+        cjob = job.addChildJobFn(observed_bsa, dataset_name, sfam_id)
+        if not os.path.isfile(sfam_path+".inferred_interactome"):
+            continue
+        cjob.addFollowOnJobFn(inferred_bsa, dataset_name, sfam_id)
 
 if __name__ == "__main__":
     from toil.common import Toil
@@ -305,29 +357,3 @@ if __name__ == "__main__":
     job = Job.wrapJobFn(start_toil, dataset_name)
     with Toil(options) as toil:
         toil.start(job)
-
-    #x/0.1 = 28
-#
-#     if len(sys.argv) == 2:
-#         submit_ibis_cdd(sys.argv[1])
-#     elif len(sys.argv) == 4 and sys.argv[2] == "obs":
-#         observed_bsa(sys.argv[1], shlex.split(sys.argv[3])[0])
-#     elif len(sys.argv) == 4 and sys.argv[2] == "inf":
-#         inferred_bsa(sys.argv[1], shlex.split(sys.argv[3])[0])
-#     else:
-#         print len(sys.argv), sys.argv
-#
-# def submit_ibis_cdd(dataset_name, job_name="calc_bsa", dependency=None):
-#     obsjob = SlurmJob(job_name+"_obs", cpus=14, walltime="8:00:00")
-#     infjob = SlurmJob(job_name+"_inf", cpus=14, walltime="8:00:00")
-#     for cdd in iter_cdd():
-#         obsjob += "{} {} {} obs \"{}\"\n".format(sys.executable, __file__, dataset_name, cdd)
-#         infjob += "{} {} {} inf \"{}\"\n".format(sys.executable, __file__, dataset_name, cdd)
-#
-#
-#     obs_jid = obsjob.run(dependency=dependency)
-#     #print obs_jid
-#
-#     inf_jid = obsjob.run(dependency="afterok:"+obs_jid)
-#     #print inf_jid
-#     return inf_jid

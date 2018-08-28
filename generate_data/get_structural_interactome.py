@@ -26,6 +26,9 @@ NUM_WORKERS = 20
 dask.config.set(scheduler='multiprocessing', num_workers=NUM_WORKERS)
 dask.config.set(pool=ThreadPool(20))
 
+from dask_jobqueue import SLURMCluster
+from dask.distributed import Client
+
 def decode_residues(pdb, chain, res, row):
     residues = []
 
@@ -58,7 +61,7 @@ def decode_residues(pdb, chain, res, row):
         residues.insert(0, "mmdb")
         return ",".join(map(str,residues))
 
-def get_observed_structural_interactome(job, dataset_name, sfam_id, cores=NUM_WORKERS):
+def get_observed_structural_interactome(job, dataset_name, sfam_id): # , cores=NUM_WORKERS):
     ibis_obs_path = os.path.join(data_path_prefix, "IBIS_observed.h5")
     mmdb_path = os.path.join(data_path_prefix, "PDB.h5")
 
@@ -92,49 +95,67 @@ def get_observed_structural_interactome(job, dataset_name, sfam_id, cores=NUM_WO
     obs_ints = pd.merge(obs_ints, st_domain, how="left", left_on="int_sdi_id", right_on="int_sdi")
     del st_domain
 
-    convert_residues = lambda row: pd.Series({
-        "mol_res": decode_residues(row["mol_pdb"], row["mol_chain"], row["mol_res"], row),
-        "int_res": decode_residues(row["int_pdb"], row["int_chain"], row["int_res"], row)})
+    def convert_residues(row):
+        try:
+            return pd.Series({
+                "mol_res": decode_residues(row["mol_pdb"], row["mol_chain"], row["mol_res"], row),
+                "int_res": decode_residues(row["int_pdb"], row["int_chain"], row["int_res"], row)})
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except:
+            return np.NaN
 
     sfams = pd.read_hdf(unicode(mmdb_path), "Superfamilies")[["sdi", "label", "sfam_id"]].dropna(axis=0, subset=["sfam_id"])
     sfams = sfams[sfams["sfam_id"]==sfam_id].rename(columns={"sdi":"mol_sdi", "label":"int_superfam_label", "sfam_id":"int_superfam_id"})
     obs_ints = pd.merge(obs_ints, sfams, how="left", on="mol_sdi").dropna(axis=0, subset=["mol_sdi"])
     del sfams
 
-    df = dd.from_pandas(obs_ints, name="obs_ints", npartitions=NUM_WORKERS)
+    df = dd.from_pandas(obs_ints, name="obs_ints", npartitions=100)
     meta = pd.DataFrame({"mol_res":[str], "int_res":[str]})
+
+    # cluster = SLURMCluster(
+    #     walltime="3-00:00:00",
+    #     memory="12000M",
+    #     cores=1,
+    #     project="muragroup",
+    #     queue="standard",
+    #     ntasks="1"
+    # )
+    # cluster.scale(100)
+    # client = Client(cluster)
     obs_resi = df.map_partitions(lambda _df: _df.apply(convert_residues, axis=1), \
         meta=meta).compute(scheduler="multiprocessing", num_workers=NUM_WORKERS)
     obs_ints.loc[:, ["mol_res", "int_res"]] = obs_resi
 
     path = os.path.join(get_interfaces_path(dataset_name), "by_superfamily", str(int(sfam_id)), "{}.observed_interactome".format(int(sfam_id)))
-    job.log("Writing {} ({}) interactome: {}".format(cdd, sfam_id, path))
+    job.log("Writing {} interactome: {}".format(sfam_id, path))
     try:
         obs_ints.to_hdf(unicode(path), "table", complevel=9, complib="bzip2")
     except TypeError:
-        job.log("Failed writing {} ({}): {}".format(sfam_id, path))
+        job.log("Failed writing {}: {}".format(sfam_id, path))
         raise
 
 def process_inferred_cdd(job, mol_sfam_id, dataset_name, table, cores=NUM_WORKERS):
     table = "Intrac{}".format(table)
     path = get_interfaces_path(dataset_name)
-    df_file = os.path.join(path, table, "{}.inferred_interactome".format(mol_sfam_id))
+    df_file = os.path.join(path, "Intrac", table, "{}.inferred_interactome".format(mol_sfam_id))
 
     if os.path.isfile(df_file):
         return
 
     sfams = pd.read_hdf(unicode(os.path.join(data_path_prefix, "PDB.h5")), "Superfamilies")
-    sfams = sfams[sfams[sfam_id]==float(mol_sfam_id)][["sdi", "label"]]
+    job.log(sfams.columns)
+    sfams = sfams[sfams["sfam_id"]==float(mol_sfam_id)][["sdi", "label"]]
 
     convert_residues = lambda row: decode_residues(row["pdbId"], row["chnLett"], row["resi"], row)
 
     inferred_interfaces = dd.read_hdf([unicode(df_file+".tmp")], "/table")
     inferred_interfaces = inferred_interfaces.repartition(npartitions=NUM_WORKERS)
-    resi = inferred_interfaces.apply(convert_residues, axis=1, meta=pd.Series({"resi":[str]}))#, scheduler="multiprocessing", num_workers=NUM_WORKERS)
+    resi = inferred_interfaces.apply(convert_residues, axis=1, meta=pd.Series({"resi":[str]}))
     inferred_interfaces = inferred_interfaces.assign(resi=resi)
 
 
-    obspath = os.path.join(path, mol_cdd.replace("/", ""), mol_cdd.replace("/", "")+".observed_interactome")
+    obspath = os.path.join(path, "by_superfamily", str(int(mol_sfam_id)), "{}.observed_interactome".format(mol_sfam_id))
     try:
         observed_interactome = pd.read_hdf(unicode(obspath), "table")
     except TypeError:
@@ -142,7 +163,6 @@ def process_inferred_cdd(job, mol_sfam_id, dataset_name, table, cores=NUM_WORKER
         raise
 
     #Add in neghibor information from observed interactome
-    #inferred_interfaces = pd.merge(df, observed_interactome, how="left", left_on="nbr_obs_int_id", right_on="obs_int_id", suffixes=["_inf", "_obs"])
     inferred_interfaces = inferred_interfaces.merge(observed_interactome,
         how="left", left_on="nbr_obs_int_id", right_on="obs_int_id",
         suffixes=["_inf", "_obs"])
@@ -176,9 +196,6 @@ def process_inferred_cdd(job, mol_sfam_id, dataset_name, table, cores=NUM_WORKER
         "chnLett":"mol_chain",
         "from":"mol_sdi_from",
         "to":"mol_sdi_to"})
-
-    sfams = pd.read_hdf(unicode(os.path.join(data_path_prefix, "PDB.h5")), "Superfamilies")
-    sfams = sfams[sfams["sfam_id"]==float(mol_sfam_id)]["sdi", "label"]
 
     #Add superfamily name
     inferred_interfaces = inferred_interfaces.merge(sfams, how="inner", left_on="mol_sdi", right_on="sdi")
@@ -235,7 +252,7 @@ def get_inferred_structural_interactome_by_table(job, dataset_name, table):
 
     submitted_jobs = 0
     for mol_sfam_id, group in inferred_interfaces.groupby("superfamily"):
-        outpath = os.path.join(get_interfaces_path(dataset_name), "Intrac{}".format(table),
+        outpath = os.path.join(get_interfaces_path(dataset_name), "Intrac", "Intrac{}".format(table),
             "{}.inferred_interactome".format(mol_sfam_id))
         if not os.path.isfile(outpath):
             group = group.copy()
@@ -265,14 +282,17 @@ def merge_inferred_interactome(job, dataset_name, cdd_id, cores=NUM_WORKERS):
         job.log("Skipping {} bc it exists".format(cdd_id))
         return
 
-    pattern = os.path.join(path, "Intrac*", "{}.inferred_interactome".format(cdd_id))
-    files = [unicode(f) for f in glob.glob(pattern) if "IntracGrouped" not in f] # and \
+    pattern = os.path.join(path, "Intrac", "Intrac*", "{}.inferred_interactome".format(int(cdd_id)))
+    job.log(pattern)
+    files = [unicode(f) for f in glob.glob(pattern)]# if "IntracGrouped" not in f] # and \
         #os.stat(f).st_size > 5000]
     files = sorted(files, key=lambda f: os.stat(f).st_size)
+    job.log("{}".format(files))
 
+    i = 1
     while True:
         if len(files)==0:
-            job.log("Failed {} bc there are no subfiles".format(cdd_id))
+            job.log("Failed {} bc there are no subfiles (iteration {})".format(cdd_id, i))
             return
         try:
             df = dd.read_hdf(files, key='/table', mode="r")
@@ -280,6 +300,7 @@ def merge_inferred_interactome(job, dataset_name, cdd_id, cores=NUM_WORKERS):
         except (IOError, ValueError):
             job.log("Failed to read at least 1 file, removing {} ()".format(files[0], os.stat(files[0]).st_size))
             del files[0]
+        i += 1
 
     df = df.repartition(npartitions=NUM_WORKERS)
     cols = ["mol_sdi","int_superfam_id","mol_domNo","mol_sdi_from","mol_sdi_to","int_taxid"]
@@ -293,7 +314,7 @@ def merge_inferred_interactome(job, dataset_name, cdd_id, cores=NUM_WORKERS):
 
 def split_familes(job, dataset_name, cdd_id):
     path = get_interfaces_path(dataset_name)
-    inferred_file = os.path.join(path, "IntracGrouped", "{}.inferred_interactome".format(int(cdd_id)))
+    inferred_file = os.path.join(path, "by_superfamily", str(int(cdd_id)), "{}.inferred_interactome".format(int(cdd_id)))
     interfaces = pd.read_hdf(inferred_file, "table")
     superfamily_name = None
 
@@ -334,11 +355,11 @@ def start_toil_observed(job, dataset_name):
             job.log("Error adding {} (Cannot convert {} to string)".format(cdd, sfam_id))
 
 def start_toil_inferred_merge(job, dataset_name):
-    path = os.path.join(get_interfaces_path(dataset_name), "IntracGrouped")
+    path = os.path.join(get_interfaces_path(dataset_name), "by_superfamily")
     if not os.path.isdir(path):
         os.makedirs(path)
     for _, sfam_id in iter_cdd(use_id=True, group_superfam=True):
-        if os.path.isfile(os.path.join(path, "{}.inferred_interactome".format(int(sfam_id)))):
+        if os.path.isfile(os.path.join(path, str(int(sfam_id)), "{}.inferred_interactome".format(int(sfam_id)))):
             continue
         try:
             job.addChildJobFn(merge_inferred_interactome, dataset_name, int(sfam_id), memory="240000M")
@@ -359,7 +380,9 @@ def start_toil_inferred(job, dataset_name):
     #     job.log("Issued {} jobs".format(len(stopped_jobs)))
     #     return
 
-    path = get_interfaces_path(dataset_name)
+    path = os.path.join(get_interfaces_path(dataset_name), "Intrac")
+    if not os.path.isdir(path):
+        os.makedirs(path)
     for table in xrange(1, 87):
         table_dir = os.path.join(path, "Intrac{}".format(table))
         if not os.path.isdir(table_dir):

@@ -341,6 +341,52 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
     return model
 
+class Molmimic(object):
+    def __init__(self, learning_rate=0.0001, epochs=100, batch_size=16, dropout_depth=True, dropout_width=True, dropout_p=0.5):
+        self.learning_rate = learning_rate
+        self.epochs = num_epochs
+        self.batch_size = batch_size
+        self.dropout_depth = dropout_depth
+        self.dropout_width = dropout_width
+        self.dropout_p = dropout_p
+        self.model = None
+
+    def fit(self, X="default", y=None, sample_weight=None, **kwargs):
+        """Constructs a new model & fit it to the data.
+
+        Parameters
+        ----------
+        X : String
+            Dataset name. Default is 'default'
+        y : ignored
+            Backwards compatability
+
+        """
+        self.model = train(
+            X,
+            input_shape           = (264, 264, 264),
+            model_prefix          = args.prefix,
+            use_deepsite_features = True,
+            num_epochs            = self.epochs,
+            batch_size            = self.batch_size,
+            initial_learning_rate = self.learning_rate,
+            data_split            = kwargs.get(data_split, 0.8),
+            use_resnet_unet       = True,
+            nFeatures             = 8,
+            dropout_depth         = self.dropout_depth,
+            dropout_width         = self.dropout_width,
+            dropout_p             = self.dropout_p
+        )
+
+    def predict(self, X, **kwargs):
+        pass
+
+    def predict_proba(self, X, **kwargs):
+        pass
+
+    def score(self, x, y, **kwargs):
+        """Returns the mean accuracy on the given test data and labels."""
+
 def parse_args():
     import argparse
     parser = argparse.ArgumentParser(description="Load data and truth files to train the 3dCNN")

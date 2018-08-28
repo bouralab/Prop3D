@@ -55,6 +55,8 @@ def mmdb_to_pdb_resi(pdb_name, chain, resi, replace_nulls=False):
                     pdb, ncbi = process_residue(residue)
                     residue_mapping[tuple(natural_keys(residue.attrib["dbResNum"], use_int=True))] = pdb
                 break
+    del xml
+    del root
 
     sorted_map = sorted(residue_mapping.iteritems(), key=lambda x:natural_keys(x[0]))
 
@@ -109,6 +111,9 @@ def mmdb_to_pdb_resi(pdb_name, chain, resi, replace_nulls=False):
                         break
                 else:
                     raise InvalidSIFTS("{} {} resnum {} does not exit {}".format(pdb_name, chain, r, sorted_map))
+    del sorted_map
+    del residue_mapping
+
 @contextmanager
 def get_sifts(pdb):
     path = os.path.join(os.environ.get("PDB_SNAPSHOT", os.path.join(data_path_prefix, "pdb")), "sifts", pdb[1:3].lower(), "{}.xml.gz".format(pdb.lower()))
