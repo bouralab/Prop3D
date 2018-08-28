@@ -21,6 +21,8 @@ openbabel
 freesasa
 tqdm
 toil
+dask
+joblib
 ```
 Non python requirements:
 ```
