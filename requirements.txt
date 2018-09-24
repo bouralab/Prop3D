@@ -1,0 +1,9 @@
+numpy
+scikit-learn
+Biopython
+seaborn
+openbabel
+freesasa
+tqdm
+dask
+joblib

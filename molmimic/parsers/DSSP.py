@@ -1,31 +1,36 @@
-import subprocess
-
+import os
 from joblib import Memory
-import pybel
 from Bio.PDB import DSSP
 
-cachedir = mkdtemp()
-memory = Memory(cachedir=cachedir, verbose=0)
+try:
+    from toil.lib.docker import apiDockerCall
+except ImportError:
+    apiDockerCall = None
+
+memory = Memory(verbose=0)
 
 @memory.cache
-def run_dssp(struct, modified=False):
-    if modified:
-        pdbfd, tmp_pdb_path = tempfile.mkstemp()
-        with os.fdopen(pdbfd, 'w') as tmp:
-            struct.save_pdb(tmp)
+def run_dssp(struct, modified=None):
+    full_pdb_path = struct.path
+    pdb_path = os.path.basename(full_pdb_path)
+    work_dir = os.path.dirname(full_pdb_path)
+
+    if apiDockerCall is not None and struct.job is not None:
+        work_dir = job.fileStore.getLocalTempDir()
+        parameters = ['-i', os.path.join("/data", pdb_path), '-o', os.path.join("/data", pdb_path+".dssp")]
+        apiDockerCall(struct.job,
+                      image='edraizen/dssp:latest',
+                      working_dir=work_dir,
+                      parameters=parameters)
+        dssp = DSSP(struct.structure[0], os.path.join(work_dir, pdb_path+".dssp"), dssp='dssp')
     else:
-        tmp_pdb_path = struct.path
-
-    try:
-        dssp = DSSP(self.structure[0], tmp_pdb_path, dssp='dssp')
-    except KeyboardInterrupt:
-        raise
-    except NameError:
-        dssp = None
-    except Exception as e:
-        raise InvalidPDB("Cannot run dssp for {}".format(self.id))
-
-    if modified:
-        os.remove(tmp_pdb_path)
+        try:
+            dssp = DSSP(struct.structure[0], full_pdb_path, dssp='dssp')
+        except KeyboardInterrupt:
+            raise
+        except NameError:
+            dssp = None
+        except Exception as e:
+            raise InvalidPDB("Cannot run dssp for {}".format(self.id))
 
     return dssp

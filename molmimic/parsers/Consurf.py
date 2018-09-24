@@ -10,9 +10,9 @@ from molmimic.util import data_path_prefix
 cachedir = mkdtemp()
 memory = Memory(cachedir=cachedir, verbose=0)
 
-consurf_path = os.path.join(data_path_prefix, "ConSurf")
+CONSURF_PATH = os.path.join(data_path_prefix, "ConSurf")
 
-def download_consurf_scores(pdb, chain, n_tries=3):
+def download_consurf_scores(pdb, chain, n_tries=3, consurf_path=CONSURF_PATH):
     url = "http://bental.tau.ac.il/new_ConSurfDB/DB/{}/{}/consurf.grades".format(pdb, chain)
 
     pdb_id = pdb.upper()
@@ -34,7 +34,7 @@ def download_consurf_scores(pdb, chain, n_tries=3):
         print >> f, r.content
     return consurf_db_file
 
-def download_consurf(pdb=None, chain=None):
+def download_consurf(pdb=None, chain=None, consurf_path=CONSURF_PATH):
     if (pdb, chain).count(None) == 0:
         pdb_id = pdb.upper()
         if chain != " ": pdb_id += "_"+chain

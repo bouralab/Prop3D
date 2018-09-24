@@ -1,34 +1,31 @@
 import os, sys
-from tempfile import mkdtemp
-import subprocess
 
-pdb2pqr_src = os.path.join(os.path.dirname(subprocess.check_output(["which", "pdb2pqr"])), "src")
-sys.path.append(pdb2pqr_src)
 
-from psize import Psize
 from joblib import Memory
 
 from molmimic.util import silence_stdout, silence_stderr
+from molmimic.parsers.psize import Psize
 
-cachedir = mkdtemp()
-memory = Memory(cachedir=cachedir, verbose=0)
+try:
+    from toil.lib.docker import apiDockerCall
+except ImportError:
+    apiDockerCall = None
+	import subprocess
+	try:
+		pdb2pqr_src = os.path.join(os.path.dirname(subprocess.check_output(["which", "pdb2pqr"])), "src")
+		if pdb2pqr_src:
+			sys.path.append(pdb2pqr_src)
 
-@memory.cache
-def run_apbs(pqr_file):
-	"""Run APBS. Calculates correct size using Psize and defualt from Chimera
-	"""
-	file_prefix = os.path.splitext(pqr_file)[0]
-	input_file = "{}.apbs_input".format(file_prefix)
-	output_prefix = "{}.apbs_output".format(file_prefix)
+memory = Memory(verbose=0)
 
+def make_apbs_input(pqr_file):
 	ps = Psize()
 	ps.runPsize(pqr_file)
 	cglen = "{:.2f} {:.2f} {:.2f}".format(*ps.getCoarseGridDims())
 	fglen = "{:.2f} {:.2f} {:.2f}".format(*ps.getFineGridDims())
 	dime = "{:d} {:d} {:d}".format(*ps.getFineGridPoints())
 
-	with open(input_file, "w") as f:
-		print >> f, """read
+	return """read
 	mol pqr {pqr}
 end
 elec
@@ -62,40 +59,102 @@ quit
 		out=output_prefix
 	)
 
-	subprocess.call(["apbs", input_file])
+@memory.cache
+def run_apbs(pqr_file, job=None):
+	"""Run APBS. Calculates correct size using Psize and defualt from Chimera
+	"""
+	full_pqr_path = pqr_file
+	pqr_path = os.path.basename(full_pqr_path)
+	file_prefix = os.path.splitext(pqr_path)[0]
 
-	os.remove(input_file)
+	if apiDockerCall is not None and job is not None:
+        work_dir = job.fileStore.getLocalTempDir()
+		input_file = os.path.join(work_dir, "{}.apbs_input".format(file_prefix))
+		input_file_short = "{}.apbs_input".format(file_prefix)
+		output_prefix = "{}.apbs_output".format(file_prefix)
 
-	return output_prefix+".txt"
+		with open(input_file, "w") as f:
+			f.write(make_apbs_input(full_pqb_path))
+
+        parameters = ["/data/{}".format(input_file_short)]
+        apiDockerCall(job,
+                      image='edraizen/apbs:latest',
+                      working_dir=work_dir,
+                      parameters=parameters)
+	else:
+		input_file = "{}.apbs_input".format(file_prefix)
+		output_prefix = "{}.apbs_output".format(file_prefix)
+		with open(input_file, "w") as f:
+			f.write(make_apbs_input(full_pdb_path))
+
+		try:
+			subprocess.call(["apbs", input_file])
+		except (SystemExit, KeyboardInterrupt):
+			raise
+		except Exception as e:
+			raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
+
+		os.remove(input_file)
+
+	out_file = output_prefix+".txt"
+	assert os.path.isfile(out_file)
+	return out_file
+
+def run_pdb2pqr(pdb_file, job=None):
+	full_pdb_path = pdb_file
+	pdb_path = os.path.basename(full_pdb_path)
+	pqr_file = "{}.pqr".format(pdb_path)
+
+	if apiDockerCall is not None and job is not None:
+        work_dir = job.fileStore.getLocalTempDir()
+		parameters = ["--ff=amber", "--whitespace", "/data/{}".format(pdb_path), pqr_path]
+        apiDockerCall(job,
+                      image='edraizen/pdb2pqr:latest',
+                      working_dir=work_dir,
+                      parameters=parameters)
+		pqr_file = os.path.join(work_dir, pqr_file)
+	else:
+		file_prefix = os.path.dirname(full_pdb_path)[0]
+		pqr_file = os.path.join(file_prefix, pqr_file)
+		try:
+			with silence_stdout(), silence_stderr():
+				subprocess.call(["/usr/share/pdb2pqr/pdb2pqr.py", "--ff=amber",
+					"--whitespace", full_pdb_path, tmp_pqr_path])
+		except (SystemExit, KeyboardInterrupt):
+			raise
+		except Exception as e:
+			raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
+
+	assert os.path.isfile(pqr_file)
+	return pqr_file
 
 @memory.cache
-def run_pdb2pqr_APBS(struct, modified=False):
-	"""Run PDB2PQR and APBS to get charge and electrostatics for each atom for each atom
+def run_pdb2pqr_APBS(pdb_path, job=None, clean=True):
+	"""Run PDB2PQR and APBS to get charge and electrostatics for each atom
+
+	Parameters
+	----------
+	pdb_path : str
+		Path to PDB file
+	job : Toil.job.Job
+		The job that is calling this method if using toil
+	clean : bool
+		Remove the resulting PQR and APBS files. Default is True.
+
+	Return
+	------
+	A dictionary mapping atoms bu Bio.PDB identifiers to a tuple of floats:
+		charge, and
+		electrostatic potential
 	"""
-	remove_pqr = True
-
-	if modified:
-		pdbfd, tmp_pdb_path = tempfile.mkstemp()
-		with os.fdopen(pdbfd, 'w') as tmp:
-			struct.save_pdb(tmp, True)
-	else:
-		tmp_pdb_path = struct.path
-
-	_, tmp_pqr_path = tempfile.mkstemp()
-
-	with silence_stdout(), silence_stderr():
-		subprocess.call(["/usr/share/pdb2pqr/pdb2pqr.py", "--ff=amber", "--whitespace", tmp_pdb_path, tmp_pqr_path])
-
-	if modified:
-		os.remove(tmp_pdb_path)
-
-	atompot_file = run_apbs(tmp_pqr_path)
+	pqr_path = run_pdb2pqr(pdb_path, job)
+	atom_pot_file = run_apbs(pqr_path)
 
 	result = {}
-	with open(tmp_pqr_path) as pqr, open(atompot_file) as atompot:
+	with open(pqr_path) as pqr, open(atom_pot_file) as atom_pot:
 		#Skip first 4 rows of atompot file
 		for _ in xrange(4):
-			next(atompot)
+			next(atom_pot)
 
 		for line in pqr:
 			for line in pqr:
@@ -109,7 +168,6 @@ def run_pdb2pqr_APBS(struct, modified=False):
 				elif len(fields) == 10:
 					recordName, serial, atomName, residueName, residueNumber, X, Y, Z, charge, radius = fields
 				else:
-					print fields
 					raise RuntimeError("Invalid PQR File")
 
 				try:
@@ -133,7 +191,8 @@ def run_pdb2pqr_APBS(struct, modified=False):
 				key = (residue_id, (atomName.strip(), ' '))
 				result[key] = (float(charge), electrostatic_potential)
 
-	if remove_pqr:
-		os.remove(tmp_pqr_path)
+	if clean:
+		os.remove(pqr_path)
+		os.remove(atom_pot_file)
 
 	return result
