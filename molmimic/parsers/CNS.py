@@ -29,7 +29,7 @@ def load_cns_environment():
         os.environ.update(new_env)
 
 class CNS(object):
-    def __init__(self, input_file, work_dir=None, docker=True):
+    def __init__(self, input_file, work_dir=None, docker=True, job=None):
     	if docker and apiDockerCall is not None:
             if not os.path.abspath(os.path.dirname(input_file)) == os.path.abspath(work_dir):
                 shutil.copy(input_file, work_dir)
@@ -63,14 +63,14 @@ class Minimize(CNS):
     structure_file : str
         Path to minimed structure
     """
-    def __init__(self, pdb_file, output_file_prefix=None, work_dir=None, docker=True):
+    def __init__(self, pdb_file, output_file_prefix=None, work_dir=None, docker=True, job=None):
         """Create the CNS input file"""
         self.pdb_file = pdb_file
         self.output_file_prefix = output_file_prefix or os.path.splitext(os.path.basename(pdb_file)))
         self.work_dir = work_dir or os.getcwd()
         self.docker = docker
         input_file, minimized_file = self.__generate_minimization_input()
-        super(Minimize, self).__init__(input_file, work_dir=work_dir, docker=docker)
+        super(Minimize, self).__init__(input_file, work_dir=work_dir, docker=docker, job=job)
         return minimized_file
 
     def __generate_minimization_input(self):

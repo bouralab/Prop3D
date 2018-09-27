@@ -20,7 +20,9 @@ from toil.job import JobFunctionWrappingJob
 
 from molmimic.parsers.Electrostatics import run_pdb2pqr
 from molmimic.parsers.CNS import Minimize
+from molmimic.parsers.mmtf_spark import PdbToMmtfFull
 from molmimic.generate_data.iostore import IOStore
+from molmimic.generate_data.job_utils import cleanup_ids
 from molmimic.generate_data.util import data_path_prefix, get_structures_path, \
     get_features_path, get_first_chain, get_all_chains, number_of_lines, \
     iter_unique_superfams, SubprocessChain, get_jobstore_name
@@ -215,8 +217,10 @@ def prepare_domain(pdb_file, work_dir=None, pdb=None, chain=None, domainNum=None
 
     return cleaned_file
 
-def process_domain(job, dataset_name, sdi, pdb=None, chain=None, domNo=None, sfam_id=None, preemptable=True):
-    all_sdoms = pd.read_hdf(unicode(os.path.join(data_path_prefix, "PDB.h5")), "merged")
+def process_domain(job, sdi, pdb=None, chain=None, domNo=None, sfam_id=None, preemptable=True):
+    work_dir = job.fileStore.getLocalTempDir()
+    pdb_info_file = job.fileStore.readGlobalFile("PDB.h5")
+    all_sdoms = pd.read_hdf(unicode(pdb_info_file), "merged")
 
     sdom = all_sdoms[all_sdoms["sdi"]==float(sdi)]
     if sdom.shape[0] == 0:
@@ -228,18 +232,18 @@ def process_domain(job, dataset_name, sdi, pdb=None, chain=None, domNo=None, sfa
     chain = sdom.iloc[0].chnLett
     domNo = sdom.iloc[0].domNo
 
-    in_store = IOStore.get(get_jobstore_name(job, "pdb"))
-    out_store = IOStore.get(get_jobstore_name(job, "structures"))
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+    in_store = IOStore.get("{}:molmimic-pdb".format(prefix))
+    out_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
 
     pdb_path = os.path.join("by_superfamily", str(sfam_id), pdb[1:3].upper())
     domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdb, chain, sdi, domNo))
-    if out_store.exists(domain_file):
-        return
+    # if out_store.exists(domain_file):
+    #     return
+
+    job.log("RUNNING DOMAIN {} {} {} {} {}".format(pdb_file, pdb, chain, sdi, domNo))
 
     pdb_file_base = os.path.join(pdb[1:3].lower(), "pdb{}.ent.gz".format(pdb.lower()))
-    print pdb_file, pdb, chain, sdi, domNo
-
-    work_dir = job.fileStore.getLocalTempDir()
     pdb_file = os.path.join(work_dir, pdb_file_base)
 
     try:
@@ -251,11 +255,13 @@ def process_domain(job, dataset_name, sdi, pdb=None, chain=None, domNo=None, sfa
 
         #Extract domain; cleaned but atomic coordinates not added or changed
         domain_file = extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, work_dir=work_dir)
-        out_store.write_output_file(domain_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), os.path.basename(domain_file)))
+        domain_file_base = os.path.basename(domain_file)
+        out_store.write_output_file(domain_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), domain_file_base))
 
         try:
             prepared_file = prepare_domain(domain_file, work_dir=work_dir)
-            out_store.write_output_file(domain_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), os.path.basename(prepared_file)))
+            out_store.write_output_file(prepared_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), os.path.basename(prepared_file)))
+            jobStoreID, job.fileStore.writeGlobalFile(prepared_file)
         except RuntimeError as e:
             job.log(str(e))
             pass
@@ -264,40 +270,15 @@ def process_domain(job, dataset_name, sdi, pdb=None, chain=None, domNo=None, sfa
     except Exception as e:
         job.log("Cannot process {}.{}.d{} ({}), error: {}".format(pdb, chain, domNo, sdi, e))
 
-def convert_pdb_to_mmtf(job, dataset_name, sfam_id):
-    pdb_path = os.path.join(PDB_PATH, dataset_name, "by_superfamily", str(int(sfam_id)))
-    chemcomp = os.path.join(data_path_prefix, "pdb", "chemcomp")
-    if not os.path.isdir(chemcomp):
-        os.makedirs(chemcomp)
+    return prepared_file, domain_file_base, sfam_id
 
-    spark_env = os.environ.copy()
-    spark_env["PDB_DIR"] = chemcomp
-    spark_env["PDB_CACHE_DIR"] = chemcomp
-
-    mmtf_path = os.path.join(data_path_prefix, "mmtf", dataset_name, "by_superfamily", str(int(sfam_id)))
-    if not os.path.isdir(mmtf_path):
-        os.makedirs(mmtf_path)
-
-    #Convert PDBs to MMTF-Hadoop Sequence file directory
-    try:
-        subprocess.call(["spark-submit",
-            "--class", "edu.sdsc.mmtf.spark.io.demos.PdbToMmtfFull",
-            "{}/target/mmtf-spark-0.2.0-SNAPSHOT.jar".format(os.environ["MMTFSPARK_HOME"]),
-            pdb_path, mmtf_path],
-            env=spark_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except (KeyboardInterrupt, SystemExit):
-        raise
-    except Exception as e:
-        job.log("Error converting to MMTF: {}".format(e))
-        pass
-
-def cluster(job, dataset_name, sfam_id, id=0.95, cores=NUM_WORKERS preemptable=True):
+def cluster(job, sfam_id, jobStoreIDs, id=0.95, cores=NUM_WORKERS preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
-    in_store = IOStore.get(get_jobstore_name(job, "IBIS"))
-    out_store = IOStore.get(get_jobstore_name(job, "structures"))
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+    out_store = IOStore.get("{}:molmimic-clustered-structures".format(prefix))
 
+    pdb_info_file = job.fileStore.readGlobalFile("PDB.h5")
     sdoms_file = os.path.join(work_dir, "PDB.h5")
-    in_store.read_input_file("PDB.h5", sdoms_file)
 
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]
@@ -305,24 +286,20 @@ def cluster(job, dataset_name, sfam_id, id=0.95, cores=NUM_WORKERS preemptable=T
 
     #Save all domains to fasta
     domain_fasta = os.path.join(work_dir, "{}.fasta".format(int(sfam_id)))
+    domain_ids = {}
     with open(domain_fasta, "w") as fasta:
-        for row in sdoms.itertuples():
-            fname = "{}_{}_sdi{}_d{}.pdb".format(row.pdbId, row.chnLett, row.sdi, row.domNo)
-            try:
-                domain_file_base = os.path.join(str(int(sfam_id)), row.pdbId[1:3].lower(), fname)
-                domain_file = os.path.join(work_dir, domain_file_base)
-                out_store.read_input_file(domain_file_base, domain_file)
-                subprocess.call([sys.executable, os.path.join(PDB_TOOLS,
-                    "pdb_toseq.py"), f, stdout=fasta, stderr=subprocess.PIPE])
-                os.remove(domain_file)
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except Exception as e:
-                job.log("Error getting fasta for : {} {}".format(sfam_id, fname))
-                pass
-
-    sfam_key = "{0}/{0}.fasta".format(int(sfam_id)))
-    out_store.write_output_file(domain_fasta, sfam_key)
+        for jobStoreID, pdb_fname, _ in jobStoreIDs:
+            with job.fileStore.readGlobalFileStream(jobStoreID) as f:
+                try:
+                    seq = subprocess.check_output([sys.executable, os.path.join(PDB_TOOLS,
+                        "pdb_toseq.py"), stdin=f]).
+                    fasta.write(">{}\n{}\n".format(pdb_fname, "\n".join(seq.splitlines()[1:])))
+                    domain_ids[pdb_fname] = jobStoreID
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except Exception as e:
+                    job.log("Error getting fasta for : {} {}".format(sfam_id, fname))
+                    pass
 
     # d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
     # d_sdoms.apply(lambda row: subprocess.call([sys.executable,
@@ -363,12 +340,10 @@ def cluster(job, dataset_name, sfam_id, id=0.95, cores=NUM_WORKERS preemptable=T
         for row in it.chain(xray.itertuples(index=False), nmr.itertuples(index=False)):
             print >> f, ">{} [resolution={}]\n{}".format(row.domainId, row.resolution, row.sequence)
 
-    #Cluster using uclust
-    # uclust_file = os.path.join(pdb_path, "{}_clusters.uc".format(int(sfam_id)))
-    # clusters_file = os.path.join(pdb_path, "{}_nr.fasta".format(int(sfam_id)))
-    # subprocess.call(["usearch", "-cluster_fast", domain_fasta, "-id", str(id),
-    #     "-centroids", clusters_file, "-uc", uclust_file])
-    clusters_file, uclust_file = run_usearch(["usearch", "-cluster_fast",
+    sfam_key = "{0}/{0}.fasta".format(int(sfam_id)))
+    out_store.write_output_file(domain_fasta, sfam_key)
+
+    clusters_file, uclust_file = run_usearch(["-cluster_fast",
         "{i}"+domain_fasta, "-id", str(id),
         "-centroids", "{{out}}{}_clusters.uc".format(int(sfam_id)),
         "-uc", "{{o}}{}_clusters.uc".format(int(sfam_id))])
@@ -391,29 +366,81 @@ def cluster(job, dataset_name, sfam_id, id=0.95, cores=NUM_WORKERS preemptable=T
     hdf_base = "{}_clusters.h5".format(int(sfam_id))
     hdf_file = os.path.join(work_dir, hdf_base)
     uclust.to_hdf(unicode(hdf_file), "table", complevel=9, complib="bzip2")
-    out_store.write_output_file(hdf_file, hdf_base)
+    out_store.write_output_file(hdf_file, "{}/{}".format(int(sfam_id), hdf_base)
     os.remove(uclust_file)
 
-    #Copy clustered to new directory
-    cluster_path = os.path.join(str(int(sfam_id)), "clustered")
-
+    #Upload clustered pdbs
+    clustered_pdbs = []
     for seq in SeqIO.parse(clusters_file, "fasta"):
-        domainId = seq.id[:-2]
-        pdb_group = domainId[1:3].upper()
-        out_dir = os.path.join(cluster_path, pdb_group)
-        pdb_base = "{}.pdb".format(domainId)
-        pdb_file = os.path.join(work_dir, pdb_base)
-
-        pdb_key = os.path.join(str(int(sfam_id)), pdb_group, pdb_base)
-        clustered_key = os.path.join(str(int(sfam_id)), "clustered", pdb_base)
-        out_store.read_input_file(pdb_key, pdb_file)
-        out_store.write_output_file(pdb_file, clustered_key)
+        pdb_base = seq.id
+        jobStoreID = domain_ids[pdb_base]
+        pdb_key = "{}/{}/{}".format(int(sfam_id), pdb_base[1:3], pdb_base)
+        pdb_file = job.fileStore.readGlobalFile(jobStoreID)
+        out_store.write_output_file(pdb_file, pdb_key)
         os.remove(pdb_file)
+        clustered_pdbs.append((jobStoreID, pdb_base, sfam_id))
 
-def create_data_loader(job, dataset_name, sfam_id, preemptable=preemptable):
+        #Remove jobStoreID for list so the actual file won't be removed
+        del jobStoreIDs[jobStoreID.index(jobStoreID)]
+
+    #Delete all reduant pdb files
+    cleanup_ids(jobStoreIDs)
+
+    return clustered_pdbs
+
+def convert_pdb_to_mmtf(job, sfam_id, jobStoreIDs=None, clustered=True):
+    raise NotImplementedError()
+
+    work_dir = job.fileStore.getLocalTempDir()
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+    clustered = "clustered" if clustered else "full"
+
+    pdb_path = os.path.join(work_dir, "pdb")
+    if not os.path.isdir(pdb_path):
+        os.makedirs(pdb_path)
+
+    #Download all with same sfam
+    if jobStoreIDs is None:
+        in_store = IOStore.get("{}:molmimic-{}-structures".format(prefix), clustered)
+        for f in in_store.list_input_directory(sfam_id):
+            if f.endswith(".pdb"):
+                in_store.read_input_file(f, os.path.join(work_dir, f))
+    else:
+        for jobStoreID in jobStoreIDs:
+            job.fileStore.readGlobalFile(fileStoreID, userPath=pdb_path)
+
+    PdbToMmtfFull(pdb_path, mmtf_path, work_dir=work_dir, job=job)
+
+    out_store = IOStore.get("{}:molmimic-{}-mmtf".format(prefix, clustered))
+    out_store.write_output_directory(mmtf_path, sfam_id)
+
+def create_data_loader(job, sfam_id, preemptable=preemptable):
+    """Create H5 for Molmimic3dCNN to read
+
+    Note: move this somewhere else
+    """
+    work_dir = job.fileStore.getLocalTempDir()
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+
+    pdb_path = os.path.join(work_dir, "pdb")
+    if not os.path.isdir(pdb_path):
+        os.makedirs(pdb_path)
+
+    id_format = re.compile("^([A-Z0-9]{4})_([A-Za-z0-9]+)_sdi([0-9]+)_d([0-9]+)$")
+
+    #Get all with keys same sfam
+    in_store = IOStore.get("{}:molmimic-clustered-structures".format(prefix))
+    keys = [id_format.match(f).groups() for f in in_store.list_input_directory(sfam_id) \
+        if f.endswith(".pdb") and id_format.match(f)]
+
+    else:
+        for jobStoreID in jobStoreIDs:
+            job.fileStore.readGlobalFile(fileStoreID, userPath=pdb_path)
+
+
     pdb_path = os.path.join(PDB_PATH, dataset_name, "by_superfamily", str(int(sfam_id)))
     clusters_file = os.path.join(pdb_path, "{}_nr.fasta".format(int(sfam_id)))
-    id_format = re.compile("^([A-Z0-9]{4})_([A-Za-z0-9]+)_sdi([0-9]+)_d([0-9]+)$")
+
 
     try:
         pdb, chain, sdi, domain = zip(*[id_format.match(seq.id[:-2]).groups() \
@@ -427,7 +454,12 @@ def create_data_loader(job, dataset_name, sfam_id, preemptable=preemptable):
     data_loader = os.path.join(pdb_path, "{}.h5".format(int(sfam_id)))
     domains.to_hdf(unicode(data_loader), "table", complevel=9, complib="bzip2")
 
-def process_sfam(job, dataset_name, sfam_id, cores=NUM_WORKERS):
+def process_sfam(job, sfam_id, cores=NUM_WORKERS):
+    work_dir = job.fileStore.getLocalTempDir()
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+    clustered = "clustered" if clustered else "full"
+    in_store = IOStore.get("{}:molmimic-{}-structures".format(prefix), clustered)
+
     work_dir = job.fileStore.getLocalTempDir()
     in_store = IOStore.get(get_jobstore_name(job, "IBIS"))
     out_store = IOStore.get(get_jobstore_name(job, "structures"))
@@ -438,27 +470,31 @@ def process_sfam(job, dataset_name, sfam_id, cores=NUM_WORKERS):
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
     d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
-    d_sdoms.apply(lambda row: process_domain(job, dataset_name, row.sdi), axis=1).compute()
+    processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi),
+        axis=1).compute()
 
-    del d_sdoms
-    del sdoms
-    os.remove(sdoms_file)
+    return processed_domains
 
-def post_process_sfam(job, dataset_name, sfam_id):
-    cluster(job, dataset_name, sfam_id)
+def post_process_sfam(job, sfam_id, jobStoreIDs):
+    cluster(job, sfam_id, jobStoreIDs)
 
     if False:
-    create_data_loader(job, dataset_name, sfam_id)
+        convert_pdb_to_mmtf(job, sfam_id, jobStoreIDs)
+        create_data_loader(job, sfam_id, jobStoreIDs)
 
 def start_toil(job, name="prep_protein"):
     """Start the workflow to process PDB files"""
 
     work_dir = job.fileStore.getLocalTempDir()
-    in_store = IOStore.get(get_jobstore_name(job, "IBIS"))
-    out_store = IOStore.get(get_jobstore_name(job, "structures"))
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+    in_store = IOStore.get("{}:molmimic-ibis")
 
+    #Download PDB info
     sdoms_file = os.path.join(work_dir, "PDB.h5")
     in_store.read_input_file("PDB.h5", sdoms_file)
+
+    #Add pdb info into local job store
+    job.fileStore.writeGlobalFile(sdoms_file, "PDB.h5")
 
     #Get all unique superfamilies
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
@@ -466,7 +502,8 @@ def start_toil(job, name="prep_protein"):
 
     #Add jobs for each sdi
     sdoms["sfam_id"].drop_duplicates().dropna().apply(
-        lambda sfam_id: job.addChildJobFn(process_sfam, sfam_id))
+        lambda sfam_id: job.addChildJobFn(process_sfam, sfam_id, cores=
+            job.fileStore.jobStore.config.maxCores))
 
     #Add jobs for to post process each sfam
     sdoms["sfam_id"].drop_duplicates().dropna().apply(

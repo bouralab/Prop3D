@@ -1,13 +1,14 @@
 import os, sys
 import shutil
-from itertools import izip
+import string
+from itertools import izip, product
 
 import numpy as np
 import pandas as pd
 import dask.dataframe as dd
 from dask.diagnostics import ProgressBar
 
-from map_residues import mmdb_to_pdb_resi, InvalidSIFTS
+from molmimic.generate_data.map_residues import mmdb_to_pdb_resi, InvalidSIFTS
 
 data_path_prefix = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
@@ -23,13 +24,19 @@ def convert_row(job, row):
 
     return pd.Series({"from":frm, "to":to})
 
-def mmdb2pdb(job, pdb_group=None, dask=False, cores=NUM_WORKERS):
-    mmdb_path = os.path.join(data_path_prefix, "MMDB.h5")
-    cols = ["from", "to"]
+def mmdb2pdb(job, mmdb_file=None, pdb_group=None, dask=True, cores=NUM_WORKERS, preemtable=True):
+    work_dir = job.fileStore.getLocalTempDir()
+
+    if mmdb_file is None:
+        prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+        jobStore = IOStore.get("{}:molmimic-ibis".format(prefix))
+        mmdb_path = os.path.join(work_dir, "MMDB.h5")
+        jobStore.read_input_file("MMDB.h5", mmdb_path)
+
     sdoms = pd.read_hdf(unicode(mmdb_path), "StrucutralDomains")
 
     if pdb_group is not None:
-        tmp_path = os.path.join(data_path_prefix, "__mmdb_to_pdb", "{}.h5".format(pdb_group))
+        tmp_path = os.path.join(work_dir, "{}.h5".format(pdb_group))
         pdb_groups = sdoms.groupby(lambda x: sdoms["pdbId"].loc[x][1:3])
         try:
             sdoms = pdb_groups.get_group(pdb_group.upper()).copy()
@@ -37,11 +44,11 @@ def mmdb2pdb(job, pdb_group=None, dask=False, cores=NUM_WORKERS):
             return
             del pdb_groups
     else:
-        tmp_path = os.path.join(data_path_prefix, "PDB.h5")
+        tmp_path = os.path.join(work_dir, "PDB.h5")
 
     if dask:
         ddf = dd.from_pandas(sdoms, npartitions=NUM_WORKERS)
-        meta = pd.DataFrame({c:[1] for c in cols})
+        meta = pd.DataFrame({"from":[1], "to":[1]})
 
         with ProgressBar():
             pdb_map = ddf.map_partitions(lambda _df: _df.apply(\
@@ -56,51 +63,46 @@ def mmdb2pdb(job, pdb_group=None, dask=False, cores=NUM_WORKERS):
     sdoms["to"] = sdoms["to"].astype(int)
     sdoms.to_hdf(unicode(tmp_path), "table", complevel=9, complib="bzip2", min_itemsize=756)
 
-    print "Finished StructuralDomains"
+    return job.fileStore.writeGlobalFile(tmp_path)
 
-def merge(job, cores=4):
-    pdb_dir = os.path.join(data_path_prefix, "pdb", "pdb")
-    output = os.path.join(data_path_prefix, "PDB.h5")
-    tmp_path = os.path.join(data_path_prefix, "__mmdb_to_pdb")
-    for pdb_group in next(os.walk(pdb_dir))[1]:
-        job.log(pdb_group)
-        pdb_group = os.path.basename(pdb_group)
-        pdb_group_path = os.path.join(tmp_path, "{}.h5".format(pdb_group.lower()))
+def merge(job, jobStoreIDs, cores=4):
+    work_dir = job.fileStore.getLocalTempDir()
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+    jobStore = IOStore.get("{}:molmimic-ibis".format(prefix))
+
+    output = os.path.join(work_dir, "PDB.h5")
+
+    for jobStoreID in jobStoreIDs:
+        if jobStoreID is None: continue
+
+        pdb_group_path = job.fileStore.readGlobalFile(jobStoreID)
+
         try:
             df = pd.read_hdf(unicode(pdb_group_path), "table")
         except IOError:
             continue
+
         df[['from', 'to']] = df[['from', 'to']].astype(int)
-        df.to_hdf(unicode(output+".tmp"), "StructuralDomains", table=True, mode='a', append=True, complevel=9, complib="bzip2", min_itemsize=768)
+        df.to_hdf(unicode(output), "StructuralDomains", table=True, mode='a', append=True, complevel=9, complib="bzip2", min_itemsize=768)
         del df
+
+        job.fileStore.deleteGlobalFile(jobStoreID)
 
     sfams = pd.read_hdf(unicode(os.path.join(data_path_prefix, "MMDB.h5")), "Superfamilies")
     sfams = df[['sdsf_id', 'sdi', 'sfam_id', 'label', 'whole_chn', 'mmdb_id', 'mol_id', 'pssm']]
-    sfams.to_hdf(unicode(output+".tmp"), "Superfamilies", complevel=9, complib="bzip2", min_itemsize=768)
+    sfams.to_hdf(unicode(output), "Superfamilies", complevel=9, complib="bzip2", min_itemsize=768)
 
     sdoms = pd.read_hdf(unicode(output+".tmp"), "StructuralDomains")
     merged = pd.merge(sdoms, sfams, how="left", on="sdi").dropna()
-    merged.to_hdf(unicode(output+".tmp"), "merged", complevel=9, complib="bzip2", min_itemsize=768)
+    merged.to_hdf(unicode(output), "merged", complevel=9, complib="bzip2", min_itemsize=768)
 
     resolu = pd.read_table("ftp://ftp.wwpdb.org/pub/pdb/derived_data/index/resolu.idx",
         header=None, names=["pdbId", "resolution"], skiprows=6, sep="\t;\t")
     resolu.to_hdf(unicode(output+".tmp"), "resolu", complevel=9, complib="bzip2", min_itemsize=768)
 
-    shutil.move(output+".tmp", output)
-    shutil.rmtree(tmp_path)
+    jobStore.write_output_file(output, "PDB.h5")
 
-def toil_pdb_groups(job):
-    pdb_dir = os.path.join(data_path_prefix, "pdb", "pdb")
-    tmp_path = os.path.join(data_path_prefix, "__mmdb_to_pdb")
-    if os.path.isdir(tmp_path):
-        shutil.rmtree(tmp_path)
-    os.makedirs(tmp_path)
-
-    for pdb_group in next(os.walk(pdb_dir))[1]:
-        pdb_group = os.path.basename(pdb_group)
-        job.addChildJobFn(mmdb2pdb, pdb_group=pdb_group)
-
-def start_toil(job, name="mdb2pdb"):
+def start_toil(job, name="mmdb2pdb"):
     """Initiate Toil Jobs for converting MMDB to PDB
 
     Paramters
@@ -111,11 +113,23 @@ def start_toil(job, name="mdb2pdb"):
     ------
     mmdb2pdb : toil.Job
     """
-    if os.path.isfile(os.path.join(data_path_prefix, "PDB.h5")):
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+    jobStore = IOStore.get("{}:molmimic-ibis".format(prefix))
+
+    if jobStore.exists("PDB.h5"):
         return
 
-    job2 = job.addChildJobFn(toil_pdb_groups)
-    job2.addFollowOnJobFn(merge)
+    try:
+        mmdb_file = jobStore.write_input_file("MMDB.h5")
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except:
+        raise RuntimeError("download_data must be run before mmdb2pdb")
+
+    group_files = [job.addChildJobFn(mmdb2pdb, mmdb_file=mmdb_file, pdb_group=group, cores=
+        job.fileStore.jobStore.config.maxCores).rv() for group in \
+        product(string.digits+string.ascii_lowercase, repeat=2)]
+    job.addFollowOnJobFn(merge, group_files)
 
 if __name__ == "__main__":
     if len(sys.argv) == 1:
