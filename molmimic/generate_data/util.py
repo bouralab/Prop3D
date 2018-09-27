@@ -14,6 +14,54 @@ features_path_prefix = os.path.join(data_path_prefix, "features")
 
 interfaces_path_prefix = os.path.join(data_path_prefix, "interfaces")
 
+def SubprocessChain(commands, output):
+    if len(commands) > 2:
+        prev_proc = subprocess.Popen(
+            commands[0],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE)
+        for cmd in commands[1:-1]:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=prev_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE)
+            prev_proc = proc
+        final_proc = subprocess.Popen(
+            cmd[-1],
+            stdin=prev_proc.stdout,
+            stdout=output,
+            stderr=subprocess.PIPE)
+        return final_proc.communicate()
+    elif len(commands) == 2:
+        prev_proc = subprocess.Popen(
+            commands[0],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE)
+        final_proc = subprocess.Popen(
+            commands[1],
+            stdin=prev_proc.stdout,
+            stdout=output,
+            stderr=subprocess.PIPE)
+    elif len(commands) == 1:
+        final_proc = subprocess.Popen(
+            commands[0],
+            stdout=output,
+            stderr=subprocess.PIPE)
+    else:
+        raise RuntimeError
+
+def PDBTools(commands, output):
+    PDB_TOOLS = os.path.join(os.path.dirname(os.path.dirname(data_path_prefix)), "pdb-tools")
+    cmds = [[sys.executable, os.path.join(PDB_TOOLS, "pdb_{}.py".format(cmd[0]))]+cmd[1:] for cmd in commands]
+    SubprocessChain(cmd, output)
+
+def get_jobstore_name(job, name="raw-files"):
+    return = "{}-{}".format(job._fileStore.jobStore.locator, name)
+
+def get_jobstore(job, name="raw-files"):
+    return Toil.getJobStore(get_jobstore_name(job, None))
+
 def get_structures_path(dataset_name):
     return os.path.join(structures_path_prefix, dataset_name)
 

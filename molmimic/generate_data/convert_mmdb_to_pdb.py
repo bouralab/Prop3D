@@ -82,6 +82,10 @@ def merge(job, cores=4):
     merged = pd.merge(sdoms, sfams, how="left", on="sdi").dropna()
     merged.to_hdf(unicode(output+".tmp"), "merged", complevel=9, complib="bzip2", min_itemsize=768)
 
+    resolu = pd.read_table("ftp://ftp.wwpdb.org/pub/pdb/derived_data/index/resolu.idx",
+        header=None, names=["pdbId", "resolution"], skiprows=6, sep="\t;\t")
+    resolu.to_hdf(unicode(output+".tmp"), "resolu", complevel=9, complib="bzip2", min_itemsize=768)
+
     shutil.move(output+".tmp", output)
     shutil.rmtree(tmp_path)
 

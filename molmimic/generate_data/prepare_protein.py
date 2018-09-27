@@ -18,8 +18,12 @@ from Bio import SeqIO
 
 from toil.job import JobFunctionWrappingJob
 
-from util import data_path_prefix, get_structures_path, get_features_path, \
-    get_first_chain, get_all_chains, number_of_lines, iter_unique_superfams
+from molmimic.parsers.Electrostatics import run_pdb2pqr
+from molmimic.parsers.CNS import Minimize
+from molmimic.generate_data.iostore import IOStore
+from molmimic.generate_data.util import data_path_prefix, get_structures_path, \
+    get_features_path, get_first_chain, get_all_chains, number_of_lines, \
+    iter_unique_superfams, SubprocessChain, get_jobstore_name
 
 NUM_WORKERS = 20
 dask.config.set(scheduler='multiprocessing', num_workers=NUM_WORKERS)
@@ -27,47 +31,9 @@ dask.config.set(pool=ThreadPool(NUM_WORKERS))
 
 RAW_PDB_PATH = os.path.join(data_path_prefix, "pdb", "pdb")
 PDB_PATH = os.path.join(data_path_prefix, "structures")
-PDB_TOOLS = os.path.join(os.path.dirname(data_path_prefix), "pdb-tools")
+PDB_TOOLS = os.path.join(os.path.dirname(os.path.dirname(data_path_prefix)), "pdb-tools")
 
-def SubprocessChain(commands, output):
-    if len(commands) > 2:
-        prev_proc = subprocess.Popen(
-            commands[0],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE)
-        for cmd in commands[1:-1]:
-            proc = subprocess.Popen(
-                cmd,
-                stdin=prev_proc.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE)
-            prev_proc = proc
-        final_proc = subprocess.Popen(
-            cmd[-1],
-            stdin=prev_proc.stdout,
-            stdout=output,
-            stderr=subprocess.PIPE)
-        return final_proc.communicate()
-    elif len(commands) == 2:
-        prev_proc = subprocess.Popen(
-            commands[0],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE)
-        final_proc = subprocess.Popen(
-            commands[1],
-            stdin=prev_proc.stdout,
-            stdout=output,
-            stderr=subprocess.PIPE)
-    elif len(commands) == 1:
-        final_proc = subprocess.Popen(
-            commands[0],
-            stdout=output,
-            stderr=subprocess.PIPE)
-    else:
-        raise RuntimeError
-
-
-def extract_domain(dataset_name, pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_chain=None, striphet=True):
+def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_chain=None, striphet=True, work_dir=None):
     """Extract a domain from a protein structure and cleans the output to make
     it in standard PDB format. No information in changed or added
 
@@ -97,11 +63,14 @@ def extract_domain(dataset_name, pdb_file, pdb, chain, sdi, rslices, domNo, sfam
     if not os.path.isfile(pdb_file):
         raise RuntimeError("Invalid PDB File, cannot find {}".format(pdb_file))
 
-    pdb_path = os.path.join(PDB_PATH, dataset_name, "by_superfamily", str(int(sfam_id)), pdb[1:3].upper())
-    domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb.extracted".format(pdb, chain, int(sdi), domNo))
+    if work_dir is None:
+        work_dir = os.getcwd()
 
-    if not os.path.exists(pdb_path):
-        os.makedirs(pdb_path)
+    #pdb_path = os.path.join(work_dir, "by_superfamily", str(int(sfam_id)), pdb[1:3].upper())
+    domain_file = os.path.join(work_file, "{}_{}_sdi{}_d{}.pdb.extracted".format(pdb, chain, int(sdi), domNo))
+
+    # if not os.path.exists(pdb_path):
+    #     os.makedirs(pdb_path)
 
     open_fn = gzip.open if pdb_file.endswith(".gz") else open
 
@@ -127,54 +96,13 @@ def extract_domain(dataset_name, pdb_file, pdb, chain, sdi, rslices, domNo, sfam
 
     with open(domain_file, "w") as output:
         SubprocessChain(commands, output)
-        # splitmodel = subprocess.Popen(
-        #     [sys.executable, os.path.join(PDB_TOOLS, "pdb_selmodel.py"), "-1", input],
-        #     stdout=subprocess.PIPE,
-        #     stderr=subprocess.PIPE)
-        # splitchain = subprocess.Popen(
-        #     [sys.executable, os.path.join(PDB_TOOLS, "pdb_selchain.py"), "-{}".format(chain)],
-        #     stdin=splitmodel.stdout,
-        #     stdout=subprocess.PIPE,
-        #     stderr=subprocess.PIPE)
-        # delocc = subprocess.Popen(
-        #     [sys.executable, os.path.join(PDB_TOOLS, "pdb_delocc.py")],
-        #     stdin=splitchain.stdout,
-        #     stdout=subprocess.PIPE,
-        #     stderr=subprocess.PIPE)
-        # splitdomain = subprocess.Popen(
-        #     [sys.executable, os.path.join(PDB_TOOLS, "pdb_rslice.py")]+rslices,
-        #     stdin=delocc.stdout,
-        #     stdout=subprocess.PIPE if rename_chain is not None else output,
-        #     stderr=subprocess.PIPE)
-        #
-        # if rename_chain is not None:
-        #     renamechain = subprocess.Popen(
-        #         [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-1"],
-        #         stdin=splitdomain.stdout,
-        #         stdout=output,
-        #         stderr=subprocess.PIPE)
-        #     renamechain.communicate()
-        # else:
-        #     splitdomain.communicate()
-        #
-        # #Cleanup PDB file and add TER lines in between gaps
-        # tidy = subprocess.Popen(
-        #     [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), pdb_file],
-        #     stdout=subprocess.PIPE,
-        #     stderr=subprocess.PIPE)
-        # #Remove HETATMS
-        # striphet = subprocess.Popen(
-        #     [sys.executable, os.path.join(PDB_TOOLS, "pdb_striphet.py")],
-        #     stdin=tidy.stdout,
-        #     stdout=subprocess.PIPE,
-        #     stderr=subprocess.PIPE)
 
     if pdb_file.endswith(".gz"):
         os.remove(domain_file+".full")
 
     return domain_file
 
-def prepare_domain(pdb_file, pdb=None, chain=None, domainNum=None, sdi=None, sfam_id=None):
+def prepare_domain(pdb_file, work_dir=None, pdb=None, chain=None, domainNum=None, sdi=None, sfam_id=None):
     """Prepare a single domain for use in molmimic. This method modifies a PDB
     file by adding hydrogens with PDB2PQR (ff=parse, ph=propka) and minimizing
     using rosetta (lbfgs_armijo_nonmonotone with tolerance 0.001). Finally,
@@ -207,6 +135,9 @@ def prepare_domain(pdb_file, pdb=None, chain=None, domainNum=None, sdi=None, sfa
     if pdb_file.endswith(".gz"):
         raise RuntimeError("Cannot be a gzip archive, try 'run_protein' instead")
 
+    if work_dir is None:
+        work_dir = os.getcwd()
+
     ##FIME: Not sure why this none..
     num_chains = len(get_all_chains(pdb_file))
     if not len(get_all_chains(pdb_file)) == 1:
@@ -215,42 +146,28 @@ def prepare_domain(pdb_file, pdb=None, chain=None, domainNum=None, sdi=None, sfa
     pdb_path = os.path.dirname(pdb_file)
     prefix = pdb_file.split(".", 1)[0]
 
-    cleaned_file = prefix+".pdb.cleaned"
-    # with open(cleaned_file, "w") as output:
-    #     #Cleanup PDB file and add TER lines in between gaps
-    #     tidy = subprocess.Popen(
-    #         [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), pdb_file],
-    #         stdout=subprocess.PIPE,
-    #         stderr=subprocess.PIPE)
-    #     #Remove HETATMS
-    #     striphet = subprocess.Popen(
-    #         [sys.executable, os.path.join(PDB_TOOLS, "pdb_striphet.py")],
-    #         stdin=tidy.stdout,
-    #         stdout=subprocess.PIPE,
-    #         stderr=subprocess.PIPE)
-    #     #Remove altLocs
-    #     delloc = subprocess.Popen(
-    #         [sys.executable, os.path.join(PDB_TOOLS, "pdb_delocc.py")],
-    #         stdin=striphet.stdout,
-    #         stdout=output,
-    #         stderr=subprocess.PIPE)
-    #     delloc.communicate()
-
-    #Add hydrogens -- FIXME biowulf and singilarity path hardcoded
-    pqr_file = prefix+".pdb.pqr"
+    #Add hydrogens
     propka_file = prefix+".propka"
 
     try:
-        subprocess.call(["pdb2pqr",
-            "--ff=parse",
-            "--ph-calc-method=propka",
-            "--chain",
-            "--drop-water",
-            pdb_file, pqr_file],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError:
-        raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file))
+        parameters = ["--ph-calc-method=propka", "--chain", "--drop-water"]
+        pqr_file = run_pdb2pqr(pdb_file, whitespace=False, ff="parse", parameters=parameters, work_dir=work_dir)
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except:
+        raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file)
+
+    # try:
+    #     subprocess.call(["pdb2pqr",
+    #         "--ff=parse",
+    #         "--ph-calc-method=propka",
+    #         "--chain",
+    #         "--drop-water",
+    #         pdb_file, pqr_file],
+    #         stdout=subprocess.PIPE,
+    #         stderr=subprocess.PIPE)
+    # except subprocess.CalledProcessError:
+    #     raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file))
 
     try:
         with open(pqr_file) as f:
@@ -259,56 +176,35 @@ def prepare_domain(pdb_file, pdb=None, chain=None, domainNum=None, sdi=None, sfa
         raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file))
 
     #Minimize, assumes minimize from rosetta is in path
-    score_file = prefix+".sc"
-    minimized_file = prefix+".pdb_0001.pdb"
+    # score_file = prefix+".sc"
+    # minimized_file = prefix+".pdb_0001.pdb"
+    #
+    # try:
+    #     subprocess.check_output(["minimize.static.linuxgccrelease",
+    #         "-s", pqr_file,
+    #         "-run:min_type", "lbfgs_armijo_nonmonotone",
+    #         "-run:min_tolerance", "0.001",
+    #         "-overwrite", "false", #Pandas apply calls first row twice so this is needed
+    #         "-ignore_zero_occupancy", "false",
+    #         "-out:file:scorefile", score_file,
+    #         "-out:path:pdb", pdb_path,
+    #         "-out:path:score", pdb_path],
+    #         stderr=subprocess.PIPE)
+    # except subprocess.CalledProcessError:
+    #     raise RuntimeError("Unable to minimize file {}".format(pqr_file))
 
-    try:
-        subprocess.check_output(["minimize.static.linuxgccrelease",
-            "-s", pqr_file,
-            "-run:min_type", "lbfgs_armijo_nonmonotone",
-            "-run:min_tolerance", "0.001",
-            "-overwrite", "false", #Pandas apply calls first row twice so this is needed
-            "-ignore_zero_occupancy", "false",
-            "-out:file:scorefile", score_file,
-            "-out:path:pdb", pdb_path,
-            "-out:path:score", pdb_path],
-            stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError:
-        raise RuntimeError("Unable to minimize file {}".format(pqr_file))
+    #Minimize useing CNS
+    minimized_file, score_file = Minimize(pqr_file, work_dir=work_dir)
 
-    attempts = 0
-    while not os.path.isfile(minimized_file) or number_of_lines(minimized_file) == 0:
-        if attempts >= 10:
-            raise RuntimeError("Unable to minimize file {}".format(pqr_file))
-        time.sleep(1)
-        attempts += 1
+    commands = [
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_stripheader.py"), minimized_file],
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-{}".format(chain)],
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
+    ]
 
-    shutil.move(minimized_file, minimized_file+".rosetta")
-
-    #Cleanup Rosetta PDB
-    cleaned_minimized_file = prefix+".pdb.min"
-    with open(cleaned_minimized_file, "w") as cleaned_minimized:
-        subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_stripheader.py"), minimized_file+".rosetta"], stdout=cleaned_minimized)
-
-    if len(get_all_chains(cleaned_minimized_file)) > 1:
-        #Sometimes the chains are split in pdb2pqr, fixes it to one chain
-        one_chain_clean_file = prefix+".min.pdb.one_chain"
-        with open(one_chain_clean_file, "w") as one_chain_clean:
-            subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-{}".format(chain), cleaned_minimized_file], stdout=one_chain_clean)
-        shutil.move(cleaned_minimized_file, cleaned_minimized_file+".multi_chain")
-
-        cleaned_file = prefix+".pdb"
-        tidyed_pdb_file = prefix+".min.pdb.tidy"
-        with open(tidyed_pdb_file, "w") as cf:
-            subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), one_chain_clean_file], stdout=cf)
-
-    else:
-        cleaned_file = prefix+".pdb"
-        tidyed_pdb_file = prefix+".min.pdb.tidy"
-        with open(tidyed_pdb_file, "w") as cf:
-            subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), cleaned_minimized_file], stdout=cf)
-
-    shutil.move(tidyed_pdb_file, cleaned_file)
+    cleaned_file = prefix+".pdb"
+    with open(cleaned_file, "w") as cleaned:
+        SubprocessChain(commands, cleaned)
 
     attempts = 0
     while number_of_lines(cleaned_file) == 0:
@@ -319,8 +215,7 @@ def prepare_domain(pdb_file, pdb=None, chain=None, domainNum=None, sdi=None, sfa
 
     return cleaned_file
 
-def process_domain(job, dataset_name, sdi, pdb=None, chain=None, domNo=None, sfam_id=None):
-    job.log("SYS EXE = {}".format(sys.executable))
+def process_domain(job, dataset_name, sdi, pdb=None, chain=None, domNo=None, sfam_id=None, preemptable=True):
     all_sdoms = pd.read_hdf(unicode(os.path.join(data_path_prefix, "PDB.h5")), "merged")
 
     sdom = all_sdoms[all_sdoms["sdi"]==float(sdi)]
@@ -333,24 +228,34 @@ def process_domain(job, dataset_name, sdi, pdb=None, chain=None, domNo=None, sfa
     chain = sdom.iloc[0].chnLett
     domNo = sdom.iloc[0].domNo
 
-    pdb_path = os.path.join(PDB_PATH, dataset_name, "by_superfamily", str(sfam_id), pdb[1:3].upper())
+    in_store = IOStore.get(get_jobstore_name(job, "pdb"))
+    out_store = IOStore.get(get_jobstore_name(job, "structures"))
+
+    pdb_path = os.path.join("by_superfamily", str(sfam_id), pdb[1:3].upper())
     domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdb, chain, sdi, domNo))
-    if os.path.isfile(domain_file):
+    if out_store.exists(domain_file):
         return
 
-    pdb_file = os.path.join(RAW_PDB_PATH, pdb[1:3].lower(), "pdb{}.ent.gz".format(pdb.lower()))
+    pdb_file_base = os.path.join(pdb[1:3].lower(), "pdb{}.ent.gz".format(pdb.lower()))
     print pdb_file, pdb, chain, sdi, domNo
 
-    if not os.path.isfile(pdb_file):
-        job.log("Cannot process {}.{}.d{} ({}), pdb DNE".format(pdb, chain, domNo, sdi))
-        return
+    work_dir = job.fileStore.getLocalTempDir()
+    pdb_file = os.path.join(work_dir, pdb_file_base)
+
     try:
+        #Download PDB archive from JobStore
+        in_store.read_input_file(pdb_file_base, pdb_file)
+
         #Multiple ranges for one sdi. Might be domain swaped?
         rslices = ["{}:{}".format(st, en) for st, en in sdom[["from", "to"]].drop_duplicates().itertuples(index=False)]
-        domain_file = extract_domain(dataset_name, pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id)
+
+        #Extract domain; cleaned but atomic coordinates not added or changed
+        domain_file = extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, work_dir=work_dir)
+        out_store.write_output_file(domain_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), os.path.basename(domain_file)))
+
         try:
-            prepare_domain(domain_file)
-            print "Wrote", domain_file
+            prepared_file = prepare_domain(domain_file, work_dir=work_dir)
+            out_store.write_output_file(domain_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), os.path.basename(prepared_file)))
         except RuntimeError as e:
             job.log(str(e))
             pass
@@ -386,22 +291,61 @@ def convert_pdb_to_mmtf(job, dataset_name, sfam_id):
         job.log("Error converting to MMTF: {}".format(e))
         pass
 
-def cluster(job, dataset_name, sfam_id, id=0.95):
-    pdb_path = os.path.join(PDB_PATH, dataset_name, "by_superfamily", str(int(sfam_id)))
+def cluster(job, dataset_name, sfam_id, id=0.95, cores=NUM_WORKERS preemptable=True):
+    work_dir = job.fileStore.getLocalTempDir()
+    in_store = IOStore.get(get_jobstore_name(job, "IBIS"))
+    out_store = IOStore.get(get_jobstore_name(job, "structures"))
 
-    if not os.path.isdir(pdb_path):
-        return
+    sdoms_file = os.path.join(work_dir, "PDB.h5")
+    in_store.read_input_file("PDB.h5", sdoms_file)
+
+    sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
+    sdoms = sdoms[sdoms["sfam_id"]==sfam_id]
+    sdoms = sdoms[["pdbId", "chnLett", "sdi", "domNo"]].drop_duplicates().dropna()
 
     #Save all domains to fasta
-    domain_fasta = os.path.join(pdb_path, "{}.fasta".format(int(sfam_id)))
+    domain_fasta = os.path.join(work_dir, "{}.fasta".format(int(sfam_id)))
     with open(domain_fasta, "w") as fasta:
-        for f in glob.glob(os.path.join(pdb_path, "*", "*.pdb")):
-            subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_toseq.py"),
-                f], stdout=fasta, stderr=subprocess.PIPE)
+        for row in sdoms.itertuples():
+            fname = "{}_{}_sdi{}_d{}.pdb".format(row.pdbId, row.chnLett, row.sdi, row.domNo)
+            try:
+                domain_file_base = os.path.join(str(int(sfam_id)), row.pdbId[1:3].lower(), fname)
+                domain_file = os.path.join(work_dir, domain_file_base)
+                out_store.read_input_file(domain_file_base, domain_file)
+                subprocess.call([sys.executable, os.path.join(PDB_TOOLS,
+                    "pdb_toseq.py"), f, stdout=fasta, stderr=subprocess.PIPE])
+                os.remove(domain_file)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as e:
+                job.log("Error getting fasta for : {} {}".format(sfam_id, fname))
+                pass
+
+    sfam_key = "{0}/{0}.fasta".format(int(sfam_id)))
+    out_store.write_output_file(domain_fasta, sfam_key)
+
+    # d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
+    # d_sdoms.apply(lambda row: subprocess.call([sys.executable,
+    #     os.path.join(PDB_TOOLS, "pdb_toseq.py"), f])
+    #
+    # process_domain(job, dataset_name, row.sdi) \
+    #     if not os.path.isfile(os.path.join(
+    #         PDB_PATH, dataset_name, "by_superfamily", str(sfam_id),
+    #         row.pdbId[1:3].upper(), "{}_{}_sdi{}_d{}.pdb".format(
+    #             row.pdbId, row.chnLett, row.sdi, row.domNo
+    #         )
+    #     )) else None, axis=1).compute()
+
+
+    #Save all domains to fasta
+    # domain_fasta = os.path.join(pdb_path, "{}.fasta".format(int(sfam_id)))
+    # with open(domain_fasta, "w") as fasta:
+    #     for f in glob.glob(os.path.join(pdb_path, "*", "*.pdb")):
+    #         subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_toseq.py"),
+    #             f], stdout=fasta, stderr=subprocess.PIPE)
 
     #Order domains by resolution so the ones with the highest resolutions are centroids
-    resolutions = pd.read_table(os.path.join(os.path.dirname(RAW_PDB_PATH), "resolu.idx"),
-        header=None, names=["pdbId", "resolution"], skiprows=6, sep="\t;\t")
+    resolutions = pd.read_hdf(unicode(sdoms_file), "resolu")
 
     try:
         pdbs, ids, sequences = zip(*[(s.id.split("_", 1)[0].upper(), s.id, str(s.seq)) \
@@ -420,10 +364,14 @@ def cluster(job, dataset_name, sfam_id, id=0.95):
             print >> f, ">{} [resolution={}]\n{}".format(row.domainId, row.resolution, row.sequence)
 
     #Cluster using uclust
-    uclust_file = os.path.join(pdb_path, "{}_clusters.uc".format(int(sfam_id)))
-    clusters_file = os.path.join(pdb_path, "{}_nr.fasta".format(int(sfam_id)))
-    subprocess.call(["usearch", "-cluster_fast", domain_fasta, "-id", str(id),
-        "-centroids", clusters_file, "-uc", uclust_file])
+    # uclust_file = os.path.join(pdb_path, "{}_clusters.uc".format(int(sfam_id)))
+    # clusters_file = os.path.join(pdb_path, "{}_nr.fasta".format(int(sfam_id)))
+    # subprocess.call(["usearch", "-cluster_fast", domain_fasta, "-id", str(id),
+    #     "-centroids", clusters_file, "-uc", uclust_file])
+    clusters_file, uclust_file = run_usearch(["usearch", "-cluster_fast",
+        "{i}"+domain_fasta, "-id", str(id),
+        "-centroids", "{{out}}{}_clusters.uc".format(int(sfam_id)),
+        "-uc", "{{o}}{}_clusters.uc".format(int(sfam_id))])
 
     #Convert uclust to h5
     uclust = pd.read_table(unicode(uclust_file), comment="#", header=None, names=[
@@ -440,25 +388,29 @@ def cluster(job, dataset_name, sfam_id, id=0.95):
     ])
     del uclust["unk1"]
     del uclust["unk2"]
-    uclust.to_hdf(unicode(os.path.join(pdb_path, "{}_clusters.h5".format(int(sfam_id)))), "table", complevel=9, complib="bzip2")
+    hdf_base = "{}_clusters.h5".format(int(sfam_id))
+    hdf_file = os.path.join(work_dir, hdf_base)
+    uclust.to_hdf(unicode(hdf_file), "table", complevel=9, complib="bzip2")
+    out_store.write_output_file(hdf_file, hdf_base)
     os.remove(uclust_file)
 
     #Copy clustered to new directory
-    cluster_path = os.path.join(pdb_path, "clustered")
-    if not os.path.isdir(cluster_path):
-        os.makedirs(cluster_path)
+    cluster_path = os.path.join(str(int(sfam_id)), "clustered")
 
     for seq in SeqIO.parse(clusters_file, "fasta"):
         domainId = seq.id[:-2]
         pdb_group = domainId[1:3].upper()
         out_dir = os.path.join(cluster_path, pdb_group)
-        if not os.path.isdir(out_dir):
-            os.makedirs(out_dir)
+        pdb_base = "{}.pdb".format(domainId)
+        pdb_file = os.path.join(work_dir, pdb_base)
 
-        fname = "{}.pdb".format(domainId)
-        shutil.copy(os.path.join(pdb_path, pdb_group, fname), os.path.join(out_dir, fname))
+        pdb_key = os.path.join(str(int(sfam_id)), pdb_group, pdb_base)
+        clustered_key = os.path.join(str(int(sfam_id)), "clustered", pdb_base)
+        out_store.read_input_file(pdb_key, pdb_file)
+        out_store.write_output_file(pdb_file, clustered_key)
+        os.remove(pdb_file)
 
-def create_data_loader(job, dataset_name, sfam_id):
+def create_data_loader(job, dataset_name, sfam_id, preemptable=preemptable):
     pdb_path = os.path.join(PDB_PATH, dataset_name, "by_superfamily", str(int(sfam_id)))
     clusters_file = os.path.join(pdb_path, "{}_nr.fasta".format(int(sfam_id)))
     id_format = re.compile("^([A-Z0-9]{4})_([A-Za-z0-9]+)_sdi([0-9]+)_d([0-9]+)$")
@@ -476,126 +428,65 @@ def create_data_loader(job, dataset_name, sfam_id):
     domains.to_hdf(unicode(data_loader), "table", complevel=9, complib="bzip2")
 
 def process_sfam(job, dataset_name, sfam_id, cores=NUM_WORKERS):
-    sdoms = pd.read_hdf(unicode(os.path.join(data_path_prefix, "PDB.h5")), "merged")
-    sdoms = sdoms[sdoms["sfam_id"]==sfam_id]
-    sdoms = sdoms[["pdbId", "chnLett", "sdi", "domNo"]].drop_duplicates().dropna()
-    d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
-    d_sdoms.apply(lambda row: process_domain(job, dataset_name, row.sdi) \
-        if not os.path.isfile(os.path.join(
-            PDB_PATH, dataset_name, "by_superfamily", str(sfam_id),
-            row.pdbId[1:3].upper(), "{}_{}_sdi{}_d{}.pdb".format(
-                row.pdbId, row.chnLett, row.sdi, row.domNo
-            )
-        )) else None, axis=1).compute()
+    work_dir = job.fileStore.getLocalTempDir()
+    in_store = IOStore.get(get_jobstore_name(job, "IBIS"))
+    out_store = IOStore.get(get_jobstore_name(job, "structures"))
 
-    # sdoms.apply(lambda row: job.addChildJobFn(process_domain, dataset_name, row.sdi) \
-    #     if not os.path.isfile(os.path.join(
-    #         PDB_PATH, dataset_name, "by_superfamily", str(sfam_id),
-    #         row.pdbId[1:3].upper(), "{}_{}_sdi{}_d{}.pdb".format(
-    #             row.pdbId, row.chnLett, row.sdi, row.domNo
-    #         )
-    #     )) else None, axis=1)
+    sdoms_file = os.path.join(work_dir, "PDB.h5")
+    in_store.read_input_file("PDB.h5", sdoms_file)
+
+    sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
+    sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
+    d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
+    d_sdoms.apply(lambda row: process_domain(job, dataset_name, row.sdi), axis=1).compute()
+
+    del d_sdoms
+    del sdoms
+    os.remove(sdoms_file)
 
 def post_process_sfam(job, dataset_name, sfam_id):
     cluster(job, dataset_name, sfam_id)
-    #create_data_loader(job, dataset_name, sfam_id)
 
+    if False:
+    create_data_loader(job, dataset_name, sfam_id)
 
-def start_toil(job, dataset_name, name="prep_protein", memory="120000M"):
-    pdb_path = os.path.join(PDB_PATH, dataset_name, "by_superfamily")
-    sdoms = pd.read_hdf(unicode(os.path.join(data_path_prefix, "PDB.h5")), "merged")
+def start_toil(job, name="prep_protein"):
+    """Start the workflow to process PDB files"""
 
+    work_dir = job.fileStore.getLocalTempDir()
+    in_store = IOStore.get(get_jobstore_name(job, "IBIS"))
+    out_store = IOStore.get(get_jobstore_name(job, "structures"))
 
-    #Make sfam directories
-    # sfams = dd.from_pandas(sdoms["sfam_id"].drop_duplicates().dropna(), npartitions=NUM_WORKERS)
-    # sfams.apply(lambda g: os.makedirs(os.path.join(pdb_path, str(int(g)))) \
-    #     if not os.path.isdir(os.path.join(pdb_path, str(int(g)))) else None).compute()
-    #
-    # #Make pdb group direcotries
-    # sfam_pdbs = sdoms[["sfam_id","pdbId"]].drop_duplicates().dropna()
-    # sfam_pdbs["pdbId"] = sfam_pdbs["pdbId"].apply(lambda s: s[1:3])
-    # sfam_pdbs =  dd.from_pandas(sfam_pdbs.drop_duplicates(), npartitions=NUM_WORKERS)
-    # sfam_pdbs.apply(lambda d: os.makedirs(
-    #         os.path.join(pdb_path, str(int(d["sfam_id"])), d["pdbId"])
-    #     ) if not os.path.isdir(
-    #         os.path.join(pdb_path, str(int(d["sfam_id"])), d["pdbId"])) else None,
-    #     axis=1).compute()
-    # job.log("DONE DIRS")
+    sdoms_file = os.path.join(work_dir, "PDB.h5")
+    in_store.read_input_file("PDB.h5", sdoms_file)
 
-    if dataset_name != "parallel":
-        #Add jobs for each sdi
-        sdoms["sfam_id"].drop_duplicates().dropna().apply(
-            lambda sfam_id: job.addChildJobFn(process_sfam, dataset_name, sfam_id))
-
-        print "ADDED ALL JOBS {}".format(len(job._children))
-
-        #Add jobs for to post process each sfam
-        sdoms["sfam_id"].drop_duplicates().dropna().apply(
-            lambda sfam_id: job.addFollowOnJobFn(post_process_sfam, dataset_name, sfam_id))
-    else:
-        def addDomain(s, j, d, c):
-            job.log("ADDING domain {} {} {}".format(s, j, d))
-            return j.addChildJobFn(process_domain, d, s)
-            #djob = JobFunctionWrappingJob(process_domain, f, s)
-            #djob._addPredecessor(j)
-            #c.append(djob)
-
-        def addSfam(s, j, d, c):
-            job.log("ADDING sfam {} {} {}".format(s, j, d))
-            return j.addFollowOnJobFn(post_process_sfam, d, s)
-            #sjob = JobFunctionWrappingJob(post_process_sfam, d, s)
-            #sjob._addPredecessor(j)
-            #c.append(sjob)
-
-        job.log("STARTING ADD DOMAINS")
-        Parallel(n_jobs=NUM_WORKERS)(delayed(addDomain)(s, job, dataset) for s in \
-            sdoms["sdi"].drop_duplicates().dropna())
-        job.log("ADDED DOMAINS: {}".format(len(job._children)))
-
-        job.log("STARTING ADD SFAMS")
-        Parallel(n_jobs=NUM_WORKERS)(delayed(addSfam)(s,job, dataset) for s in \
-            sdoms["sfam_id"].drop_duplicates().dropna())
-        job.log("STARTING ADD SFAMS")
-
-        # job.log("STARTING ADD DOMAINS")
-        # dd.from_pandas(sdoms["sdi"].drop_duplicates().dropna(),
-        #     npartitions=NUM_WORKERS).apply(addDomain, args=(job, dataset_name)).compute().tolist()
-        # job.log("ADDED DOMAINS: {}".format(len(job._children)))
-        #
-        # job.log("STARTING ADD SFAMS")
-        # dd.from_pandas(sdoms["sfam_id"].drop_duplicates().dropna(),
-        #     npartitions=NUM_WORKERS).apply(addSfam, args=(job, dataset_name)).compute().tolist()
-        # job.log("ADDED SFAMS: {}".format(len(job._followOns)))
-
-
-        # del sdis
-        # print "ADDED ALL JOBS {}".format(len(job._children))
-        #
-        # #Add jobs for each sdi
-        # sfams = dd.from_pandas(sdoms["sfam_id"].drop_duplicates().dropna(), npartitions=NUM_WORKERS)
-        # job._followOns += sfams.apply(sfamJob, meta=('job', 'object')).compute().tolist()
-
-    # def domainJob(sdi):
-    #     djob = JobFunctionWrappingJob(process_domain, dataset_name, sdi)
-    #     djob._addPredecessor(job)
-    #     return djob
-    #
-    # def sfamJob(sfam):
-    #     sjob = JobFunctionWrappingJob(post_process_sfam, dataset_name, sfam)
-    #     sjob._addPredecessor(job)
-    #     return sjob
+    #Get all unique superfamilies
+    sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
+    sfams = sdoms["sfam_id"].drop_duplicates().dropna()
 
     #Add jobs for each sdi
-    # sdis = dd.from_pandas(sdoms["sdi"].drop_duplicates().dropna(), npartitions=NUM_WORKERS)
-    # print "STARTING ADD DOMAINS"
-    # job._children += sdis.apply(domainJob, meta=('job', 'object')).compute().tolist()
-    # del sdis
-    # print "ADDED ALL JOBS {}".format(len(job._children))
-    #
-    # #Add jobs for each sdi
-    # sfams = dd.from_pandas(sdoms["sfam_id"].drop_duplicates().dropna(), npartitions=NUM_WORKERS)
-    # job._followOns += sfams.apply(sfamJob, meta=('job', 'object')).compute().tolist()
-    # del sfams
+    sdoms["sfam_id"].drop_duplicates().dropna().apply(
+        lambda sfam_id: job.addChildJobFn(process_sfam, sfam_id))
+
+    #Add jobs for to post process each sfam
+    sdoms["sfam_id"].drop_duplicates().dropna().apply(
+        lambda sfam_id: job.addFollowOnJobFn(post_process_sfam, sfam_id))
+
+    del sdoms
+    os.remove(sdoms_file)
+
+if __name__ == "__main__":
+    from toil.common import Toil
+    from toil.job import Job
+
+    parser = Job.Runner.getDefaultArgumentParser()
+    options = parser.parse_args()
+    options.logLevel = "DEBUG"
+    options.clean = "never"
+
+    job = Job.wrapJobFn(start_toil)
+    with Toil(options) as toil:
+        toil.start(job)
 
     # meta = pd.DataFrame({c:[1] for c in cols})
     #
@@ -622,28 +513,12 @@ def start_toil(job, dataset_name, name="prep_protein", memory="120000M"):
     #     job.addFollowOnJobFn(post_process_sfam, dataset_name, sfam_id)#)
 
 
-    job.log("ADDED ALL FOLLOW JOBS {}".format(len(job._followOns)))
+    #job.log("ADDED ALL FOLLOW JOBS {}".format(len(job._followOns)))
     # job.addFollowOnJobFn(cluster, dataset_name, sfam_id)
     # j2.addFollowOnJobFn(create_data_loader, dataset_name, sfam_id)
     # j2.addFollowOnJobFn(convert_pdb_to_mmtf, dataset_name, sfam_id)
 
-if __name__ == "__main__":
-    from toil.common import Toil
-    from toil.job import Job
 
-    parser = Job.Runner.getDefaultArgumentParser()
-    options = parser.parse_args()
-    options.logLevel = "DEBUG"
-    options.clean = "never"
-    options.leaderCores = 20
-    dataset_name = options.jobStore.split(":")[-1]
-
-    job = Job.wrapJobFn(start_toil, dataset_name)
-    with Toil(options) as toil:
-        if options.restart:
-            toil.restart(job)
-        else:
-            toil.start(job)
 
 # def toil_cdd(job, dataset_name, sfam_id):
 #     pdb_path = os.path.join(PDB_PATH, dataset_name, "by_superfamily", str(int(sfam_id)))
