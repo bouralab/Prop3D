@@ -10,10 +10,9 @@ try:
 except ImportError:
     apiDockerCall = None
 	import subprocess
-	try:
-		pdb2pqr_src = os.path.join(os.path.dirname(subprocess.check_output(["which", "pdb2pqr"])), "src")
-		if pdb2pqr_src:
-			sys.path.append(pdb2pqr_src)
+	pdb2pqr_src = os.path.join(os.path.dirname(subprocess.check_output(["which", "pdb2pqr"])), "src")
+	if pdb2pqr_src:
+		sys.path.append(pdb2pqr_src)
 
 memory = Memory(verbose=0)
 

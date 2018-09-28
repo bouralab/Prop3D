@@ -244,7 +244,7 @@ def process_domain(job, sdi, pdb=None, chain=None, domNo=None, sfam_id=None, pre
 
     return prepared_file, domain_file_base, sfam_id
 
-def cluster(job, sfam_id, jobStoreIDs, id=0.95, cores=NUM_WORKERS preemptable=True):
+def cluster(job, sfam_id, jobStoreIDs, id=0.95, cores=NUM_WORKERS, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     out_store = IOStore.get("{}:molmimic-clustered-structures".format(prefix))
@@ -264,7 +264,7 @@ def cluster(job, sfam_id, jobStoreIDs, id=0.95, cores=NUM_WORKERS preemptable=Tr
             with job.fileStore.readGlobalFileStream(jobStoreID) as f:
                 try:
                     seq = subprocess.check_output([sys.executable, os.path.join(PDB_TOOLS,
-                        "pdb_toseq.py"), stdin=f]).
+                        "pdb_toseq.py")], stdin=f)
                     fasta.write(">{}\n{}\n".format(pdb_fname, "\n".join(seq.splitlines()[1:])))
                     domain_ids[pdb_fname] = jobStoreID
                 except (KeyboardInterrupt, SystemExit):
@@ -312,7 +312,7 @@ def cluster(job, sfam_id, jobStoreIDs, id=0.95, cores=NUM_WORKERS preemptable=Tr
         for row in it.chain(xray.itertuples(index=False), nmr.itertuples(index=False)):
             print >> f, ">{} [resolution={}]\n{}".format(row.domainId, row.resolution, row.sequence)
 
-    sfam_key = "{0}/{0}.fasta".format(int(sfam_id)))
+    sfam_key = "{0}/{0}.fasta".format(int(sfam_id))
     out_store.write_output_file(domain_fasta, sfam_key)
 
     clusters_file, uclust_file = run_usearch(["-cluster_fast",
@@ -338,7 +338,7 @@ def cluster(job, sfam_id, jobStoreIDs, id=0.95, cores=NUM_WORKERS preemptable=Tr
     hdf_base = "{}_clusters.h5".format(int(sfam_id))
     hdf_file = os.path.join(work_dir, hdf_base)
     uclust.to_hdf(unicode(hdf_file), "table", complevel=9, complib="bzip2")
-    out_store.write_output_file(hdf_file, "{}/{}".format(int(sfam_id), hdf_base)
+    out_store.write_output_file(hdf_file, "{}/{}".format(int(sfam_id), hdf_base))
     os.remove(uclust_file)
 
     #Upload clustered pdbs
@@ -386,7 +386,7 @@ def convert_pdb_to_mmtf(job, sfam_id, jobStoreIDs=None, clustered=True):
     out_store = IOStore.get("{}:molmimic-{}-mmtf".format(prefix, clustered))
     out_store.write_output_directory(mmtf_path, sfam_id)
 
-def create_data_loader(job, sfam_id, preemptable=preemptable):
+def create_data_loader(job, sfam_id, preemptable=True):
     """Create H5 for Molmimic3dCNN to read
 
     Note: move this somewhere else
@@ -400,16 +400,12 @@ def create_data_loader(job, sfam_id, preemptable=preemptable):
 
     id_format = re.compile("^([A-Z0-9]{4})_([A-Za-z0-9]+)_sdi([0-9]+)_d([0-9]+)$")
 
-    #Get all with keys same sfam
+    #Get all with keys same sfam, but do not download
+
     in_store = IOStore.get("{}:molmimic-clustered-structures".format(prefix))
     keys = [id_format.match(f).groups() for f in in_store.list_input_directory(sfam_id) \
         if f.endswith(".pdb") and id_format.match(f)]
-
-    else:
-        for jobStoreID in jobStoreIDs:
-            job.fileStore.readGlobalFile(fileStoreID, userPath=pdb_path)
-
-
+    
     pdb_path = os.path.join(PDB_PATH, dataset_name, "by_superfamily", str(int(sfam_id)))
     clusters_file = os.path.join(pdb_path, "{}_nr.fasta".format(int(sfam_id)))
 
