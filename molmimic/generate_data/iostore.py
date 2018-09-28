@@ -39,6 +39,7 @@ import datetime
 # Need stuff for Amazon s3
 try:
     import boto3
+    import botocore
     have_s3 = True
 except ImportError:
     have_s3 = False
@@ -176,6 +177,14 @@ class IOStore(object):
 
         raise NotImplementedError()
 
+    def connect(self):
+        """
+        Connect to Resource
+        """
+
+        raise NotImplementedError()
+
+
     def read_input_file(self, input_path, local_path):
         """
         Read an input file from wherever the input comes from and send it to the
@@ -224,6 +233,13 @@ class IOStore(object):
 
         raise NotImplementedError()
 
+    def write_output_directory(self, local_direcotry, output_directory=""):
+        for dirpath, dirnames, filenames in os.walk(local_direcotry):
+            for f in filenames:
+                fpath = os.path.join(dirpath, f)
+                key = fpath[len(direcotry):]
+                self.write_output_file(fpath, output_directory+key)
+
     def exists(self, path):
         """
         Returns true if the given input or output file exists in the store
@@ -249,6 +265,12 @@ class IOStore(object):
 
         """
 
+        raise NotImplementedError()
+
+    def get_number_of_items(self, path):
+        """
+        Return the number of items in path if it exits, or None otherwise
+        """
         raise NotImplementedError()
 
     @staticmethod
@@ -548,6 +570,17 @@ class FileIOStore(IOStore):
         # Return the size in bytes of the backing file
         return os.stat(os.path.join(self.path_prefix, path)).st_size
 
+    def get_number_of_items(self, path=None):
+        """
+        Return the number of items in path if it is exist, or None otherwise
+        """
+        if path is not None and self.exists(path):
+            return None
+        elif path is None:
+            path = self.path_prefix
+
+        return sum(1 for name in os.listdir(path) if os.path.isfile(name))
+
 class BackoffError(RuntimeError):
     """
     Represents an error from running out of retries during exponential back-off.
@@ -632,13 +665,16 @@ class S3IOStore(IOStore):
 
         """
 
-        # Make sure azure libraries actually loaded
+        # Make sure s3 libraries actually loaded
         assert(have_s3)
 
         self.region = region
         self.bucket_name = bucket_name
         self.name_prefix = name_prefix
         self.s3 = None
+
+    def connect(self):
+        self.__connect()
 
     def __connect(self):
         """
@@ -647,16 +683,28 @@ class S3IOStore(IOStore):
         """
 
         if self.s3 is None:
-            RealtimeLogger.debug("Connecting to bucket {} in region".format(
+            RealtimeLogger.debug("Connecting to bucket {} in region {}".format(
                 self.bucket_name, self.region))
+            print "Connecting to bucket {} in region {}".format(
+                self.bucket_name, self.region)
 
             # Connect to the s3 bucket service where we keep everything
-            self.s3 = boto3.client('s3')
+            self.s3 = boto3.client('s3', self.region, config=
+                botocore.client.Config(signature_version='s3v4'))
+            self.s3r = boto3.resource('s3', self.region, config=
+                botocore.client.Config(signature_version='s3v4'))
             try:
                 self.s3.head_bucket(Bucket=self.bucket_name)
             except:
-                self.s3.create_bucket(Bucket=self.bucket_name,
-                                      CreateBucketConfiguration={'LocationConstraint':self.region})
+                if self.region == 'us-east-1':
+                    self.s3.create_bucket(
+                        Bucket=self.bucket_name,
+                    )
+                else:
+                    self.s3.create_bucket(
+                        Bucket=self.bucket_name,
+                        CreateBucketConfiguration={'LocationConstraint': self.region},
+                    )
 
     def read_input_file(self, input_path, local_path):
         """
@@ -689,7 +737,13 @@ class S3IOStore(IOStore):
 
         """
 
-        raise NotImplementedError()
+        self.__connect()
+
+        bucket = self.s3r.Bucket(self.bucket_name).objects.all() if path is None \
+            else self.s3r.Bucket(self.bucket_name).filter(Prefix=path)
+
+        for key in bucket:
+            yield key
 
     def write_output_file(self, local_path, output_path):
         """
@@ -710,6 +764,9 @@ class S3IOStore(IOStore):
         already.
 
         """
+
+        self.__connect()
+
         try:
             self.s3.get_object(Bucket=self.bucket_name, Key=path)
             return True
@@ -735,6 +792,13 @@ class S3IOStore(IOStore):
         """
 
         raise NotImplementedError()
+
+    def get_number_of_items(self, path=None):
+        """
+        Return the number of items in path if it exits, or None otherwise
+        """
+
+        return sum(1 for _ in self.list_input_directory(path))
 
 
 class AzureIOStore(IOStore):
@@ -1058,3 +1122,10 @@ class AzureIOStore(IOStore):
                 break
 
         return None
+
+    def get_number_of_items(self, path=None):
+        """
+        Return the number of items in path if it exits, or None otherwise
+        """
+
+        return sum(1 for _ in self.list_input_directory(path))

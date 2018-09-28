@@ -22,7 +22,7 @@ from molmimic.parsers.Electrostatics import run_pdb2pqr
 from molmimic.parsers.CNS import Minimize
 from molmimic.parsers.mmtf_spark import PdbToMmtfFull
 from molmimic.generate_data.iostore import IOStore
-from molmimic.generate_data.job_utils import cleanup_ids
+from molmimic.generate_data.job_utils import cleanup_ids, map_job_rv
 from molmimic.generate_data.util import data_path_prefix, get_structures_path, \
     get_features_path, get_first_chain, get_all_chains, number_of_lines, \
     iter_unique_superfams, SubprocessChain, get_jobstore_name
@@ -469,9 +469,14 @@ def process_sfam(job, sfam_id, cores=NUM_WORKERS):
 
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
-    d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
-    processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi),
-        axis=1).compute()
+
+    if cores >= 20:
+        d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
+        processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi),
+            axis=1).compute()
+    else:
+        processed_domains = job.addChildJobFn(map_job_rv, process_domain, sdoms,
+            preemptable=True).rv()
 
     return processed_domains
 
@@ -500,14 +505,15 @@ def start_toil(job, name="prep_protein"):
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
     sfams = sdoms["sfam_id"].drop_duplicates().dropna()
 
+    max_cores = job.fileStore.jobStore.config.maxCores if \
+        job.fileStore.jobStore.config.maxCores > 2 else \
+        job.fileStore.jobStore.config.defaultCores
+
     #Add jobs for each sdi
-    sdoms["sfam_id"].drop_duplicates().dropna().apply(
-        lambda sfam_id: job.addChildJobFn(process_sfam, sfam_id, cores=
-            job.fileStore.jobStore.config.maxCores))
+    job.addChildJobFn(map_job, process_sfam, sfams, cores=max_cores)
 
     #Add jobs for to post process each sfam
-    sdoms["sfam_id"].drop_duplicates().dropna().apply(
-        lambda sfam_id: job.addFollowOnJobFn(post_process_sfam, sfam_id))
+    job.addFollowOnJobFn(map_job, post_process_sfam, sfams, cores=max_cores)
 
     del sdoms
     os.remove(sdoms_file)
@@ -596,46 +602,6 @@ if __name__ == "__main__":
     #     convert_pdb_to_mmtf(None, "default", cdd)
 
 
-# if __name__ == "__main__":
-#     if len(sys.argv) == 3:
-#     	#Submit IBIS interfaces file to get PDBs to prepare to batch system
-#         submit_ibis(sys.argv[2], sys.argv[1])
-#
-#     elif len(sys.argv) == 4 and sys.argv[1] == "load-pdb-group":
-#         PDB_PATH = get_structures_path(sys.argv[2])
-#         load_pdb_group(sys.argv[2], sys.argv[3])
-#
-#     elif len(sys.argv) == 5 and "load" in sys.argv:
-#     	#Load IBIS interfaces file to get PDBs to prepare
-#         PDB_PATH = get_structures_path(sys.argv[2])
-#         load_ibis(sys.argv[2], sys.argv[3], sys.argv[4])
-#
-#     elif len(sys.argv) == 4 and "load-families" in sys.argv:
-#     	#Load IBIS interfaces file to get PDBs to prepare from in indivual protein family
-#         PDB_PATH = get_structures_path(sys.argv[2])
-#         submit_ibis_cdd(sys.argv[2], sys.argv[3])
-#
-#     elif len(sys.argv) in [4,5] and "protein" in sys.argv:
-#     	#Prepare a single protein by splitting in chains, then calls run_single_chain for each chain
-#     	PDB_PATH = get_structures_path(sys.argv[2])
-#         chain = sys.argv[3] if len(sys.argv)==4 else None
-#         for c in run_protein(sys.argv[3], chain):
-#             pass
-#
-#     elif len(sys.argv) == 5 and "single-chain" in sys.argv:
-#     	#Prepare a single chain
-#     	PDB_PATH = get_structures_path(sys.argv[3], cdd=sys.argv[2])
-#         for d in run_single_chain(sys.argv[3]):
-#             pass
-#
-#     elif len(sys.argv) in [6, 8] and "single-domain" in sys.argv:
-#     	#Split on domains after chain has been prepared
-#     	PDB_PATH = get_structures_path(sys.argv[2])
-#         for d in run_single_domain(*sys.argv[3:]):
-#             pass
-#
-#     else:
-#         print len(sys.argv), sys.argv
 #
 # def run_protein(pdb_file, chain=None, sdi=None, domainNum=None, cdd=None, process_chains=True, process_domains=True):
 #     """Prepare a protein structure for use in molmimic. This will
@@ -728,172 +694,3 @@ if __name__ == "__main__":
 #                 yield domain_file, pdb_name, chain, (sdi, domainNum)
 #
 # def run_single_domain(chain_file, pdb, chain, chainNum=None, sdi=None, calculate_features=False):
-#     assert not chain_file.endswith(".gz"), "Cannot be a gzip archive, try 'run_protein' instead"
-#     assert len(get_all_chains(chain_file)) == 1, "Must contain only one chain"
-#
-#     for domain_file, pdb_name, chain, (sdi, domainNum) in split_domains_in_pdb(chain_file, pdb, chain):
-#         if calculate_features:
-#             subprocess.call(["/data/draizene/3dcnn-torch-py2",
-#                 "python", os.path.realpath(__file__), pdb, chain, "None", "False"])
-#         yield domain_file, pdb_name, chain, (sdi, domainNum)
-#
-# def load_ibis(dataset_name, cdd, ibis_data, process_all_chains=False, add_to_job=None, wait_for_subjobs=False):
-#     from molmimic.torch_model.torch_loader import IBISDataset
-#
-#     output_dir = get_structures_path(dataset_name)
-#     if not os.path.exists(output_dir):
-#         os.makedirs(output_dir)
-#
-#     #chain_names_file = open(os.path.join(output_dir, "{}_raw_chains.txt".format(cdd.replace("/", ""))), "w")
-#
-#     try:
-#         dataset = IBISDataset(ibis_data)
-#     except:
-#         chain_names_file.close()
-#         return
-#
-#     data = dataset.data
-#
-#     name = os.path.splitext(os.path.basename(ibis_data))[0]
-#
-#     if isinstance(add_to_job, SwarmJob):
-#         job = add_to_job
-#     elif add_to_job==True:
-#         job_name = os.environ.get("SLURM_JOB_NAME", "{}_prep_chains".format(dataset_name))
-#     	job = SwarmJob("{}_prep_chains".format(job_name), modules="rosetta", walltime="8:00:00")
-#     else:
-#         job = None
-#
-#     i = 0
-#
-#     pdb_groups = data.groupby(lambda x: data["pdb"].loc[x][1:3])
-#     for pdb_divided, pdb_group in pdb_groups:
-#         pdb_path = os.path.join(output_dir, pdb_divided.lower())
-#         feature_path = os.path.join(output_dir, "atom", pdb_divided.lower())
-#         if not os.path.exists(pdb_path):
-#             os.makedirs(pdb_path)
-#         if not os.path.exists(feature_path):
-#             os.makedirs(feature_path)
-#
-#         if not process_all_chains:
-#             for _, pdb in pdb_group[["pdb", "chain"]].drop_duplicates().iterrows():
-#                 pdb_file = "/pdb/pdb/{}/pdb{}.ent.gz".format(pdb_divided.lower(), pdb["pdb"].lower())
-#                 try:
-#                     for chain_file, pdb, chain, domain in run_protein(pdb_file, pdb["chain"], cdd=cdd, process_chains=False):
-#                         if job is not None:
-#                             job += "python {} single-chain {} {}\n".format(__file__, dataset_name, chain_file)
-#                         #print >> chain_names_file, chain_file
-#                 except RuntimeError:
-#                     continue
-#         else:
-#             for pdb in pdb_group["pdb"].drop_duplicates():
-#                 pdb_file = "/pdb/pdb/{}/pdb{}.ent.gz".format(pdb_divided.lower(), pdb.lower())
-#                 try:
-#                     for chain_file, pdb, chain, domain in run_protein(pdb_file, cdd=cdd, process_chains=False):
-#                         if job is not None:
-#                             job += "python {} single-chain {} {}\n".format(__file__, dataset_name, chain_file)
-#                         #print >> chain_names_file, chain_file
-#                 except RuntimeError:
-#                     continue
-#
-#     #chain_names_file.close()
-#
-#     if isinstance(add_to_job, bool) and add_to_job:
-#         print "=> Chain Job", job.run()
-#
-#     #return chain_names_file.name
-#
-# def all_chains_done(chain_names_file):
-#     if isinstance(chain_names_file, (list, tuple)):
-#         for f in chain_names_file:
-#             if not all_chains_done(f):
-#                 return False
-#         return True
-#
-#     with open(chain_names_file) as f:
-#         for line in f:
-#             if not os.path.isfile(line.rstrip()+".done"):
-#                 return False
-#     return True
-#
-# def load_families(dataset_name, ibis_data, run_chain_swarm=True):
-#     job_name = "{}_prep_chains".format(dataset_name)
-#     if run_chain_swarm:
-#         job_name = os.environ.get("SLURM_JOB_NAME", job_name)
-#
-#     CDD = pd.read_csv("MMDB/StructDomSfam.csv", usecols=["label"]).drop_duplicates().dropna()
-#     CDD = sorted(CDD["label"].apply(lambda cdd: cdd.replace("/", "").replace("'", "\'")).tolist())
-#
-#     chain_names_files = []
-#     job = SwarmJob(job_name, modules="rosetta", walltime="2:00:00")
-#     for cdd in CDD:
-#         f = os.path.join(ibis_data, "{}.raw".format(cdd))
-#         chain_names = load_ibis(dataset_name, cdd, f, add_to_job=job)
-#         chain_names_files.append(chain_names)
-#
-#     if run_chain_swarm:
-#         job.run()
-#
-#         while not all_chains_done(chain_names_files):
-#             #Wait for chains to finish
-#             time.sleep(800)
-#
-# def load_pdb_group(dataset_name, group):
-#     output_dir = get_structures_path(dataset_name)
-#     with open(os.path.join("prepare_chains", group+".txt")) as f:
-#         for line in f:
-#             try:
-#                 pdb, chain = line.rstrip().split("\t")
-#             except ValueError:
-#                 continue
-#             chain_file = os.path.join(output_dir, group.lower(), "{}_{}.pdb".format(pdb.lower(), chain))
-#             run_single_chain(chain_file)
-#
-# def submit_ibis_cdd(dataset_name, ibis_data, job_name="prep_proteins", dependency=None):
-#     output_dir = get_structures_path(dataset_name)
-#     CDD = pd.read_csv("MMDB/StructDomSfam.csv", usecols=["label"]).drop_duplicates().dropna()
-#     CDD = sorted(CDD["label"].apply(lambda cdd: cdd.replace("/", "").replace("'", "\'")).tolist())
-#
-#     pdbs = defaultdict(set)
-#
-#     #full_job = SwarmJob(job_name+"_full", walltime="0:30:00")
-#
-#     for cdd in CDD:
-#         cdd_f = os.path.join(ibis_data, "{}.raw".format(cdd.replace("/", "").replace("'", "\'")))
-#         #full_job += "python {} load {} \"{}\" {}\n".format(__file__, dataset_name, cdd.replace("/", ""), cdd_f)
-#
-#         with open(cdd_f) as f:
-#             for line in f:
-#                 try:
-#                     pdb, chain = line.split("\t")[:2]
-#                 except IndexError:
-#                     continue
-#                 pdbs[pdb[1:3]].add((pdb, chain))
-#
-#
-#     #jid = full_job.run(filter_unique=True, dependency=dependency)
-#     #print jid
-#
-#     chain_job = SwarmJob(job_name+"_chain", modules="rosetta", walltime="2-00:00:00")
-#     if not os.path.isdir("prepare_chains"):
-#         os.makedirs("prepare_chains")
-#     for pdb_group, pdb_chains in pdbs.iteritems():
-#         with open(os.path.join("prepare_chains", pdb_group.lower()+".txt"), "w") as f:
-#             for pdb, chain in pdb_chains:
-#                 print >> f, "{}\t{}".format(pdb, chain)
-#         chain_job += "python {} load-pdb-group {} {}\n".format(__file__, dataset_name, pdb_group)
-#     jid1 = chain_job.run(filter_unique=True)#, dependency="afterany:"+jid)
-#     return jid1
-#
-# def submit_ibis(dataset_name, ibis_data, job_name="prep_proteins", dependency=None, run_chain_swarm=False):
-#     command = "load-families" if os.path.isdir(ibis_data) else "load"
-#     job = SwarmJob(job_name, walltime="96:00:00", modules="rosetta", mem="1", individual=True)
-#     job += "python {} {} {} {}\n".format(__file__, command, dataset_name, ibis_data)
-#     job_id = job.submit_individual(dependency=dependency)
-#     swarm_file = "{}_prep_chains.sh".format(dataset_name) if not run_chain_swarm else "{}.sh".format(dataset_name)
-#     return job_id, swarm_file
-#
-# def submit_chain_swarm(swarm_file, num_tasks, job_name="prep_proteins", dependency=None):
-#     job = SwarmJob(job_name, walltime="96:00:00", mem="1", modules="rosetta")
-#     job += "awk 'NR==$SLURM_ARRAY_TASK_ID{print;exit}' {}".format(swarm_file)
-#     job.run(filter_unique=True)
