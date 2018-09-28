@@ -15,44 +15,68 @@ SparseConvNet
 numpy
 scikit-learn
 Biopython
-numba
 seaborn
-openbabel
-freesasa
 tqdm
-toil
+dask
+pandas
 ```
 Non python requirements:
 ```
 pdb2pqr
-rosetta
-```
-Optional:
-```
+apbs
+CNS
+openbabel
 DSSP
 CX
-flask
-visdom
 ```
-All requirements can be found in the Singularity Container on Singualrity Hub: 
+All non-python requirments can be run using docker:
 ```
-https://www.singularity-hub.org/collections/818/
-```
-It can downloaded using: 
-```bash
-singularity pull shub://edraizen/SingularityTorch
+docker://edraizen/pdb2pqr:latest
+docker://edraizen/apbs:latest
+docker://edraizen/openbabel:latest
+docker://edraizen/dssp:latest
+docker://edraizen/cx:latest
 ```
 
+Toil is a requirment, but cannot be installed autmatically through pip. You must choose which type of cluster you want to use:
+```
+pip install toil #Only local clusters
+pip install toil[aws]
+pip install toil[gce]
+pip install toil[azure]
+pip install toil[all]
+```
 # Data Generation
-To create all of the necessary data, please run the Snakemake pipeline in the data directory
+To create all of the necessary data, please run the Toil workflow in the generate_data directory. You have the option to run this locally, on bare-metal cluster (e.g. SLURM or SGE), or on the cloud (e.g. AWS, Google Cloud, or Azure). For local or bare-metal cluster with shared filesytem, make sure all of the python dependencies are availble (and non python dependencies in your PATH if you don't want to use docker) and run the whole workflow or only part of it by calling:
+```python /path/to/molmimic/generate_data/run.py file:dataset-name --defaultCores 4 --maxLocalJobs 1000```
 
+For running on aws or other cloud options:
+1) Follow [Preparing yur AWS environment](https://toil.readthedocs.io/en/3.15.0/running/cloud/amazon.html#preparing-your-aws-environment) instruction on toil documentation
+1) Start the cluster
 ```
-mkdir scratch & cd scratch
-export SLURM_TOIL_ARGS = "-p PARTITION"...
-python /path/to/molmimic/generate_data/build_full_dataset.py dataset_name
+toil launch-cluster molmimic-cluster --keyPairName id_rsa --leaderNodeType t2.medium --zone us-east-1
 ```
-
-Replace dataset_name with the name of the dataset, or path to aws or google cloud. Please see the README in the data directory for more information.
+2) Copy molmimic to the cluster
+```
+toil rsync-cluster -z us-east-1a domain-cluster -av molmimic :/root
+```
+3) SSH into the cluster
+```
+toil ssh-cluster molmimic-cluster --zone us-east-1
+```
+4) In the cluster's shell, create a virtual enviroment and install molmimic and its requirments (noting to make sure to use the --system-site-packages option!):
+```
+virtualenv --system-site-packages venv
+. venv/bin/activate
+cd /root/molmimmic
+pip install requirements.txt
+pip install .
+cd /root
+```
+5) Finally, run the workflow:
+```
+screen python /root/molmimic/generate_data/run.py aws:us-east-1:dataset-name --provisioner aws --nodeTypes c3.large --maxNodes 2 --batchSystem mesos
+```
 
 ![Data Generation Pipeline](figures/data_generation_pipeline.png)
 
