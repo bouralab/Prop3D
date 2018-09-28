@@ -157,43 +157,15 @@ def prepare_domain(pdb_file, work_dir=None, pdb=None, chain=None, domainNum=None
     except (SystemExit, KeyboardInterrupt):
         raise
     except:
-        raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file)
-
-    # try:
-    #     subprocess.call(["pdb2pqr",
-    #         "--ff=parse",
-    #         "--ph-calc-method=propka",
-    #         "--chain",
-    #         "--drop-water",
-    #         pdb_file, pqr_file],
-    #         stdout=subprocess.PIPE,
-    #         stderr=subprocess.PIPE)
-    # except subprocess.CalledProcessError:
-    #     raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file))
+        raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. \
+Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file))
 
     try:
         with open(pqr_file) as f:
             pass
     except IOError:
-        raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file))
-
-    #Minimize, assumes minimize from rosetta is in path
-    # score_file = prefix+".sc"
-    # minimized_file = prefix+".pdb_0001.pdb"
-    #
-    # try:
-    #     subprocess.check_output(["minimize.static.linuxgccrelease",
-    #         "-s", pqr_file,
-    #         "-run:min_type", "lbfgs_armijo_nonmonotone",
-    #         "-run:min_tolerance", "0.001",
-    #         "-overwrite", "false", #Pandas apply calls first row twice so this is needed
-    #         "-ignore_zero_occupancy", "false",
-    #         "-out:file:scorefile", score_file,
-    #         "-out:path:pdb", pdb_path,
-    #         "-out:path:score", pdb_path],
-    #         stderr=subprocess.PIPE)
-    # except subprocess.CalledProcessError:
-    #     raise RuntimeError("Unable to minimize file {}".format(pqr_file))
+        raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs.  \
+Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file))
 
     #Minimize useing CNS
     minimized_file, score_file = Minimize(pqr_file, work_dir=work_dir)
