@@ -52,7 +52,7 @@ def SubprocessChain(commands, output):
         raise RuntimeError
 
 def PDBTools(commands, output):
-    cmds = [[sys.executable, "-m", "pdb-tools.pdb_{}".format(cmd[0]))]+cmd[1:] \
+    cmds = [[sys.executable, "-m", "pdb-tools.pdb_{}".format(cmd[0])]+cmd[1:] \
         for cmd in commands]
     SubprocessChain(cmd, output)
 
