@@ -376,7 +376,7 @@ def convert_pdb_to_mmtf(job, sfam_id, jobStoreIDs=None, clustered=True, preempta
     out_store = IOStore.get("{}:molmimic-{}-mmtf".format(prefix, clustered))
     out_store.write_output_directory(mmtf_path, sfam_id)
 
-def create_data_loader(job, sfam_id, preemptable=True, preemptable=True):
+def create_data_loader(job, sfam_id, preemptable=True):
     """Create H5 for Molmimic3dCNN to read
 
     Note: move this somewhere else
