@@ -46,6 +46,18 @@ pip install toil[gce]
 pip install toil[azure]
 pip install toil[all]
 ```
+# Download
+```
+git clone https://github.com/edraizen/molmimic.git
+cd molmimic
+git submodule init
+git submodule update
+```
+If not running on aws or cloud-based cluster, install module with all requirements:
+```python setup.py install
+```
+Else, follow the AWS steps in the Data generation section to install with all requirments
+
 # Data Generation
 To create all of the necessary data, please run the Toil workflow in the generate_data directory. You have the option to run this locally, on bare-metal cluster (e.g. SLURM or SGE), or on the cloud (e.g. AWS, Google Cloud, or Azure). For local or bare-metal cluster with shared filesytem, make sure all of the python dependencies are availble (and non python dependencies in your PATH if you don't want to use docker) and run the whole workflow or only part of it by calling:
 ```python /path/to/molmimic/generate_data/run.py file:dataset-name --defaultCores 4 --maxLocalJobs 1000```
