@@ -467,11 +467,11 @@ def start_toil(job, name="prep_protein"):
         job.fileStore.jobStore.config.defaultCores
 
     #Add jobs for each sdi
-    job.addChildJobFn(map_job, process_sfam, sfams, pdbFileStoreID=pdbFileStoreID,
+    job.addChildJobFn(map_job, process_sfam, sfams, pdbFileStoreID,
         cores=max_cores)
 
     #Add jobs for to post process each sfam
-    job.addFollowOnJobFn(map_job, post_process_sfam, sfams, pdbFileStoreID=pdbFileStoreID,
+    job.addFollowOnJobFn(map_job, post_process_sfam, sfams, pdbFileStoreID,
         cores=max_cores)
 
     del sdoms
