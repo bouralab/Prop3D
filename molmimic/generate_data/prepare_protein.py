@@ -64,11 +64,8 @@ def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_ch
     if work_dir is None:
         work_dir = os.getcwd()
 
-    #pdb_path = os.path.join(work_dir, "by_superfamily", str(int(sfam_id)), pdb[1:3].upper())
-    domain_file = os.path.join(work_file, "{}_{}_sdi{}_d{}.pdb.extracted".format(pdb, chain, int(sdi), domNo))
-
-    # if not os.path.exists(pdb_path):
-    #     os.makedirs(pdb_path)
+    domain_file = os.path.join(work_dir, "{}_{}_sdi{}_d{}.pdb.extracted".format(
+        pdb, chain, int(sdi), domNo))
 
     open_fn = gzip.open if pdb_file.endswith(".gz") else open
 
@@ -206,8 +203,6 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
 
     pdb_path = os.path.join("by_superfamily", str(sfam_id), pdb[1:3].upper())
     domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdb, chain, sdi, domNo))
-    # if out_store.exists(domain_file):
-    #     return
 
     job.log("RUNNING DOMAIN {} {} {} {} {}".format(pdb_file, pdb, chain, sdi, domNo))
 
@@ -428,6 +423,7 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1):
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
 
     if cores >= 20:
+        #Only makes sense for slurm or other bare-matal clsuters
         setup_dask(cores)
         d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
         processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi),
