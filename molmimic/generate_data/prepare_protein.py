@@ -423,8 +423,7 @@ def process_sfam(job, sfam_id, cores=1):
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
 
-    sdoms_file = os.path.join(work_dir, "PDB.h5")
-    in_store.read_input_file("PDB.h5", sdoms_file)
+    sdoms_file = job.fileStore.readGlobalFile(sdoms_file)
 
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
