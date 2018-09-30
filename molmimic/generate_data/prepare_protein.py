@@ -27,13 +27,9 @@ from molmimic.generate_data.util import data_path_prefix, get_structures_path, \
     get_features_path, get_first_chain, get_all_chains, number_of_lines, \
     iter_unique_superfams, SubprocessChain, get_jobstore_name
 
-NUM_WORKERS = 20
-dask.config.set(scheduler='multiprocessing', num_workers=NUM_WORKERS)
-dask.config.set(pool=ThreadPool(NUM_WORKERS))
-
-RAW_PDB_PATH = os.path.join(data_path_prefix, "pdb", "pdb")
-PDB_PATH = os.path.join(data_path_prefix, "structures")
-PDB_TOOLS = os.path.join(os.path.dirname(os.path.dirname(data_path_prefix)), "pdb-tools")
+def setup_dask(num_workers):
+    dask.config.set(scheduler='multiprocessing')
+    dask.config.set(pool=ThreadPool(num_workers))
 
 def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_chain=None, striphet=True, work_dir=None):
     """Extract a domain from a protein structure and cleans the output to make
@@ -244,7 +240,7 @@ def process_domain(job, sdi, pdb=None, chain=None, domNo=None, sfam_id=None, pre
 
     return prepared_file, domain_file_base, sfam_id
 
-def cluster(job, sfam_id, jobStoreIDs, id=0.95, cores=NUM_WORKERS, preemptable=True):
+def cluster(job, sfam_id, jobStoreIDs, id=0.95, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     out_store = IOStore.get("{}:molmimic-clustered-structures".format(prefix))
@@ -422,7 +418,7 @@ def create_data_loader(job, sfam_id, preemptable=True):
     data_loader = os.path.join(pdb_path, "{}.h5".format(int(sfam_id)))
     domains.to_hdf(unicode(data_loader), "table", complevel=9, complib="bzip2")
 
-def process_sfam(job, sfam_id, cores=NUM_WORKERS):
+def process_sfam(job, sfam_id, cores=2):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     clustered = "clustered" if clustered else "full"
@@ -439,6 +435,7 @@ def process_sfam(job, sfam_id, cores=NUM_WORKERS):
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
 
     if cores >= 20:
+        setup_dask(cores)
         d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
         processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi),
             axis=1).compute()
