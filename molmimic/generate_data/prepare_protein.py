@@ -84,12 +84,12 @@ def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_ch
         input = pdb_file
 
     commands = [
-        [sys.executable, "-m", "pdb-tools.pdb_selmodel"), "-1", input],
-        [sys.executable, "-m", "pdb-tools.pdb_selchain"), "-{}".format(chain)],
-        [sys.executable, "-m", "pdb-tools.pdb_delocc")],
-        [sys.executable, "-m", "pdb-tools.pdb_rslice")]+rslices,
-        [sys.executable, "-m", "pdb-tools.pdb_striphet")],
-        [sys.executable, "-m", "pdb-tools.pdb_tidy")]
+        [sys.executable, "-m", "pdb-tools.pdb_selmodel", "-1", input],
+        [sys.executable, "-m", "pdb-tools.pdb_selchain", "-{}".format(chain)],
+        [sys.executable, "-m", "pdb-tools.pdb_delocc"],
+        [sys.executable, "-m", "pdb-tools.pdb_rslice"]+rslices,
+        [sys.executable, "-m", "pdb-tools.pdb_striphet"],
+        [sys.executable, "-m", "pdb-tools.pdb_tidy"]
     ]
 
     if rename_chain is not None:
@@ -171,9 +171,9 @@ Most likeley reason for failing is that the structure is missing too many heavy 
     minimized_file, score_file = Minimize(pqr_file, work_dir=work_dir)
 
     commands = [
-        [sys.executable, "-m", "pdb-tools.pdb_stripheader"), minimized_file],
-        [sys.executable, "-m", "pdb-tools.pdb_chain"), "-{}".format(chain)],
-        [sys.executable, "-m", "pdb-tools.pdb_tidy")]
+        [sys.executable, "-m", "pdb-tools.pdb_stripheader", minimized_file],
+        [sys.executable, "-m", "pdb-tools.pdb_chain", "-{}".format(chain)],
+        [sys.executable, "-m", "pdb-tools.pdb_tidy"]
     ]
 
     cleaned_file = prefix+".pdb"
@@ -264,7 +264,7 @@ def cluster(job, sfam_id, jobStoreIDs, id=0.95, cores=NUM_WORKERS, preemptable=T
             with job.fileStore.readGlobalFileStream(jobStoreID) as f:
                 try:
                     seq = subprocess.check_output([sys.executable, "-m", \
-                        "pdb-tools.pdb_toseq.py")], stdin=f)
+                        "pdb-tools.pdb_toseq.py"], stdin=f)
                     fasta.write(">{}\n{}\n".format(pdb_fname, "\n".join(seq.splitlines()[1:])))
                     domain_ids[pdb_fname] = jobStoreID
                 except (KeyboardInterrupt, SystemExit):
