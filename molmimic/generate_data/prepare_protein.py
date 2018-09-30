@@ -185,9 +185,9 @@ Most likeley reason for failing is that the structure is missing too many heavy 
 
     return cleaned_file
 
-def process_domain(job, sdi, pdb=None, chain=None, domNo=None, sfam_id=None, preemptable=True):
+def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
-    pdb_info_file = job.fileStore.readGlobalFile("PDB.h5")
+    pdb_info_file = job.fileStore.readGlobalFile(pdbFileStoreID)
     all_sdoms = pd.read_hdf(unicode(pdb_info_file), "merged")
 
     sdom = all_sdoms[all_sdoms["sdi"]==float(sdi)]
@@ -240,13 +240,12 @@ def process_domain(job, sdi, pdb=None, chain=None, domNo=None, sfam_id=None, pre
 
     return prepared_file, domain_file_base, sfam_id
 
-def cluster(job, sfam_id, jobStoreIDs, id=0.95, preemptable=True):
+def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.95, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     out_store = IOStore.get("{}:molmimic-clustered-structures".format(prefix))
 
-    pdb_info_file = job.fileStore.readGlobalFile("PDB.h5")
-    sdoms_file = os.path.join(work_dir, "PDB.h5")
+    sdoms_file = job.fileStore.readGlobalFile(pdbFileStoreID)
 
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]
@@ -418,12 +417,12 @@ def create_data_loader(job, sfam_id, preemptable=True):
     data_loader = os.path.join(pdb_path, "{}.h5".format(int(sfam_id)))
     domains.to_hdf(unicode(data_loader), "table", complevel=9, complib="bzip2")
 
-def process_sfam(job, sfam_id, cores=1):
+def process_sfam(job, sfam_id, pdbFileStoreID, cores=1):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
 
-    sdoms_file = job.fileStore.readGlobalFile("PDB.h5")
+    sdoms_file = job.fileStore.readGlobalFile(pdbFileStoreID)
 
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
@@ -457,7 +456,7 @@ def start_toil(job, name="prep_protein"):
     in_store.read_input_file("PDB.h5", sdoms_file)
 
     #Add pdb info into local job store
-    job.fileStore.writeGlobalFile(sdoms_file, "PDB.h5")
+    pdbFileStoreID = job.fileStore.writeGlobalFile(sdoms_file)
 
     #Get all unique superfamilies
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
@@ -468,10 +467,12 @@ def start_toil(job, name="prep_protein"):
         job.fileStore.jobStore.config.defaultCores
 
     #Add jobs for each sdi
-    job.addChildJobFn(map_job, process_sfam, sfams, cores=max_cores)
+    job.addChildJobFn(map_job, process_sfam, sfams, pdbFileStoreID=pdbFileStoreID,
+        cores=max_cores)
 
     #Add jobs for to post process each sfam
-    job.addFollowOnJobFn(map_job, post_process_sfam, sfams, cores=max_cores)
+    job.addFollowOnJobFn(map_job, post_process_sfam, sfams, pdbFileStoreID=pdbFileStoreID,
+        cores=max_cores)
 
     del sdoms
     os.remove(sdoms_file)
