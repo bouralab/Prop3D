@@ -84,16 +84,16 @@ def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_ch
         input = pdb_file
 
     commands = [
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_selmodel.py"), "-1", input],
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_selchain.py"), "-{}".format(chain)],
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_delocc.py")],
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_rslice.py")]+rslices,
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_striphet.py")],
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
+        [sys.executable, "-m", "pdb-tools.pdb_selmodel"), "-1", input],
+        [sys.executable, "-m", "pdb-tools.pdb_selchain"), "-{}".format(chain)],
+        [sys.executable, "-m", "pdb-tools.pdb_delocc")],
+        [sys.executable, "-m", "pdb-tools.pdb_rslice")]+rslices,
+        [sys.executable, "-m", "pdb-tools.pdb_striphet")],
+        [sys.executable, "-m", "pdb-tools.pdb_tidy")]
     ]
 
     if rename_chain is not None:
-        commands.append([sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"),
+        commands.append([sys.executable, "-m", "pdb-tools.pdb_chain.py"),
             "-{}".format("1" if isinstance(rename_chain, bool) and rename_chain else rename_chain)])
 
     with open(domain_file, "w") as output:
@@ -171,9 +171,9 @@ Most likeley reason for failing is that the structure is missing too many heavy 
     minimized_file, score_file = Minimize(pqr_file, work_dir=work_dir)
 
     commands = [
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_stripheader.py"), minimized_file],
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-{}".format(chain)],
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
+        [sys.executable, "-m", "pdb-tools.pdb_stripheader"), minimized_file],
+        [sys.executable, "-m", "pdb-tools.pdb_chain"), "-{}".format(chain)],
+        [sys.executable, "-m", "pdb-tools.pdb_tidy")]
     ]
 
     cleaned_file = prefix+".pdb"
@@ -263,8 +263,8 @@ def cluster(job, sfam_id, jobStoreIDs, id=0.95, cores=NUM_WORKERS, preemptable=T
         for jobStoreID, pdb_fname, _ in jobStoreIDs:
             with job.fileStore.readGlobalFileStream(jobStoreID) as f:
                 try:
-                    seq = subprocess.check_output([sys.executable, os.path.join(PDB_TOOLS,
-                        "pdb_toseq.py")], stdin=f)
+                    seq = subprocess.check_output([sys.executable, "-m", \
+                        "pdb-tools.pdb_toseq.py")], stdin=f)
                     fasta.write(">{}\n{}\n".format(pdb_fname, "\n".join(seq.splitlines()[1:])))
                     domain_ids[pdb_fname] = jobStoreID
                 except (KeyboardInterrupt, SystemExit):
@@ -405,7 +405,7 @@ def create_data_loader(job, sfam_id, preemptable=True):
     in_store = IOStore.get("{}:molmimic-clustered-structures".format(prefix))
     keys = [id_format.match(f).groups() for f in in_store.list_input_directory(sfam_id) \
         if f.endswith(".pdb") and id_format.match(f)]
-    
+
     pdb_path = os.path.join(PDB_PATH, dataset_name, "by_superfamily", str(int(sfam_id)))
     clusters_file = os.path.join(pdb_path, "{}_nr.fasta".format(int(sfam_id)))
 
@@ -460,7 +460,7 @@ def start_toil(job, name="prep_protein"):
 
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
-    in_store = IOStore.get("{}:molmimic-ibis")
+    in_store = IOStore.get("{}:molmimic-ibis".format(prefix))
 
     #Download PDB info
     sdoms_file = os.path.join(work_dir, "PDB.h5")
