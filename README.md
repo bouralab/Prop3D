@@ -7,7 +7,7 @@ In the future we hope to report binding partners, binding sites for protein-liga
 # Requirements
 Python requirements
 ```
-pytorch 0.4
+pytorch>=0.4
 torchvision
 pytorchviz
 tnt
@@ -58,7 +58,7 @@ toil launch-cluster molmimic-cluster --keyPairName id_rsa --leaderNodeType t2.me
 ```
 2) Copy molmimic to the cluster
 ```
-toil rsync-cluster -z us-east-1a domain-cluster -av molmimic :/root
+toil rsync-cluster -z us-east-1a molmimic-cluster -av molmimic :/root
 ```
 3) SSH into the cluster
 ```
@@ -68,14 +68,15 @@ toil ssh-cluster molmimic-cluster --zone us-east-1
 ```
 virtualenv --system-site-packages venv
 . venv/bin/activate
-cd /root/molmimmic
-pip install requirements.txt
+cd /root/molmimic
 pip install .
 cd /root
 ```
 5) Finally, run the workflow:
 ```
-screen python /root/molmimic/generate_data/run.py aws:us-east-1:dataset-name --provisioner aws --nodeTypes c3.large --maxNodes 2 --batchSystem mesos
+screen python /root/molmimic/generate_data/run.py aws:us-east-1:dataset-name --provisioner aws --nodeTypes t2.xlarge	 --maxNodes 2 --batchSystem mesos
+#or
+screen python /root/molmimic/generate_data/run.py aws:us-east-1:dataset-name --provisioner aws --nodeTypes t2.xlarge:.02,t2.xlarge,i3.8xlarge:0.95,i3.8xlarge, --maxNodes 2 --batchSystem mesos
 ```
 
 ![Data Generation Pipeline](figures/data_generation_pipeline.png)
