@@ -418,14 +418,10 @@ def create_data_loader(job, sfam_id, preemptable=True):
     data_loader = os.path.join(pdb_path, "{}.h5".format(int(sfam_id)))
     domains.to_hdf(unicode(data_loader), "table", complevel=9, complib="bzip2")
 
-def process_sfam(job, sfam_id, cores=2):
+def process_sfam(job, sfam_id, cores=1):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
-
-    work_dir = job.fileStore.getLocalTempDir()
-    in_store = IOStore.get(get_jobstore_name(job, "IBIS"))
-    out_store = IOStore.get(get_jobstore_name(job, "structures"))
 
     sdoms_file = os.path.join(work_dir, "PDB.h5")
     in_store.read_input_file("PDB.h5", sdoms_file)
