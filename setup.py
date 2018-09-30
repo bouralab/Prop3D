@@ -8,12 +8,25 @@ from setuptools import setup, find_packages
 def read(fname):
     return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
+packages = [
+    "pdb-tools",
+    "molmimic",
+    "molmimic.common",
+    "molmimic.generate_data",
+    "molmimic.keras_model",
+    "molmimic.parsers",
+    "molmimic.scratch",
+    "molmimic.torch_model",
+    "molmimic.util",
+    "molmimic.visualize",
+]
+
 setup(
     name = "molmimic",
     version = "0.0.1",
     author = "Eli Draizen",
     author_email = "edraizen@gmail.com",
-    packages=find_packages(),
+    packages=packages,
     long_description=read('README.md'),
     install_requires=read("requirements.txt").splitlines()
 )

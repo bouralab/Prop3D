@@ -57,7 +57,7 @@ def PDBTools(commands, output):
     SubprocessChain(cmd, output)
 
 def get_jobstore_name(job, name="raw-files"):
-    return = "{}-{}".format(job._fileStore.jobStore.locator, name)
+    return "{}-{}".format(job._fileStore.jobStore.locator, name)
 
 def get_jobstore(job, name="raw-files"):
     return Toil.getJobStore(get_jobstore_name(job, None))
