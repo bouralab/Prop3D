@@ -350,7 +350,7 @@ def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.95, preemptable=True
 
     return clustered_pdbs
 
-def convert_pdb_to_mmtf(job, sfam_id, jobStoreIDs=None, clustered=True):
+def convert_pdb_to_mmtf(job, sfam_id, jobStoreIDs=None, clustered=True, preemptable=True):
     raise NotImplementedError()
 
     work_dir = job.fileStore.getLocalTempDir()
@@ -376,7 +376,7 @@ def convert_pdb_to_mmtf(job, sfam_id, jobStoreIDs=None, clustered=True):
     out_store = IOStore.get("{}:molmimic-{}-mmtf".format(prefix, clustered))
     out_store.write_output_directory(mmtf_path, sfam_id)
 
-def create_data_loader(job, sfam_id, preemptable=True):
+def create_data_loader(job, sfam_id, preemptable=True, preemptable=True):
     """Create H5 for Molmimic3dCNN to read
 
     Note: move this somewhere else
@@ -412,7 +412,7 @@ def create_data_loader(job, sfam_id, preemptable=True):
     data_loader = os.path.join(pdb_path, "{}.h5".format(int(sfam_id)))
     domains.to_hdf(unicode(data_loader), "table", complevel=9, complib="bzip2")
 
-def process_sfam(job, sfam_id, pdbFileStoreID, cores=1):
+def process_sfam(job, sfam_id, pdbFileStoreID, cores=1, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-full-structures".format(prefix))

@@ -68,13 +68,22 @@ def map_job_rv(job, func, inputs, *args):
     num_partitions = 100
     partition_size = len(inputs) / num_partitions
     if partition_size > 1:
-        promises = []
-        for partition in partitions(inputs, partition_size):
-            promises += job.addChildJobFn(map_job, func, partition, *args).rv()
+        promises = [job.addChildJobFn(map_job, func, partition, *args).rv()] \
+            for partition in partitions(inputs, partition_size)]
     else:
         promises = [job.addChildJobFn(func, sample, *args).rv() for sample in inputs]
 
     return promises
+
+def map_job_rv_list(promises, *path):
+    for p in promises:
+        rv = p.rv()
+        if isinstance(rv, list) and len(rv) > 0:
+            for p1 in map_job_rv_list(rv):
+                yield p1
+        else:
+            yield p
+
 
 def consolidate_output(job, config, output):
     """
