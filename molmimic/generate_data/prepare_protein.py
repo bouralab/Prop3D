@@ -421,8 +421,7 @@ def create_data_loader(job, sfam_id, preemptable=True):
 def process_sfam(job, sfam_id, cores=2):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
-    clustered = "clustered" if clustered else "full"
-    in_store = IOStore.get("{}:molmimic-{}-structures".format(prefix), clustered)
+    in_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
 
     work_dir = job.fileStore.getLocalTempDir()
     in_store = IOStore.get(get_jobstore_name(job, "IBIS"))
