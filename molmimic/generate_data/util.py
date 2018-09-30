@@ -52,8 +52,8 @@ def SubprocessChain(commands, output):
         raise RuntimeError
 
 def PDBTools(commands, output):
-    PDB_TOOLS = os.path.join(os.path.dirname(os.path.dirname(data_path_prefix)), "pdb-tools")
-    cmds = [[sys.executable, os.path.join(PDB_TOOLS, "pdb_{}.py".format(cmd[0]))]+cmd[1:] for cmd in commands]
+    cmds = [[sys.executable, "-m", "pdb-tools.pdb_{}".format(cmd[0]))]+cmd[1:] \
+        for cmd in commands]
     SubprocessChain(cmd, output)
 
 def get_jobstore_name(job, name="raw-files"):

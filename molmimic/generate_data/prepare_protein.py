@@ -22,7 +22,7 @@ from molmimic.parsers.Electrostatics import run_pdb2pqr
 from molmimic.parsers.CNS import Minimize
 from molmimic.parsers.mmtf_spark import PdbToMmtfFull
 from molmimic.generate_data.iostore import IOStore
-from molmimic.generate_data.job_utils import cleanup_ids, map_job_rv
+from molmimic.generate_data.job_utils import cleanup_ids, map_job_rv, map_job
 from molmimic.generate_data.util import data_path_prefix, get_structures_path, \
     get_features_path, get_first_chain, get_all_chains, number_of_lines, \
     iter_unique_superfams, SubprocessChain, get_jobstore_name
@@ -457,7 +457,6 @@ def post_process_sfam(job, sfam_id, jobStoreIDs):
 
 def start_toil(job, name="prep_protein"):
     """Start the workflow to process PDB files"""
-
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-ibis".format(prefix))

@@ -2,8 +2,8 @@ numpy
 scikit-learn
 Biopython
 seaborn
-freesasa
 tqdm
 dask
 dask[dataframe]
 joblib
+tables
