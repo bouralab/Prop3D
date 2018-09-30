@@ -68,7 +68,7 @@ def map_job_rv(job, func, inputs, *args):
     num_partitions = 100
     partition_size = len(inputs) / num_partitions
     if partition_size > 1:
-        promises = [job.addChildJobFn(map_job, func, partition, *args).rv()] \
+        promises = [job.addChildJobFn(map_job, func, partition, *args).rv() \
             for partition in partitions(inputs, partition_size)]
     else:
         promises = [job.addChildJobFn(func, sample, *args).rv() for sample in inputs]
