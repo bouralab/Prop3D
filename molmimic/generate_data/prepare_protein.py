@@ -93,7 +93,7 @@ def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_ch
     ]
 
     if rename_chain is not None:
-        commands.append([sys.executable, "-m", "pdb-tools.pdb_chain.py"),
+        commands.append([sys.executable, "-m", "pdb-tools.pdb_chain.py",
             "-{}".format("1" if isinstance(rename_chain, bool) and rename_chain else rename_chain)])
 
     with open(domain_file, "w") as output:
