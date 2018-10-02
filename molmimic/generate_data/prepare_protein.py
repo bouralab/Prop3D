@@ -426,11 +426,11 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1, preemptable=True):
         #Only makes sense for slurm or other bare-matal clsuters
         setup_dask(cores)
         d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
-        processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi),
-            axis=1).compute()
+        processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi,
+            pdbFileStoreID), axis=1).compute()
     else:
         processed_domains = job.addChildJobFn(map_job_rv, process_domain, sdoms,
-            preemptable=True).rv()
+            pdbFileStoreID, preemptable=True).rv()
 
     return processed_domains
 
@@ -485,77 +485,6 @@ if __name__ == "__main__":
     job = Job.wrapJobFn(start_toil)
     with Toil(options) as toil:
         toil.start(job)
-
-    # meta = pd.DataFrame({c:[1] for c in cols})
-    #
-    # with ProgressBar():
-    #     pdb_map = ddf.map_partitions(lambda _df: _df.apply(\
-    #         lambda row: convert_row(job, row), axis=1), meta=meta)\
-    #             .compute(scheduler="multiprocessing", num_workers=NUM_WORKERS)
-
-    # sdoms["sdi"].drop_duplicates().dropna().apply(
-    #     lambda sdi: job.addChildJobFn(process_domain, dataset_name, sdi))
-    # # job.log("STARTING {} SDIs".format(len(sdis)))
-    # # for sdi in sdis: #.apply(lambda sdi:
-    # #     #job.log(str(sdi))
-    # #     job.addChildJobFn(process_domain, dataset_name, sdi)#)
-
-
-    #
-    # #Add jobs for to post process each sfam
-    # sdoms["sfam_id"].drop_duplicates().dropna().apply(
-    #     lambda sfam_id: job.addFollowOnJobFn(post_process_sfam, dataset_name, sfam_id))
-    # job.log("STARTING {} sfams".format(len(sfams)))
-    # for sfam_id in sfams: #.apply(lambda sfam_id: \
-    #     #job.log(str(sfam_id))
-    #     job.addFollowOnJobFn(post_process_sfam, dataset_name, sfam_id)#)
-
-
-    #job.log("ADDED ALL FOLLOW JOBS {}".format(len(job._followOns)))
-    # job.addFollowOnJobFn(cluster, dataset_name, sfam_id)
-    # j2.addFollowOnJobFn(create_data_loader, dataset_name, sfam_id)
-    # j2.addFollowOnJobFn(convert_pdb_to_mmtf, dataset_name, sfam_id)
-
-
-
-# def toil_cdd(job, dataset_name, sfam_id):
-#     pdb_path = os.path.join(PDB_PATH, dataset_name, "by_superfamily", str(int(sfam_id)))
-#
-#     #Make CDD directory
-#     if not os.path.isdir(pdb_path):
-#         os.makedirs(pdb_path)
-#
-#     all_sdoms = pd.read_hdf(unicode(os.path.join(data_path_prefix, "PDB.h5")), "merged")
-#     sdoms_groups = all_sdoms.groupby("sfam_id")
-#
-#     try:
-#         sdoms = sdoms_groups.get_group(sfam_id)
-#     except KeyError:
-#         job.log("No structural domains for {}".format(sfam_id))
-#         return
-#
-#     #Make pdb group directories
-#     sdoms["pdbId"].drop_duplicates().apply(lambda x: x[1:3]).drop_duplicates(). \
-#         apply(lambda g: os.makedirs(os.path.join(pdb_path, g)) if not \
-#             os.path.isdir(os.path.join(pdb_path, g)) else None)
-#
-#     #Some sdis have multiple entries for split structure, just use the one sdi
-#     sdoms = sdoms[["pdbId", "chnLett", "sdi", "domNo"]].drop_duplicates()
-#
-#     #Process each domain
-#     for pdbId, chnLett, sdi, domNo in sdoms.itertuples(index=False):
-#         domain_pdb_path = os.path.join(pdb_path, pdbId[1:3].upper())
-#         domain_file = os.path.join(domain_pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdbId, chnLett, sdi, domNo))
-#         if not os.path.isfile(domain_file):
-#             job.addChildJobFn(process_domain, dataset_name, pdbId, chnLett, sdi, domNo, sfam_id)
-#             # if True:
-#             #process_domain(job, dataset_name, pdbId, chnLett, sdi, domNo, sfam_id)
-
-    # for cdd, sfam_id in iter_cdd(use_id=True, label="Ig"):
-    #     toil_cdd(None, "default", cdd, sfam_id)
-    #     cluster(None, "default", cdd)
-    #     convert_pdb_to_mmtf(None, "default", cdd)
-
 
 #
 # def run_protein(pdb_file, chain=None, sdi=None, domainNum=None, cdd=None, process_chains=True, process_domains=True):
