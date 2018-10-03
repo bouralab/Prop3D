@@ -6,4 +6,6 @@ tqdm
 dask
 dask[dataframe]
 joblib
+tornado==4.5.1
+dask_joblib
 tables
