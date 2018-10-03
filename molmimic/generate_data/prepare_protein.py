@@ -204,10 +204,10 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
     pdb_path = os.path.join("by_superfamily", str(sfam_id), pdb[1:3].upper())
     domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdb, chain, sdi, domNo))
 
-    job.log("RUNNING DOMAIN {} {} {} {} {}".format(pdb_file, pdb, chain, sdi, domNo))
-
     pdb_file_base = os.path.join(pdb[1:3].lower(), "pdb{}.ent.gz".format(pdb.lower()))
     pdb_file = os.path.join(work_dir, pdb_file_base)
+
+    job.log("RUNNING DOMAIN {} {} {} {} {}".format(pdb_file, pdb, chain, sdi, domNo))
 
     try:
         #Download PDB archive from JobStore
