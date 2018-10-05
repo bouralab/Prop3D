@@ -185,7 +185,7 @@ Most likeley reason for failing is that the structure is missing too many heavy 
 def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
     pdb_info_file = job.fileStore.readGlobalFile(pdbFileStoreID)
-    all_sdoms = pd.read_hdf(unicode(pdb_info_file), "merged")
+    all_sdoms = pd.read_hdf(unicode(pdb_info_file), "merged", where="sdi == {}".format(sdi))
 
     sdom = all_sdoms[all_sdoms["sdi"]==float(sdi)]
     if sdom.shape[0] == 0:
@@ -419,7 +419,7 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1, preemptable=False):
 
     sdoms_file = job.fileStore.readGlobalFile(pdbFileStoreID)
 
-    sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
+    sdoms = pd.read_hdf(unicode(sdoms_file), "merged", where="sfam_id == {}".format(sfam_id))
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
 
     if cores >= 20:
