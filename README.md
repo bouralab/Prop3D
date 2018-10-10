@@ -82,13 +82,14 @@ virtualenv --system-site-packages venv
 . venv/bin/activate
 cd /root/molmimic
 pip install .
-cd /root
+export PYTHONPATH=/venv/lib/python2.7/site-packages
 ```
 5) Finally, run the workflow:
 ```
-screen python /root/molmimic/generate_data/run.py aws:us-east-1:dataset-name --provisioner aws --nodeTypes t2.xlarge	 --maxNodes 2 --batchSystem mesos
+screen python -m molmimic.generate_data aws:us-east-1:dataset-name --provisioner aws --nodeTypes t2.micro --minNodes 100 --maxNodes 100 --maxLocalJobs 100 --targetTime 1 --preemptableCompensation 1.0 --batchSystem mesos
 #or
-screen python /root/molmimic/generate_data/run.py aws:us-east-1:dataset-name --provisioner aws --nodeTypes t2.xlarge:.02,t2.xlarge,i3.8xlarge:0.95,i3.8xlarge, --maxNodes 2 --batchSystem mesos
+screen python -m molmimic.generate_data.prepare_protein aws:us-east-1:dataset-name --provisioner aws --nodeTypes t2.micro --minNodes 100 --maxNodes 100 --maxLocalJobs 100 --targetTime 1 --preemptableCompensation 1.0 --batchSystem mesos
+
 ```
 
 ![Data Generation Pipeline](figures/data_generation_pipeline.png)
