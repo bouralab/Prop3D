@@ -184,7 +184,7 @@ Most likeley reason for failing is that the structure is missing too many heavy 
 
 def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
-    pdb_info_file = job.fileStore.readGlobalFile(pdbFileStoreID)
+    pdb_info_file = copy_pdb_h5(job, pdbFileStoreID)
     all_sdoms = pd.read_hdf(unicode(pdb_info_file), "merged", where="sdi == {}".format(sdi))
 
     sdom = all_sdoms[all_sdoms["sdi"]==float(sdi)]
@@ -240,7 +240,7 @@ def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.95, preemptable=True
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     out_store = IOStore.get("{}:molmimic-clustered-structures".format(prefix))
 
-    sdoms_file = job.fileStore.readGlobalFile(pdbFileStoreID)
+    sdoms_file = copy_pdb_h5(job, pdbFileStoreID)
 
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]
@@ -412,12 +412,26 @@ def create_data_loader(job, sfam_id, preemptable=True):
     data_loader = os.path.join(pdb_path, "{}.h5".format(int(sfam_id)))
     domains.to_hdf(unicode(data_loader), "table", complevel=9, complib="bzip2")
 
+def copy_pdb_h5(job, path_or_pdbFileStoreID):
+    if os.path.isfile(path_or_pdbFileStoreID):
+        return path_or_pdbFileStoreID
+    else:
+        work_dir = job.fileStore.getLocalTempDir()
+        sdoms_file = os.path.join(work_dir, "PDB.h5")
+        job.fileStore.readGlobalFile(pdbFileStoreID)
+
+        with job.fileStore.readGlobalFileStream(pdbFileStoreID) as fs_sdoms, open(sdoms_file, "w") as f_sdoms:
+            for line in fs_sdoms:
+                f_sdoms.write(line)
+
+        return sdoms_file
+
 def process_sfam(job, sfam_id, pdbFileStoreID, cores=1, preemptable=False):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
 
-    sdoms_file = job.fileStore.readGlobalFile(pdbFileStoreID)
+    sdoms_file = copy_pdb_h5(job, pdbFileStoreID)
 
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged", where="sfam_id == {}".format(sfam_id))
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
@@ -427,7 +441,7 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1, preemptable=False):
         setup_dask(cores)
         d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
         processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi,
-            pdbFileStoreID), axis=1).compute()
+            sdoms_file), axis=1).compute()
     else:
         processed_domains = job.addChildJobFn(map_job_rv, process_domain, sdoms,
             pdbFileStoreID, preemptable=True).rv()
