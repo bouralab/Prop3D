@@ -205,19 +205,25 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
     domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdb, chain, sdi, domNo))
 
     pdb_file_base = os.path.join(pdb[1:3].lower(), "pdb{}.ent.gz".format(pdb.lower()))
-    pdb_file = os.path.join(work_dir, pdb_file_base)
+    pdb_file = os.path.join(work_dir, "pdb{}.ent.gz".format(pdb.lower()))
 
     job.log("RUNNING DOMAIN {} {} {} {} {}".format(pdb_file, pdb, chain, sdi, domNo))
 
     try:
         #Download PDB archive from JobStore
+        
+        job.log("AWS GET: {}; Save to: {}".format(pdb_file_base, pdb_file))
         in_store.read_input_file(pdb_file_base, pdb_file)
+        assert os.path.isfile(pdb_file)
 
         #Multiple ranges for one sdi. Might be domain swaped?
         rslices = ["{}:{}".format(st, en) for st, en in sdom[["from", "to"]].drop_duplicates().itertuples(index=False)]
 
         #Extract domain; cleaned but atomic coordinates not added or changed
         domain_file = extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, work_dir=work_dir)
+	job.log("FInished extracting domain: {}".format(domain_file))
+        assert os.path.isfile(domain_file)        
+
         domain_file_base = os.path.basename(domain_file)
         out_store.write_output_file(domain_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), domain_file_base))
 
@@ -227,7 +233,7 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
             jobStoreID, job.fileStore.writeGlobalFile(prepared_file)
         except RuntimeError as e:
             job.log(str(e))
-            pass
+            raise
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception as e:
@@ -434,6 +440,7 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1, preemptable=False):
 
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged") #, where="sfam_id == {}".format(sfam_id))
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
+    sdoms = sdoms.iloc[:1]
 
     if cores >= 20:
         #Only makes sense for slurm or other bare-matal clsuters
@@ -470,6 +477,7 @@ def start_toil(job, name="prep_protein"):
     #Get all unique superfamilies
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
     sfams = sdoms["sfam_id"].drop_duplicates().dropna()
+    sfams = sfams.iloc[:1]
 
     max_cores = job.fileStore.jobStore.config.maxCores if \
         job.fileStore.jobStore.config.maxCores > 2 else \

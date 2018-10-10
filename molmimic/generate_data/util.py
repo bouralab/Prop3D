@@ -2,6 +2,7 @@ from __future__ import print_function
 import os
 import sys
 import re
+import subprocess
 from contextlib import contextmanager
 
 import pandas as pd
