@@ -418,9 +418,8 @@ def copy_pdb_h5(job, path_or_pdbFileStoreID):
     else:
         work_dir = job.fileStore.getLocalTempDir()
         sdoms_file = os.path.join(work_dir, "PDB.h5")
-        job.fileStore.readGlobalFile(pdbFileStoreID)
 
-        with job.fileStore.readGlobalFileStream(pdbFileStoreID) as fs_sdoms, open(sdoms_file, "w") as f_sdoms:
+        with job.fileStore.readGlobalFileStream(path_or_pdbFileStoreID) as fs_sdoms, open(sdoms_file, "w") as f_sdoms:
             for line in fs_sdoms:
                 f_sdoms.write(line)
 

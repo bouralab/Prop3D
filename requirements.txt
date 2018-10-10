@@ -7,5 +7,7 @@ dask
 dask[dataframe]
 joblib
 tornado==4.5.1
-dask_joblib
+toolz >= 0.7.3
+partd >= 0.3.8
+cloudpickle >= 0.2.1
 tables
