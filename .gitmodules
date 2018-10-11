@@ -1,3 +1,3 @@
 [submodule "pdb-tools"]
-	path = pdb-tools
+	path = molmimic/pdb_tools
 	url = https://github.com/edraizen/pdb-tools.git

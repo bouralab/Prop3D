@@ -20,37 +20,46 @@ def SubprocessChain(commands, output):
         prev_proc = subprocess.Popen(
             commands[0],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE)
+            stderr=subprocess.PIPE,
+            env=os.environ)
         for cmd in commands[1:-1]:
+            print(" ".join(cmd))
             proc = subprocess.Popen(
                 cmd,
                 stdin=prev_proc.stdout,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE)
+                stderr=subprocess.PIPE,
+                env=os.environ)
             prev_proc = proc
+        print(" ".join(commands[-1]))
         final_proc = subprocess.Popen(
-            cmd[-1],
+            commands[-1],
             stdin=prev_proc.stdout,
             stdout=output,
-            stderr=subprocess.PIPE)
+            stderr=subprocess.PIPE,
+            env=os.environ)
         return final_proc.communicate()
     elif len(commands) == 2:
         prev_proc = subprocess.Popen(
             commands[0],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE)
+            stderr=subprocess.PIPE,
+            env=os.environ)
         final_proc = subprocess.Popen(
             commands[1],
             stdin=prev_proc.stdout,
             stdout=output,
-            stderr=subprocess.PIPE)
+            stderr=subprocess.PIPE,
+            env=os.environ)
     elif len(commands) == 1:
         final_proc = subprocess.Popen(
             commands[0],
             stdout=output,
-            stderr=subprocess.PIPE)
+            stderr=subprocess.PIPE,
+            env=os.environ)
     else:
         raise RuntimeError
+    return final_proc.communicate()
 
 def PDBTools(commands, output):
     cmds = [[sys.executable, "-m", "pdb-tools.pdb_{}".format(cmd[0])]+cmd[1:] \

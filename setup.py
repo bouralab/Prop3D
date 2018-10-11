@@ -9,8 +9,8 @@ def read(fname):
     return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
 packages = [
-    "pdb-tools",
     "molmimic",
+    "molmimic.pdb_tools",
     "molmimic.common",
     "molmimic.generate_data",
     "molmimic.keras_model",

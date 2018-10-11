@@ -27,6 +27,9 @@ from molmimic.generate_data.util import data_path_prefix, get_structures_path, \
     get_features_path, get_first_chain, get_all_chains, number_of_lines, \
     iter_unique_superfams, SubprocessChain, get_jobstore_name
 
+#Auto-scaling on AWS with toil has trouble finding modules? Heres the workaround
+PDB_TOOLS = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pdb_tools")
+
 def setup_dask(num_workers):
     dask.config.set(scheduler='multiprocessing')
     dask.config.set(pool=ThreadPool(num_workers))
@@ -77,20 +80,25 @@ def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_ch
         input = pdb_file
 
     commands = [
-        [sys.executable, "-m", "pdb-tools.pdb_selmodel", "-1", input],
-        [sys.executable, "-m", "pdb-tools.pdb_selchain", "-{}".format(chain)],
-        [sys.executable, "-m", "pdb-tools.pdb_delocc"],
-        [sys.executable, "-m", "pdb-tools.pdb_rslice"]+rslices,
-        [sys.executable, "-m", "pdb-tools.pdb_striphet"],
-        [sys.executable, "-m", "pdb-tools.pdb_tidy"]
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_selmodel.py"), "-1", input],
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_selchain.py"), "-{}".format(chain)],
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_delocc.py")],
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_rslice.py")]+rslices,
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_striphet.py")],
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
     ]
 
     if rename_chain is not None:
-        commands.append([sys.executable, "-m", "pdb-tools.pdb_chain.py",
+        commands.append([sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"),
             "-{}".format("1" if isinstance(rename_chain, bool) and rename_chain else rename_chain)])
-
+    
     with open(domain_file, "w") as output:
         SubprocessChain(commands, output)
+        
+    with open(domain_file) as f:
+        if f.read() == "":
+            raise RuntimeError("Error processing PDB: {}".format(domain_file))
+		
 
     if pdb_file.endswith(".gz"):
         os.remove(domain_file+".full")
@@ -164,9 +172,9 @@ Most likeley reason for failing is that the structure is missing too many heavy 
     minimized_file, score_file = Minimize(pqr_file, work_dir=work_dir)
 
     commands = [
-        [sys.executable, "-m", "pdb-tools.pdb_stripheader", minimized_file],
-        [sys.executable, "-m", "pdb-tools.pdb_chain", "-{}".format(chain)],
-        [sys.executable, "-m", "pdb-tools.pdb_tidy"]
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_stripheader.py"), minimized_file],
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-{}".format(chain)],
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb-tools.pdb_tidy.py")]
     ]
 
     cleaned_file = prefix+".pdb"
@@ -221,8 +229,10 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
 
         #Extract domain; cleaned but atomic coordinates not added or changed
         domain_file = extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, work_dir=work_dir)
-	job.log("FInished extracting domain: {}".format(domain_file))
-        assert os.path.isfile(domain_file)        
+        job.log("FInished extracting domain: {}".format(domain_file))
+        
+        with open(domain_file) as f:
+            pass        
 
         domain_file_base = os.path.basename(domain_file)
         out_store.write_output_file(domain_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), domain_file_base))
@@ -238,6 +248,7 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
         raise
     except Exception as e:
         job.log("Cannot process {}.{}.d{} ({}), error: {}".format(pdb, chain, domNo, sdi, e))
+        raise
 
     return prepared_file, domain_file_base, sfam_id
 
