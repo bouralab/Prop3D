@@ -15,6 +15,7 @@ packages = [
     "molmimic.generate_data",
     "molmimic.keras_model",
     "molmimic.parsers",
+    "molmimic.parsers.CNS-Templates",
     "molmimic.scratch",
     "molmimic.torch_model",
     "molmimic.util",
@@ -28,5 +29,6 @@ setup(
     author_email = "edraizen@gmail.com",
     packages=packages,
     long_description=read('README.md'),
-    install_requires=read("requirements.txt").splitlines()
+    install_requires=read("requirements.txt").splitlines(),
+    include_package_data=True
 )

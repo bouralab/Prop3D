@@ -23,7 +23,6 @@ def SubprocessChain(commands, output):
             stderr=subprocess.PIPE,
             env=os.environ)
         for cmd in commands[1:-1]:
-            print(" ".join(cmd))
             proc = subprocess.Popen(
                 cmd,
                 stdin=prev_proc.stdout,
@@ -31,7 +30,6 @@ def SubprocessChain(commands, output):
                 stderr=subprocess.PIPE,
                 env=os.environ)
             prev_proc = proc
-        print(" ".join(commands[-1]))
         final_proc = subprocess.Popen(
             commands[-1],
             stdin=prev_proc.stdout,

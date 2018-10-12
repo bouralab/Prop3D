@@ -1,4 +1,5 @@
 import os, sys
+import subprocess
 
 from joblib import Memory
 
@@ -9,7 +10,6 @@ try:
     from toil.lib.docker import apiDockerCall
 except ImportError:
     apiDockerCall = None
-    import subprocess
     pdb2pqr_src = os.path.join(os.path.dirname(subprocess.check_output(["which", "pdb2pqr"])), "src")
     if pdb2pqr_src:
         sys.path.append(pdb2pqr_src)
@@ -58,7 +58,7 @@ quit
     )
 
 @memory.cache
-def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=True):
+def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=True, job=None):
     """Run APBS. Calculates correct size using Psize and defualt from Chimera
     """
     if work_dir is None:
@@ -73,7 +73,7 @@ def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=
         input_file_contents = make_apbs_input(full_pqb_path)
 
 
-    if docker and apiDockerCall is not None:
+    if docker and apiDockerCall is not None and job is not None:
         input_file_name = os.path.join(work_dir, "{}.apbs_input".format(file_prefix))
         input_file_short = "{}.apbs_input".format(file_prefix)
         output_prefix = "{}.apbs_output".format(file_prefix)
@@ -94,6 +94,7 @@ def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=
         except (SystemExit, KeyboardInterrupt):
             raise
         except:
+            raise
             return run_apbs(full_pqr_file, input_file=input_file_name,
                 keep_input=keep_input, work_dir=work_dir, docker=False)
 
@@ -117,7 +118,7 @@ def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=
     assert os.path.isfile(out_file)
     return out_file
 
-def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir=None, docker=True):
+def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir=None, docker=True, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
@@ -130,7 +131,7 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
     if whitespace:
         _parameters.add("--whitespace")
 
-    if docker and apiDockerCall is not None:
+    if docker and apiDockerCall is not None and job is not None:
         #Docker can only read from work_dir
         if not os.path.abspath(os.path.dirname(pdb_file)) == os.path.abspath(work_dir):
             shutil.copy(pdb_file, work_dir)
@@ -145,13 +146,14 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
         except (SystemExit, KeyboardInterrupt):
             raise
         except:
-            return run_pdb2pqr(pdb_file, whitespace=whitespace, ff=ff,
-                parameters=parameters, work_dir=work_dir, docker=False)
+            raise
+            #return run_pdb2pqr(pdb_file, whitespace=whitespace, ff=ff,
+            #    parameters=parameters, work_dir=work_dir, docker=False)
 
     else:
         pqr_file = os.path.join(work_dir, pqr_file)
         command = ["/usr/share/pdb2pqr/pdb2pqr.py"]+parameters
-        command += [full_pdb_path, pqr_path]
+        command += [full_pdb_path, pqr_file]
 
         try:
             with silence_stdout(), silence_stderr():
@@ -159,14 +161,15 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:
-            raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
+            raise
+            #raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
 
     assert os.path.isfile(pqr_file)
     return pqr_file
 
 @memory.cache
 def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
-  pdb2pqr_parameters=None, apbs_input_file=None, apbs_keep_input=False, work_dir=None, clean=True):
+  pdb2pqr_parameters=None, apbs_input_file=None, apbs_keep_input=False, work_dir=None, docker=True, job=None, clean=True):
     """Run PDB2PQR and APBS to get charge and electrostatics for each atom
 
     Parameters
@@ -185,9 +188,9 @@ def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
     electrostatic potential
     """
     pqr_path = run_pdb2pqr(pdb_path, whitespace=pdb2pdb2pqr_whitespace,
-        ff=pdb2pqr_ff, parameters=pdb2pqr_parameters, work_dir=work_dir)
+        ff=pdb2pqr_ff, parameters=pdb2pqr_parameters, work_dir=work_dir, docker=docker, job=job)
     atom_pot_file = run_apbs(pqr_path, input_file=apbs_input_file,
-        keep_input=apbs_keep_input, work_dir=work_dir)
+        keep_input=apbs_keep_input, work_dir=work_dir, docker=docker, job=job)
 
     result = {}
     with open(pqr_path) as pqr, open(atom_pot_file) as atom_pot:

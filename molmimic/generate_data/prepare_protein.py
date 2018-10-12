@@ -99,13 +99,12 @@ def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_ch
         if f.read() == "":
             raise RuntimeError("Error processing PDB: {}".format(domain_file))
 		
-
     if pdb_file.endswith(".gz"):
         os.remove(domain_file+".full")
 
     return domain_file
 
-def prepare_domain(pdb_file, work_dir=None, pdb=None, chain=None, domainNum=None, sdi=None, sfam_id=None):
+def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi=None, sfam_id=None, job=None):
     """Prepare a single domain for use in molmimic. This method modifies a PDB
     file by adding hydrogens with PDB2PQR (ff=parse, ph=propka) and minimizing
     using rosetta (lbfgs_armijo_nonmonotone with tolerance 0.001). Finally,
@@ -153,13 +152,13 @@ def prepare_domain(pdb_file, work_dir=None, pdb=None, chain=None, domainNum=None
     propka_file = prefix+".propka"
 
     try:
-        parameters = ["--ph-calc-method=propka", "--chain", "--drop-water"]
-        pqr_file = run_pdb2pqr(pdb_file, whitespace=False, ff="parse", parameters=parameters, work_dir=work_dir)
+        parameters = ["--chain"] #["--ph-calc-method=propka", "--chain", "--drop-water"]
+        pqr_file = run_pdb2pqr(pdb_file, whitespace=False, ff="parse", parameters=parameters, work_dir=work_dir, job=job)
     except (SystemExit, KeyboardInterrupt):
         raise
-    except:
+    except Exception as e:
         raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. \
-Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file))
+Most likeley reason for failing is that the structure is missing too many heavy atoms. {}".format(pdb_file, e))
 
     try:
         with open(pqr_file) as f:
@@ -169,12 +168,12 @@ Most likeley reason for failing is that the structure is missing too many heavy 
 Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file))
 
     #Minimize useing CNS
-    minimized_file, score_file = Minimize(pqr_file, work_dir=work_dir)
-
+    minimized_file = Minimize(pqr_file, work_dir=work_dir, job=job)
+    
     commands = [
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_stripheader.py"), minimized_file],
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-{}".format(chain)],
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb-tools.pdb_tidy.py")]
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
     ]
 
     cleaned_file = prefix+".pdb"
@@ -238,7 +237,7 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
         out_store.write_output_file(domain_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), domain_file_base))
 
         try:
-            prepared_file = prepare_domain(domain_file, work_dir=work_dir)
+            prepared_file = prepare_domain(domain_file, chain, work_dir=work_dir, job=job)
             out_store.write_output_file(prepared_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), os.path.basename(prepared_file)))
             jobStoreID, job.fileStore.writeGlobalFile(prepared_file)
         except RuntimeError as e:
@@ -451,7 +450,7 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1, preemptable=False):
 
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged") #, where="sfam_id == {}".format(sfam_id))
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
-    sdoms = sdoms.iloc[:1]
+    #sdoms = sdoms.iloc[:1]
 
     if cores >= 20:
         #Only makes sense for slurm or other bare-matal clsuters
@@ -488,7 +487,7 @@ def start_toil(job, name="prep_protein"):
     #Get all unique superfamilies
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
     sfams = sdoms["sfam_id"].drop_duplicates().dropna()
-    sfams = sfams.iloc[:1]
+    #sfams = sfams.iloc[:1]
 
     max_cores = job.fileStore.jobStore.config.maxCores if \
         job.fileStore.jobStore.config.maxCores > 2 else \
