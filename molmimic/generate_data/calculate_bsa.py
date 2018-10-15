@@ -637,6 +637,21 @@ def start_toil(job, dataset_name, iteration=0, name="bsa"):
         #     continue
         # cjob.addFollowOnJobFn(inferred_bsa, dataset_name, sfam_id)
 
+def generate_air_restraints(chain1, binding_site1, chain2, binding_site2):
+    sites = [(chain1, binding_site1), (chain2, binding_site2)]
+    with open("air.air", "w") as out:
+        for i, (molchain, molsites) in enumerate(sites):
+            intchain, intsites = sites[1-i]
+            for r1 in molsites:
+                print >> out, "assign ( resid {:3d} and segid {})".format(r1, molchain)
+                print >> out, "       ("
+                for j, r2 in enumerate(intsites):
+                    print >> out, "        ( resid {:3d} and segid {})".format(r2, intchain)
+                    if j<len(binding_site2)-1:
+                        print >> out, "     or"
+
+
+
 if __name__ == "__main__":
     from toil.common import Toil
     from toil.job import Job
