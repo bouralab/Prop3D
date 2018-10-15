@@ -1,1 +1,2 @@
 include molmimic/parsers/CNS-Templates/*.inp
+include molmimic/generate_data/skip.csv

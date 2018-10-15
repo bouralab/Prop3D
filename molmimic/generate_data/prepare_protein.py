@@ -19,6 +19,7 @@ from Bio import SeqIO
 from toil.job import JobFunctionWrappingJob
 
 from molmimic.parsers.Electrostatics import run_pdb2pqr
+from molmimic.parsers.SCWRL import run_scwrl
 from molmimic.parsers.CNS import Minimize
 from molmimic.parsers.mmtf_spark import PdbToMmtfFull
 from molmimic.generate_data.iostore import IOStore
@@ -91,20 +92,20 @@ def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_ch
     if rename_chain is not None:
         commands.append([sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"),
             "-{}".format("1" if isinstance(rename_chain, bool) and rename_chain else rename_chain)])
-    
+
     with open(domain_file, "w") as output:
         SubprocessChain(commands, output)
-        
+
     with open(domain_file) as f:
         if f.read() == "":
             raise RuntimeError("Error processing PDB: {}".format(domain_file))
-		
+
     if pdb_file.endswith(".gz"):
         os.remove(domain_file+".full")
 
     return domain_file
 
-def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi=None, sfam_id=None, job=None):
+def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi=None, sfam_id=None, job=None, cleanup=True):
     """Prepare a single domain for use in molmimic. This method modifies a PDB
     file by adding hydrogens with PDB2PQR (ff=parse, ph=propka) and minimizing
     using rosetta (lbfgs_armijo_nonmonotone with tolerance 0.001). Finally,
@@ -148,17 +149,27 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
     pdb_path = os.path.dirname(pdb_file)
     prefix = pdb_file.split(".", 1)[0]
 
-    #Add hydrogens
+    #Add hydrogens and/or correct sidechains
+    scwrl_file = None
     propka_file = prefix+".propka"
+    pdb2qr_parameters = ["--chain"] #["--ph-calc-method=propka", "--chain", "--drop-water"]
 
     try:
-        parameters = ["--chain"] #["--ph-calc-method=propka", "--chain", "--drop-water"]
         pqr_file = run_pdb2pqr(pdb_file, whitespace=False, ff="parse", parameters=parameters, work_dir=work_dir, job=job)
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
-        raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. \
-Most likeley reason for failing is that the structure is missing too many heavy atoms. {}".format(pdb_file, e))
+        #Might have failed to missing too many heavy atoms
+        #Try again, but first add correct side chains
+        try:
+            scwrl_file = run_scwrl(pdb_file, work_dir=work_dir, job=job)
+            pqr_file = run_pdb2pqr(scwrl_file, whitespace=False, ff="parse", parameters=parameters, work_dir=work_dir, job=job)
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except Exception as e:
+            #It really failed, skip it and warn
+            raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. \
+    Most likeley reason for failing is that the structure is missing too many heavy atoms. {}".format(pdb_file, e))
 
     try:
         with open(pqr_file) as f:
@@ -169,7 +180,7 @@ Most likeley reason for failing is that the structure is missing too many heavy 
 
     #Minimize useing CNS
     minimized_file = Minimize(pqr_file, work_dir=work_dir, job=job)
-    
+
     commands = [
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_stripheader.py"), minimized_file],
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-{}".format(chain)],
@@ -186,6 +197,14 @@ Most likeley reason for failing is that the structure is missing too many heavy 
     		raise RuntimeError("Invalid PDB file")
         time.sleep(0.2)
         attempts += 1
+
+    if cleanup:
+        for f in [pqr_file, scwrl_file, minimized_file]:
+            if os.path.isfile(f):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
 
     return cleaned_file
 
@@ -218,7 +237,7 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
 
     try:
         #Download PDB archive from JobStore
-        
+
         job.log("AWS GET: {}; Save to: {}".format(pdb_file_base, pdb_file))
         in_store.read_input_file(pdb_file_base, pdb_file)
         assert os.path.isfile(pdb_file)
@@ -229,9 +248,9 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
         #Extract domain; cleaned but atomic coordinates not added or changed
         domain_file = extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, work_dir=work_dir)
         job.log("FInished extracting domain: {}".format(domain_file))
-        
+
         with open(domain_file) as f:
-            pass        
+            pass
 
         domain_file_base = os.path.basename(domain_file)
         out_store.write_output_file(domain_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), domain_file_base))
@@ -239,7 +258,6 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
         try:
             prepared_file = prepare_domain(domain_file, chain, work_dir=work_dir, job=job)
             out_store.write_output_file(prepared_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), os.path.basename(prepared_file)))
-            jobStoreID, job.fileStore.writeGlobalFile(prepared_file)
         except RuntimeError as e:
             job.log(str(e))
             raise
@@ -249,7 +267,14 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
         job.log("Cannot process {}.{}.d{} ({}), error: {}".format(pdb, chain, domNo, sdi, e))
         raise
 
-    return prepared_file, domain_file_base, sfam_id
+    for f in (pdb_file, domain_file, prepared_file):
+        if os.path.isfile(f):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+    return domain_file_base, sfam_id
 
 def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.95, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
@@ -449,6 +474,11 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1, preemptable=False):
     sdoms_file = copy_pdb_h5(job, pdbFileStoreID)
 
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged") #, where="sfam_id == {}".format(sfam_id))
+    skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skip.csv")
+    if os.path.isfile(skip_file):
+        skip = pd.read_csv(skip_file)
+        sdoms = sdoms[~sdoms["sdi"].isin(skip["sdi"])]
+
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
     #sdoms = sdoms.iloc[:1]
 
@@ -486,8 +516,13 @@ def start_toil(job, name="prep_protein"):
 
     #Get all unique superfamilies
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
+
+    skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skip.csv")
+    if os.path.isfile(skip_file):
+        skip = pd.read_csv(skip_file)
+        sdoms = sdoms[~sdoms["sdi"].isin(skip["sdi"])]
+
     sfams = sdoms["sfam_id"].drop_duplicates().dropna()
-    #sfams = sfams.iloc[:1]
 
     max_cores = job.fileStore.jobStore.config.maxCores if \
         job.fileStore.jobStore.config.maxCores > 2 else \
@@ -498,8 +533,8 @@ def start_toil(job, name="prep_protein"):
         cores=max_cores)
 
     #Add jobs for to post process each sfam
-    job.addFollowOnJobFn(map_job, post_process_sfam, sfams, pdbFileStoreID,
-        cores=max_cores)
+    #job.addFollowOnJobFn(map_job, post_process_sfam, sfams, pdbFileStoreID,
+    #    cores=max_cores)
 
     del sdoms
     os.remove(sdoms_file)
