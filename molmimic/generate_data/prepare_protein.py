@@ -521,6 +521,7 @@ def start_toil(job, name="prep_protein"):
     if os.path.isfile(skip_file):
         skip = pd.read_csv(skip_file)
         sdoms = sdoms[~sdoms["sdi"].isin(skip["sdi"])]
+        job.log("SKIPPING {} sdis; RUNIING {} sdis".format(skip.shape[0], sdoms.shape[0]))
 
     sfams = sdoms["sfam_id"].drop_duplicates().dropna()
 
