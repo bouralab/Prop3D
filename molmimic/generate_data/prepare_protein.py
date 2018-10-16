@@ -474,10 +474,10 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1, preemptable=False):
     sdoms_file = copy_pdb_h5(job, pdbFileStoreID)
 
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged") #, where="sfam_id == {}".format(sfam_id))
-    skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skip.csv")
+    skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keep.csv")
     if os.path.isfile(skip_file):
         skip = pd.read_csv(skip_file)
-        sdoms = sdoms[~sdoms["sdi"].isin(skip["sdi"])]
+        sdoms = sdoms[sdoms["sdi"].isin(skip["sdi"])]
 
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
     #sdoms = sdoms.iloc[:1]
@@ -517,10 +517,10 @@ def start_toil(job, name="prep_protein"):
     #Get all unique superfamilies
     sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
 
-    skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skip.csv")
+    skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keep.csv")
     if os.path.isfile(skip_file):
         skip = pd.read_csv(skip_file)
-        sdoms = sdoms[~sdoms["sdi"].isin(skip["sdi"])]
+        sdoms = sdoms[sdoms["sdi"].isin(skip["sdi"])]
 
     sfams = sdoms["sfam_id"].drop_duplicates().dropna()
 
@@ -551,96 +551,3 @@ if __name__ == "__main__":
     job = Job.wrapJobFn(start_toil)
     with Toil(options) as toil:
         toil.start(job)
-
-#
-# def run_protein(pdb_file, chain=None, sdi=None, domainNum=None, cdd=None, process_chains=True, process_domains=True):
-#     """Prepare a protein structure for use in molmimic. This will
-#     0) Unzip if gzipped
-#     1) Cleanup PDB file and add TER lines in between gaps
-#     2) Remove HETATMS
-#     3) Split Chains into separate files
-#     4) Each chain is then protonated and minimized. See 'run_single_chain'
-#     for more info
-#
-#     Parameters
-#     ----------
-#     pdb_file : str
-#         Path to PDB file
-#     chain : str or None
-#         Chain ID to split out, protonate, and mininize. If None (default),
-#         all chains will be split out, protonated, and mininized.
-#
-#     Returns
-#     -------
-#     If no chain was specified a list of all chains is returned with the
-#     path to the prepared file, the pdb code, and chain. If a chain is
-#     specified, 3 values are returned: the path to the prepared file,
-#     the pdb code, and chain. See 'run_single_chain' for info.
-#     """
-#     print pdb_file
-#     if not os.path.isfile(pdb_file):
-#         raise RuntimeError("Invalid PDB File, cannot find {}".format(pdb_file))
-#
-#     base = os.path.basename(pdb_file)
-#     if base.startswith("pdb") and base.endswith(".ent.gz"):
-#         name_format = "^pdb([A-Za-z0-9]{4}).ent.gz"
-#     else:
-#         name_format = "^([A-Za-z0-9]{4}).pdb"
-#
-#     match = re.match(name_format, base)
-#     if match and PDB_PATH is not None:
-#         pdb = match.group(1)
-#         if cdd is not None:
-#             pdb_path = os.path.join(PDB_PATH, cdd, pdb[1:3].lower())
-#         else:
-#             pdb_path = os.path.join(PDB_PATH, pdb[1:3].lower())
-#         if not os.path.exists(pdb_path):
-#             os.makedirs(pdb_path)
-#     else:
-#         print >> sys.stderr, "Invalid PDB Name, results saved to current working directory"
-#         pdb_path = os.getcwd()
-#         pdb = os.path.basename(os.path.splitext(pdb_file.replace(".gz", ""))[0])
-#
-#     #Unzip PDB file
-#     if pdb_file.endswith(".gz"):
-#         unzipped_pdb = ""
-#         with gzip.open(pdb_file, 'rt') as f:
-#             unzipped_pdb = f.read()
-#
-#     if chain is None:
-#         print "run all chains"
-#         #Split PDB into chains, 1 chain per file
-#         if not pdb_file.endswith(".gz"):
-#             subprocess.call([os.path.join(PDB_TOOLS, "pdb_splitchain.py"), pdb_file])
-#         else:
-#             splitchains = subprocess.Popen([os.path.join(PDB_TOOLS, "pdb_splitchain.py")])
-#             splitchains.communicate(unzipped_pdb)
-#
-#         #Process all chains
-#         if not process_chains:
-#             for chain in get_all_chains(pdb_file):
-#                 chain_file = os.path.join(pdb_path, "{}_{}.pdb".format(pdb, chain))
-#                 yield chain_file, pdb, chain, (None, None)
-#         else:
-#             for chain in get_all_chains(pdb_file):
-#                 chain_file = os.path.join(pdb_path, "{}_{}.pdb".format(pdb, chain))
-#                 for domain_file, pdb_name, chain, (sdi, domainNum) in run_single_chain(chain_file):
-#                     yield domain_file, pdb_name, chain, (sdi, domainNum)
-#
-#     else:
-#         #Split desired chain in PDB into 1 file
-#         chain_file = os.path.join(pdb_path, "{}_{}.pdb".format(pdb, chain))
-#         with open(chain_file, "w") as chainf:
-#             if not pdb_file.endswith(".gz"):
-#                 subprocess.call([os.path.join(PDB_TOOLS, "pdb_selchain.py"), "-{}".format(chain), pdb_file], stdout=chainf)
-#             else:
-#                 splitchain = subprocess.Popen([os.path.join(PDB_TOOLS, "pdb_selchain.py"), "-{}".format(chain)], stdin=subprocess.PIPE, stdout=chainf)
-#                 splitchain.communicate(unzipped_pdb)
-#
-#         if not process_chains:
-#             yield chain_file, pdb, chain, (None, None)
-#         else:
-#             for domain_file, pdb_name, chain, (sdi, domainNum) in run_single_chain(chain_file, domainNum=domainNum, sdi=sdi):
-#                 yield domain_file, pdb_name, chain, (sdi, domainNum)
-#
-# def run_single_domain(chain_file, pdb, chain, chainNum=None, sdi=None, calculate_features=False):
