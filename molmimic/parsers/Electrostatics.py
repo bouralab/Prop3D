@@ -1,5 +1,6 @@
 import os, sys
 import subprocess
+import shutil
 
 from joblib import Memory
 
@@ -134,8 +135,11 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
     if docker and apiDockerCall is not None and job is not None:
         #Docker can only read from work_dir
         if not os.path.abspath(os.path.dirname(pdb_file)) == os.path.abspath(work_dir):
+            print "NOT IN WORK_DIR! MOVING {} TO {}".format(pdb_file, work_dir)
             shutil.copy(pdb_file, work_dir)
-
+        else:
+            print "PDB in WORK_DIR"
+        print "Running docker in", work_dir
         _parameters += ["/data/{}".format(pdb_path), "/data/{}.pqr".format(pdb_path)]
         try:
             apiDockerCall(job,
@@ -146,6 +150,11 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
         except (SystemExit, KeyboardInterrupt):
             raise
         except:
+            print apiDockerCall(job,
+                          image='edraizen/pdb2pqr:latest',
+                          working_dir=work_dir,
+                          entrypoint="ls",
+                          parameters=["-la", "/data"])
             raise
             #return run_pdb2pqr(pdb_file, whitespace=whitespace, ff=ff,
             #    parameters=parameters, work_dir=work_dir, docker=False)

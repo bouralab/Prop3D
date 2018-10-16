@@ -1,5 +1,6 @@
 import os, sys
 import subprocess
+import shutil
 
 from joblib import Memory
 
@@ -67,9 +68,10 @@ def run_scwrl(pdb_file, output_prefix=None, framefilename=None, sequencefilename
             #    sequencefilename=sequencefilename, paramfilename=paramfilename, in_cystal=in_cystal,
             #    remove_hydrogens=remove_hydrogens, remove_h_n_term=remove_h_n_term, work_dir=work_dir, docker=False)
 
-        if not os.path.abspath(os.path.dirname(output_file)) == os.path.abspath(work_dir):
-            shutil.move(os.path.join(work_dir, os.path.basename(output_file)),
-                os.path.abspath(os.path.dirname(output_file)))
+        output_file = os.path.join(work_dir, os.path.basename(output_file))
+        #if not os.path.abspath(os.path.dirname(output_file)) == os.path.abspath(work_dir):
+        #    shutil.move(os.path.join(work_dir, os.path.basename(output_file)),
+        #        os.path.abspath(os.path.dirname(output_file)))
 
     else:
         parameters = ["scwrl4", "-i", pdb_file, "-o", output_file]+_parameters

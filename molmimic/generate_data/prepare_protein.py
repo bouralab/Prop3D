@@ -159,6 +159,7 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
+        print "PDB2PQR failed: {}".format(e)
         #Might have failed to missing too many heavy atoms
         #Try again, but first add correct side chains
         try:
@@ -520,7 +521,8 @@ def start_toil(job, name="prep_protein"):
     skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keep.csv")
     if os.path.isfile(skip_file):
         skip = pd.read_csv(skip_file)
-        sdoms = sdoms[sdoms["sdi"].isin(skip["sdi"])]job.log("SKIPPING {} sdis; RUNIING {} sdis".format(skip.shape[0], sdoms.shape[0]))
+        sdoms = sdoms[sdoms["sdi"].isin(skip["sdi"])]
+        job.log("SKIPPING {} sdis; RUNIING {} sdis".format(skip.shape[0], sdoms.shape[0]))
 
     sfams = sdoms["sfam_id"].drop_duplicates().dropna()
 
