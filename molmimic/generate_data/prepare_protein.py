@@ -152,10 +152,10 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
     #Add hydrogens and/or correct sidechains
     scwrl_file = None
     propka_file = prefix+".propka"
-    pdb2qr_parameters = ["--chain"] #["--ph-calc-method=propka", "--chain", "--drop-water"]
+    pdb2pqr_parameters = ["--chain"] #["--ph-calc-method=propka", "--chain", "--drop-water"]
 
     try:
-        pqr_file = run_pdb2pqr(pdb_file, whitespace=False, ff="parse", parameters=parameters, work_dir=work_dir, job=job)
+        pqr_file = run_pdb2pqr(pdb_file, whitespace=False, ff="parse", parameters=pdb2pqr_parameters, work_dir=work_dir, job=job)
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
@@ -163,11 +163,12 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
         #Try again, but first add correct side chains
         try:
             scwrl_file = run_scwrl(pdb_file, work_dir=work_dir, job=job)
-            pqr_file = run_pdb2pqr(scwrl_file, whitespace=False, ff="parse", parameters=parameters, work_dir=work_dir, job=job)
+            pqr_file = run_pdb2pqr(scwrl_file, whitespace=False, ff="parse", parameters=pdb2pqr_parameters, work_dir=work_dir, job=job)
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:
             #It really failed, skip it and warn
+            raise
             raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. \
     Most likeley reason for failing is that the structure is missing too many heavy atoms. {}".format(pdb_file, e))
 
@@ -480,7 +481,6 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1, preemptable=False):
         sdoms = sdoms[~sdoms["sdi"].isin(skip["sdi"])]
 
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
-    #sdoms = sdoms.iloc[:1]
 
     if cores >= 20:
         #Only makes sense for slurm or other bare-matal clsuters
@@ -524,7 +524,7 @@ def start_toil(job, name="prep_protein"):
         job.log("SKIPPING {} sdis; RUNIING {} sdis".format(skip.shape[0], sdoms.shape[0]))
 
     sfams = sdoms["sfam_id"].drop_duplicates().dropna()
-
+    
     max_cores = job.fileStore.jobStore.config.maxCores if \
         job.fileStore.jobStore.config.maxCores > 2 else \
         job.fileStore.jobStore.config.defaultCores
