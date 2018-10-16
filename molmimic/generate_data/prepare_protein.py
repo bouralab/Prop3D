@@ -158,7 +158,7 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
         pqr_file = run_pdb2pqr(pdb_file, whitespace=False, ff="parse", parameters=pdb2pqr_parameters, work_dir=work_dir, job=job)
     except (SystemExit, KeyboardInterrupt):
         raise
-    except Exception as e:
+    except Exception as e1:
         #Might have failed to missing too many heavy atoms
         #Try again, but first add correct side chains
         try:
@@ -166,11 +166,11 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
             pqr_file = run_pdb2pqr(scwrl_file, whitespace=False, ff="parse", parameters=pdb2pqr_parameters, work_dir=work_dir, job=job)
         except (SystemExit, KeyboardInterrupt):
             raise
-        except Exception as e:
+        except Exception as e2:
             #It really failed, skip it and warn
             raise
             raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. \
-    Most likeley reason for failing is that the structure is missing too many heavy atoms. {}".format(pdb_file, e))
+    Most likeley reason for failing is that the structure is missing too many heavy atoms. {} or {}".format(pdb_file, e1, e2))
 
     try:
         with open(pqr_file) as f:
@@ -248,7 +248,7 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
 
         #Extract domain; cleaned but atomic coordinates not added or changed
         domain_file = extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, work_dir=work_dir)
-        job.log("FInished extracting domain: {}".format(domain_file))
+        job.log("Finished extracting domain: {}".format(domain_file))
 
         with open(domain_file) as f:
             pass
@@ -277,7 +277,7 @@ def process_domain(job, sdi, pdbFileStoreID, preemptable=True):
 
     return domain_file_base, sfam_id
 
-def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.95, preemptable=True):
+def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.90, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     out_store = IOStore.get("{}:molmimic-clustered-structures".format(prefix))
@@ -295,8 +295,8 @@ def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.95, preemptable=True
         for jobStoreID, pdb_fname, _ in jobStoreIDs:
             with job.fileStore.readGlobalFileStream(jobStoreID) as f:
                 try:
-                    seq = subprocess.check_output([sys.executable, "-m", \
-                        "pdb-tools.pdb_toseq.py"], stdin=f)
+                    seq = subprocess.check_output([sys.executable, os.path.join(PDB_TOOLS,
+                        "pdb_toseq.py")], stdin=f)
                     fasta.write(">{}\n{}\n".format(pdb_fname, "\n".join(seq.splitlines()[1:])))
                     domain_ids[pdb_fname] = jobStoreID
                 except (KeyboardInterrupt, SystemExit):
@@ -481,6 +481,7 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1, preemptable=False):
         sdoms = sdoms[sdoms["sdi"].isin(skip["sdi"])]
 
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
+    sdoms = sdoms[:1]
 
     if cores >= 20:
         #Only makes sense for slurm or other bare-matal clsuters
@@ -523,6 +524,7 @@ def start_toil(job, name="prep_protein"):
         sdoms = sdoms[sdoms["sdi"].isin(skip["sdi"])]job.log("SKIPPING {} sdis; RUNIING {} sdis".format(skip.shape[0], sdoms.shape[0]))
 
     sfams = sdoms["sfam_id"].drop_duplicates().dropna()
+    sfams = sfams[:1]
 
     max_cores = job.fileStore.jobStore.config.maxCores if \
         job.fileStore.jobStore.config.maxCores > 2 else \
