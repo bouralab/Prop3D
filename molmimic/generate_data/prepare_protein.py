@@ -27,7 +27,7 @@ from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.job_utils import cleanup_ids, map_job_rv, map_job
 from molmimic.generate_data.util import data_path_prefix, get_structures_path, \
     get_features_path, get_first_chain, get_all_chains, number_of_lines, \
-    iter_unique_superfams, SubprocessChain, get_jobstore_name
+    iter_unique_superfams, SubprocessChain, get_jobstore_name, is_ca_model
 
 #Auto-scaling on AWS with toil has trouble finding modules? Heres the workaround
 PDB_TOOLS = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pdb_tools")
