@@ -20,6 +20,7 @@ from toil.job import JobFunctionWrappingJob
 
 from molmimic.parsers.Electrostatics import run_pdb2pqr
 from molmimic.parsers.SCWRL import run_scwrl
+from molmimic.parsers.MODELLER import run_ca2model
 from molmimic.parsers.CNS import Minimize
 from molmimic.parsers.mmtf_spark import PdbToMmtfFull
 from molmimic.generate_data.iostore import IOStore
@@ -168,10 +169,19 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as e2:
-            #It really failed, skip it and warn
-            raise
-            raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs. \
-    Most likeley reason for failing is that the structure is missing too many heavy atoms. {} or {}".format(pdb_file, e1, e2))
+            if is_ca_model(pdb_file):
+                #Run modeller to predict full atom model
+                try:
+                    pdb_file = run_ca2model(pdb_file)
+                except (SystemExit, KeyboardInterrupt):
+                    raise
+                except Exception as e2:
+                    raise
+            else:
+                #It really failed, skip it and warn
+                raise
+                raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs.".format(pdb_file) +
+                                   "Most likeley reason for failing is that the structure is missing too many heavy atoms. {} or {}".format(e1, e2))
 
     try:
         with open(pqr_file) as f:

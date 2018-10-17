@@ -170,6 +170,16 @@ def get_all_chains(pdb_file):
 
     return chains
 
+def is_ca_model(pdb_file):
+    try:
+        with open(pdb_file) as f:
+            for line in f:
+                if line.startswith("ATOM") and line[13:15] != "CA":
+                    return False
+        return True
+    except IOError:
+        return False
+
 def atof(text, use_int=False):
     converter = int if use_int else float
     try:
