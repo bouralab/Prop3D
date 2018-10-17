@@ -172,7 +172,8 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
             if is_ca_model(pdb_file):
                 #Run modeller to predict full atom model
                 try:
-                    pdb_file = run_ca2model(pdb_file)
+                    full_model_file = run_ca2model(pdb_file, chain)
+                    pqr_file = run_pdb2pqr(full_model_file, whitespace=False, ff="parse", parameters=pdb2pqr_parameters, work_dir=work_dir, job=job)
                 except (SystemExit, KeyboardInterrupt):
                     raise
                 except Exception as e2:

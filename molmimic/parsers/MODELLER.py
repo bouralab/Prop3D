@@ -59,7 +59,6 @@ def run_modeller(pir, template, model, num_models=5, work_dir=None, job=None):
         parameters = [os.path.join("/data", os.path.basename(python_file))]
 
         try:
-            with silence_stdout(), silence_stderr():
             outputs = apiDockerCall(job,
                           image='edraizen/modeller:latest',
                           working_dir=work_dir,
@@ -90,7 +89,7 @@ def run_modeller(pir, template, model, num_models=5, work_dir=None, job=None):
     assert os.path.isfile(best_pdb)
     return best_pdb
 
-def run_ca2model(ca_only_model, pdb, chain, num_models=5, work_dir=None, docker=True, job=None):
+def run_ca2model(ca_only_model, chain, num_models=5, work_dir=None, docker=True, job=None):
     """Convert a CA only model to a predicted full atom structure using modeller
     """
     if work_dir is None:
