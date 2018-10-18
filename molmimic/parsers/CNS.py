@@ -9,6 +9,8 @@ import os
 import re
 import shutil
 
+from molmimic.generate_data.util import
+
 try:
     from toil.lib.docker import apiDockerCall
 except ImportError:
@@ -43,10 +45,8 @@ def CNS(input_file, prefix, work_dir=None, docker=True, job=None, template=True,
                 if os.path.isfile(v) and not os.path.abspath(os.path.dirname(v)) == os.path.abspath(work_dir):
                     shutil.copy(v, work_dir)
                 updated_templates[k] = os.path.join("/data", os.path.basename(v))
-            job.log("UPDATED template={}".format(updated_templates))
-            inp = generate_input(input_file, prefix, work_dir, **updated_templates)   
-            with open(inp) as f:
-                job.log(f.read())	
+            inp = generate_input(input_file, prefix, work_dir, **updated_templates)
+
         try:
             parameters = [os.path.join("/data", os.path.basename(inp))]
 	    output = apiDockerCall(job,
@@ -83,9 +83,25 @@ def Minimize(pdb_file, output_file_prefix=None, work_dir=None, docker=True, job=
     temp_minimization_file = os.path.join(script_dir, "CNS-Templates", "model_minimize.inp")
     minimized_file = os.path.join(work_dir, "{}.min".format(output_file_prefix))
     cns = CNS(temp_minimization_file, output_file_prefix, work_dir=work_dir, docker=docker, job=job, INSERT_PDB_HERE=pdb_file, INSERT_OUTPUT_FILE=minimized_file)
-    
+
     if not os.path.isfile(minimized_file):
-        raise RuntimeError("CNS minimizations has failed!! Check output:\n{}".format(cns))
+        raise RuntimeError("CNS minimization has failed!! Check output:\n{}".format(cns))
+
+    m = re.search("%CREAD-ERR: residue ID and insertion character ([0-9a-zA-Z]+) exceed 4 characters.")
+    if m:
+        if len(m.group(1)) < 6:
+            #Strange bug in CNS where resn is 4 and icode is 1, valid PDB but CNS chokes
+            #CNS corrects them by removing with first character
+            #Fix by copying the original PDB cols before the XYZ coordiantes
+            new_minimized_file = os.path.join(work_dir, "{}.fixed.min".format(output_file_prefix))
+            with open(pdb_file) as old, open(minimized_file) as minf, open(new_minimized_file, "w") as new:
+                 for oline, mline in izip_missing(old, minf, fillvalue=None)
+                    if oline is None or mline is None:
+                        raise RuntimeError("CNS minimization has failed!! {}. Check output: {}".format(m.group(0), cns))
+                    new.write(mline[0:22]+oline[22:27]+mline[27:])
+            minimized_file = new_minimized_file
+        else:
+            raise RuntimeError("CNS minimization has failed!! {}. Check output: {}".format(m.group(0), cns))
 
     return minimized_file
 
@@ -105,4 +121,4 @@ def generate_input(template_file, prefix, work_dir, **kwds):
                 line = re.sub(key, val, line)
             inp.write(line)
 
-    return input_file 
+    return input_file

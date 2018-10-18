@@ -163,6 +163,8 @@
    set message=off echo=off end
  end if
 
+ set ABORt=OFF end
+
  if ( &BLANK%structure_infile = true ) then
 
     {- read topology files -}
