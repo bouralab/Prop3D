@@ -152,6 +152,7 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
 
     #Add hydrogens and/or correct sidechains
     scwrl_file = None
+    full_model_file = None
     propka_file = prefix+".propka"
     pdb2pqr_parameters = ["--chain"] #["--ph-calc-method=propka", "--chain", "--drop-water"]
 
@@ -172,7 +173,8 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
             if is_ca_model(pdb_file):
                 #Run modeller to predict full atom model
                 try:
-                    full_model_file = run_ca2model(pdb_file, chain)
+                    full_model_file = run_ca2model(pdb_file, chain, work_dir=work_dir, job=job)
+                    print "FULL MODEL FILE:", full_model_file
                     pqr_file = run_pdb2pqr(full_model_file, whitespace=False, ff="parse", parameters=pdb2pqr_parameters, work_dir=work_dir, job=job)
                 except (SystemExit, KeyboardInterrupt):
                     raise
@@ -190,10 +192,12 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
     except IOError:
         raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs.  \
 Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file))
-
+    print "PQR FILE:", open(pqr_file).read()
     #Minimize useing CNS
     minimized_file = Minimize(pqr_file, work_dir=work_dir, job=job)
-
+    print minimized_file
+    print os.listdir(work_dir)
+    print "MIN FILE:", open(minimized_file).read()
     commands = [
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_stripheader.py"), minimized_file],
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-{}".format(chain)],
@@ -212,8 +216,8 @@ Most likeley reason for failing is that the structure is missing too many heavy 
         attempts += 1
 
     if cleanup:
-        for f in [pqr_file, scwrl_file, minimized_file]:
-            if os.path.isfile(f):
+        for f in [pqr_file, scwrl_file, full_model_file, minimized_file]:
+            if f is not None and os.path.isfile(f):
                 try:
                     os.remove(f)
                 except OSError:
@@ -493,7 +497,7 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1, preemptable=False):
         sdoms = sdoms[sdoms["sdi"].isin(skip["sdi"])]
 
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]["sdi"].drop_duplicates().dropna()
-    sdoms = sdoms[:1]
+    #sdoms = sdoms[:1]
 
     if cores >= 20:
         #Only makes sense for slurm or other bare-matal clsuters
@@ -537,7 +541,7 @@ def start_toil(job, name="prep_protein"):
         job.log("SKIPPING {} sdis; RUNIING {} sdis".format(skip.shape[0], sdoms.shape[0]))
 
     sfams = sdoms["sfam_id"].drop_duplicates().dropna()
-    sfams = sfams[:1]
+    #sfams = sfams[:1]
 
     max_cores = job.fileStore.jobStore.config.maxCores if \
         job.fileStore.jobStore.config.maxCores > 2 else \
