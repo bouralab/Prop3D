@@ -49,7 +49,7 @@ def CNS(input_file, prefix, work_dir=None, docker=True, job=None, template=True,
                 job.log(f.read())	
         try:
             parameters = [os.path.join("/data", os.path.basename(inp))]
-	    apiDockerCall(job,
+	    output = apiDockerCall(job,
 	        image='edraizen/cns:latest',
 	        working_dir=work_dir,
 		parameters=parameters)
@@ -62,7 +62,8 @@ def CNS(input_file, prefix, work_dir=None, docker=True, job=None, template=True,
         load_cns_environment()
         inp = generate_input(input_file, prefix, work_dir, **template_kwds)
         with open(input_file) as inp:
-            return subprocess.check_output(["cns"], stdin=inp)
+            output = subprocess.check_output(["cns"], stdin=inp)
+    return output
 
 def Minimize(pdb_file, output_file_prefix=None, work_dir=None, docker=True, job=None):
     """Minimize a single protein.
@@ -81,7 +82,11 @@ def Minimize(pdb_file, output_file_prefix=None, work_dir=None, docker=True, job=
     output_file_prefix = output_file_prefix or os.path.splitext(os.path.basename(pdb_file))[0]
     temp_minimization_file = os.path.join(script_dir, "CNS-Templates", "model_minimize.inp")
     minimized_file = os.path.join(work_dir, "{}.min".format(output_file_prefix))
-    CNS(temp_minimization_file, output_file_prefix, work_dir=work_dir, docker=docker, job=job, INSERT_PDB_HERE=pdb_file, INSERT_OUTPUT_FILE=minimized_file)
+    cns = CNS(temp_minimization_file, output_file_prefix, work_dir=work_dir, docker=docker, job=job, INSERT_PDB_HERE=pdb_file, INSERT_OUTPUT_FILE=minimized_file)
+    
+    if not os.path.isfile(minimized_file):
+        raise RuntimeError("CNS minimizations has failed!! Check output:\n{}".format(cns))
+
     return minimized_file
 
 def generate_input(template_file, prefix, work_dir, **kwds):
