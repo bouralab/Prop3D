@@ -9,7 +9,7 @@ import os
 import re
 import shutil
 
-from molmimic.generate_data.util import
+from molmimic.generate_data.util import izip_missing
 
 try:
     from toil.lib.docker import apiDockerCall
