@@ -28,7 +28,7 @@ submit_save=Save updated parameters<BR>
 </html>
 """
 
-def run_modeller(work_dir=None, job=None):
+def run_haddock(dock_name, work_dir=None, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
@@ -37,9 +37,21 @@ def run_modeller(work_dir=None, job=None):
     if docker and apiDockerCall is not None and job is not None:
         try:
             apiDockerCall(job,
-                          image='edraizen/haddock:latest',
+                          image='edraizen/haddock-toil:latest',
                           working_dir=work_dir,
-                          parameters=[])
+                          parameters=[
+                            "aws:us-east-1:fixed-cns",
+                            "--provisioner", "aws",
+                            "--nodeTypes", "t2.small,t2.small:0.0069",
+                            "--defaultCores", "1",
+                            "--maxCores", "1",
+                            "--maxNodes", "1,99"
+                            "--maxLocalJobs", "100",
+                            "--targetTime", "1"
+                            "--batchSystem", "mesos",
+                            "--defaultMemory", "997Mi",
+                            "--defaultDisk", "42121Mi",
+                            "--logFile", os.path.join(work_dir, "{}.log".format(dock_name))])
         except (SystemExit, KeyboardInterrupt):
             raise
         except:
@@ -57,29 +69,32 @@ def run_modeller(work_dir=None, job=None):
             raise
             #raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
 
-def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, work_dir=None, docker=True, job=None):
+def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, tbl_file=None,
+  settings_file=None, work_dir=None, docker=True, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
     #Write AIR TBL_FILE
-    tbl_file = os.path.join(work_dir, "{}.tbl".format(int_id))
-    with open(tbl_file, "w") as tbl:
-        generate_air_restraints(chain1, sites1, chain2, sites2, out)
+    if tbl_file is None:
+        tbl_file = os.path.join(work_dir, "{}.tbl".format(int_id))
+        with open(tbl_file, "w") as tbl:
+            generate_air_restraints(chain1, sites1, chain2, sites2, out)
 
     #Write settings file
-    settings_file = os.path.join(work_dir, "new.html")
-    with open(settings_file, "w") as settings:
-        start_file.format(
-            TBL_FILE=tbl_file,
-            HADDOCK_DIR="/opt/haddock" if docker else haddock_path,
-            PDB1=os.path.join("/data", os.path.basename(pdb1)) if docker else pdb1,
-            PDB2=os.path.join("/data", os.path.basename(pdb2)) if docker else pdb2,
-            CHAIN1=chain1, CHAIN2=chain2
-            )
+    if settings_file is None:
+        settings_file = os.path.join(work_dir, "new.html")
+        with open(settings_file, "w") as settings:
+            start_file.format(
+                TBL_FILE=tbl_file,
+                HADDOCK_DIR="/opt/haddock" if docker else haddock_path,
+                PDB1=os.path.join("/data", os.path.basename(pdb1)) if docker else pdb1,
+                PDB2=os.path.join("/data", os.path.basename(pdb2)) if docker else pdb2,
+                CHAIN1=chain1, CHAIN2=chain2
+                )
 
     #Run haddock first to create run.cns
     try:
-        run_haddock()
+        run_haddock(int_id, work_dir=work_dir, job=job)
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
@@ -88,18 +103,24 @@ def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, work_dir=None, dock
             return dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2,
                 work_dir=work_dir, docker=False, job=job)
 
-    #Run haddock again to dock
-    run_haddock()
+    run_dir = os.path.join(work_dir, "run1")
+    assert os.path.isdir(run_dir)
+
+    #Run haddock again in the run direcotry to dock
+    run_haddock(int_id, work_dir=run_dir, job=job)
 
 def generate_air_restraints(chain1, binding_site1, chain2, binding_site2, out):
     sites = [(chain1, binding_site1), (chain2, binding_site2)]
 
     for i, (molchain, molsites) in enumerate(sites):
         intchain, intsites = sites[1-i]
-        for r1 in molsites:
-            print >> out, "assign ( resid {:3d} and segid {})".format(r1, molchain)
+        for j, r1 in enumerate(molsites):
+            print >> out, "assign ( resid {0} and segid {1})".format(r1, molchain)
             print >> out, "       ("
-            for j, r2 in enumerate(intsites):
-                print >> out, "        ( resid {:3d} and segid {})".format(r2, intchain)
-                if j<len(binding_site2)-1:
+            for k, r2 in enumerate(intsites):
+                print >> out, "        ( resid {0} and segid {1})".format(r2, intchain)
+                if k<len(intsites)-1:
                     print >> out, "     or"
+            print >> out, "       )  2.0 2.0 0.0"
+            if j<len(molsites)-1:
+                print >> out, "!"
