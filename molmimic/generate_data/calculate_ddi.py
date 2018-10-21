@@ -1,3 +1,5 @@
+import os
+from molmimic.generate_data.iostore import IOStore
 from molmimic.parsers.haddock import dock
 
 def start_toil(job):
@@ -21,7 +23,7 @@ def start_toil(job):
     settings_file = os.path.join(work_dir, settings)
     in_store.read_input_file(settings, settings_file)
 
-    dock("p53-sh3", pdb1, "A", None, pdb2, "B", None, tbl_file=tbl_file, settings_file=settings_file, job=job)
+    dock("p53-sh3", pdb1, "A", None, pdb2, "B", None, tbl_file=tbl_file, settings_file=settings_file, work_dir=work_dir, job=job)
 
 if __name__ == "__main__":
     from toil.common import Toil
@@ -33,6 +35,6 @@ if __name__ == "__main__":
     options.clean = "always"
     dataset_name = options.jobStore.split(":")[-1]
 
-    job = Job.wrapJobFn(start_toil, dataset_name)
+    job = Job.wrapJobFn(start_toil)
     with Toil(options) as toil:
         toil.start(job)
