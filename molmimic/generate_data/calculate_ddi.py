@@ -1,4 +1,42 @@
 from molmimic.parsers.haddock import dock
+from molmimic.parsers.ce import align
+
+def inferred_dock(job, dock_name, superfam_inf, pdb_inf, chain_inf, sdi_inf, \
+  domNo_inf, resi_inf, superfam_obs, pdb_obs, chain_obs, sdi_obs, domNo_inf, resi_obs, align_chain):
+    work_dir = job.fileStore.getLocalTempDir()
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+    in_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
+
+    inf_prefix = "{}/{}_{}_sdi{}_d{}.pdb".format(superfam_inf, pdb_inf, chain_inf,
+        sdi_inf, domNo_inf)
+    inf_file = os.path.join(work_dir, inf_prefix)
+    in_store.read_input_file(inf_prefix, inf_file)
+
+    obs_prefix = "{}/{}_{}_sdi{}_d{}.pdb".format(superfam_obs, pdb_obs, chain_obs,
+        sdi_obs, domNo_obs)
+    obs_file = os.path.join(work_dir, obs_prefix)
+    in_store.read_input_file(obs_prefix, obs_file)
+
+    aligned_inf_pdb = align(inf_file, chain_inf, obs_file, align_chain)
+    dock(dock_name, aligned_inf_pdb, chain_inf, resi_inf, obs_file, chain_obs,
+        domNo_inf, structures0=10, structures1=2, anastruc1=2, job=job)
+
+def observed_dock(job, dock_name, superfam1, pdb1, chain1, sdi1, domNo1, resi1, \
+  superfam2, pdb2, chain2, sdi2, domNo2, resi2):
+    work_dir = job.fileStore.getLocalTempDir()
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+    in_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
+
+    prefix1 = "{}/{}_{}_sdi{}_d{}.pdb".format(superfam1, pdb1, chain1, sdi1, domNo1)
+    file1 = os.path.join(work_dir, prefix1)
+    in_store.read_input_file(prefix1, file1)
+
+    prefix2 = "{}/{}_{}_sdi{}_d{}.pdb".format(superfam2, pdb2, chain2, sdi2, domNo2)
+    file2 = os.path.join(work_dir, prefix2)
+    in_store.read_input_file(prefix2, file2)
+
+    dock(dock_name, file1, chain1, resi1, file2, chain2, domNo2, structures0=10,
+        structures1=2, anastruc1=2, job=job)
 
 def start_toil(job):
     work_dir = job.fileStore.getLocalTempDir()
@@ -21,7 +59,9 @@ def start_toil(job):
     settings_file = os.path.join(work_dir, settings)
     in_store.read_input_file(settings, settings_file)
 
-    dock("p53-sh3", pdb1, "A", None, pdb2, "B", None, tbl_file=tbl_file, settings_file=settings_file, job=job)
+    dock("p53-sh3", pdb1, "A", None, pdb2, "B", None, tbl_file=tbl_file, \
+        settings_file=settings_file, structures0=10, structures1=2, anastruc1=2, \
+        job=job)
 
 if __name__ == "__main__":
     from toil.common import Toil
