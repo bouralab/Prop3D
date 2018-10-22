@@ -34,36 +34,29 @@ def run_haddock(dock_name, work_dir=None, docker=True, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
-    assert any(os.path.isfile(os.path.join(work_dir, f)) for f in ("new.html", "run.cns"))
+    #assert any(os.path.isfile(os.path.join(work_dir, f)) for f in ("new.html", "run.cns"))
 
     if docker and apiDockerCall is not None and job is not None:
         oldcwd = os.getcwd()
         os.chdir(work_dir)
         try:
-            print apiDockerCall(job,
-                          'edraizen/haddock-toil:latest',
-                          working_dir=work_dir,
-                          entrypoint="pwd")
-            print apiDockerCall(job,
-                          'edraizen/haddock-toil:latest',
-                          working_dir=work_dir,
-                          entrypoint="ls")
             out = apiDockerCall(job,
                           'edraizen/haddock-toil:latest',
-                          working_dir=work_dir,
+                          working_dir="/data",
+                          volumes={work_dir:{"bind":"/data", "mode":"rw"}},
                           parameters=[
-                            "aws:us-east-1:haddock-{}".format(dock_name),
                             "--provisioner", "aws",
                             "--nodeTypes", "t2.small,t2.small:0.0069",
                             "--defaultCores", "1",
                             "--maxCores", "1",
-                            "--maxNodes", "1,99"
+                            "--maxNodes", "1,99",
                             "--maxLocalJobs", "100",
-                            "--targetTime", "1"
+                            "--targetTime", "1",
                             "--batchSystem", "mesos",
                             "--defaultMemory", "997Mi",
                             "--defaultDisk", "42121Mi",
-                            "--logFile", "{}.log".format(dock_name)
+                            "--logFile", "{}.log".format(dock_name),
+                            "aws:us-east-1:haddock-{}".format(dock_name),
                           ])
         except (SystemExit, KeyboardInterrupt):
             raise
