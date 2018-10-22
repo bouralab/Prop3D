@@ -1,3 +1,5 @@
+import os
+
 try:
     from toil.lib.docker import apiDockerCall
 except ImportError:
@@ -22,36 +24,45 @@ PROJECT_DIR={WORKDIR}<BR>
 PROT_SEGID_1={CHAIN1}<BR>
 PROT_SEGID_2={CHAIN2}<BR>
 RUN_NUMBER=1<BR>
+STRUCTURES_0={structures_0}<BR>
+STRUCTURES_1={structures_1}<BR>
+ANASTRUC_1={anastruc_1}<BR>
 submit_save=Save updated parameters<BR>
 </h4><!-- HADDOCK -->
 </body>
 </html>
 """
 
-def run_haddock(dock_name, work_dir=None, job=None):
+def run_haddock(dock_name, work_dir=None, docker=True, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
-    assert any(os.path.isfile(os.path.join(work_dir, f)) for f in ("new.html", "run.cns"))
+    #assert any(os.path.isfile(os.path.join(work_dir, f)) for f in ("new.html", "run.cns"))
 
     if docker and apiDockerCall is not None and job is not None:
+        oldcwd = os.getcwd()
+        os.chdir(work_dir)
         try:
-            apiDockerCall(job,
-                          image='edraizen/haddock-toil:latest',
-                          working_dir=work_dir,
-                          parameters=[
-                            "aws:us-east-1:fixed-cns",
-                            "--provisioner", "aws",
-                            "--nodeTypes", "t2.small,t2.small:0.0069",
-                            "--defaultCores", "1",
-                            "--maxCores", "1",
-                            "--maxNodes", "1,99"
-                            "--maxLocalJobs", "100",
-                            "--targetTime", "1"
-                            "--batchSystem", "mesos",
-                            "--defaultMemory", "997Mi",
-                            "--defaultDisk", "42121Mi",
-                            "--logFile", os.path.join(work_dir, "{}.log".format(dock_name))])
+            out = apiDockerCall(job,
+                          'edraizen/haddock:latest',
+                          working_dir="/data",
+                          volumes={work_dir:{"bind":"/data", "mode":"rw"}},
+                          # parameters=
+                          # [
+                          #   "--provisioner", "aws",
+                          #   "--nodeTypes", "t2.small,t2.small:0.0069",
+                          #   "--defaultCores", "1",
+                          #   "--maxCores", "1",
+                          #   "--maxNodes", "1,99",
+                          #   "--maxLocalJobs", "100",
+                          #   "--targetTime", "1",
+                          #   "--batchSystem", "mesos",
+                          #   "--defaultMemory", "997Mi",
+                          #   "--defaultDisk", "42121Mi",
+                          #   "--logFile", "{}.log".format(dock_name),
+                          #   "aws:us-east-1:haddock-{}".format(dock_name),
+                          # ]
+                          )
         except (SystemExit, KeyboardInterrupt):
             raise
         except:
@@ -59,15 +70,16 @@ def run_haddock(dock_name, work_dir=None, job=None):
             #return run_scwrl(pdb_file, output_prefix=output_prefix, framefilename=framefilename,
             #    sequencefilename=sequencefilename, paramfilename=paramfilename, in_cystal=in_cystal,
             #    remove_hydrogens=remove_hydrogens, remove_h_n_term=remove_h_n_term, work_dir=work_dir, docker=False)
-
+        os.chdir(oldcwd)
     else:
         try:
-            subprocess.check_output([sys.executable, "RunHaddock.py"])
+            out = subprocess.check_output([sys.executable, "RunHaddock.py"])
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:
             raise
             #raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
+    return out
 
 def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, tbl_file=None,
   settings_file=None, work_dir=None, docker=True, job=None):
@@ -75,10 +87,11 @@ def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, tbl_file=None,
         work_dir = os.getcwd()
 
     #Write AIR TBL_FILE
+    print "TBL FILE", tbl_file
     if tbl_file is None:
         tbl_file = os.path.join(work_dir, "{}.tbl".format(int_id))
         with open(tbl_file, "w") as tbl:
-            generate_air_restraints(chain1, sites1, chain2, sites2, out)
+            generate_air_restraints(chain1, sites1, chain2, sites2, tbl)
 
     #Write settings file
     if settings_file is None:
@@ -94,16 +107,18 @@ def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, tbl_file=None,
 
     #Run haddock first to create run.cns
     try:
-        run_haddock(int_id, work_dir=work_dir, job=job)
+        print run_haddock(int_id, work_dir=work_dir, job=job)
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
+        raise
         if docker:
             #Retry with subprocess
             return dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2,
-                work_dir=work_dir, docker=False, job=job)
+                tbl_file=tbl_file, settings_file=tbl_file, work_dir=work_dir, docker=False, job=job)
 
     run_dir = os.path.join(work_dir, "run1")
+    print os.listdir(work_dir)
     assert os.path.isdir(run_dir)
 
     #Run haddock again in the run direcotry to dock

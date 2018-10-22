@@ -95,7 +95,7 @@ def Minimize(pdb_file, output_file_prefix=None, work_dir=None, docker=True, job=
             #Fix by copying the original PDB cols before the XYZ coordiantes
             new_minimized_file = os.path.join(work_dir, "{}.fixed.min".format(output_file_prefix))
             with open(pdb_file) as old, open(minimized_file) as minf, open(new_minimized_file, "w") as new:
-                 for oline, mline in izip_missing(old, minf, fillvalue=None)
+                 for oline, mline in izip_missing(old, minf, fillvalue=None):
                     if oline is None or mline is None:
                         raise RuntimeError("CNS minimization has failed!! {}. Check output: {}".format(m.group(0), cns))
                     new.write(mline[0:22]+oline[22:27]+mline[27:])
