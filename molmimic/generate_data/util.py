@@ -7,6 +7,9 @@ from contextlib import contextmanager
 
 import pandas as pd
 
+#Auto-scaling on AWS with toil has trouble finding modules? Heres the workaround
+PDB_TOOLS = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pdb_tools")
+
 data_path_prefix = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 
 structures_path_prefix = os.path.join(data_path_prefix, "structures")

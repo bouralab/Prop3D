@@ -27,41 +27,60 @@ RUN_NUMBER=1<BR>
 STRUCTURES_0={structures_0}<BR>
 STRUCTURES_1={structures_1}<BR>
 ANASTRUC_1={anastruc_1}<BR>
+cmrest={cmrest}<BR>
+surfrest={surfrest}<BR
+structures_0={structures_0}<BR>
+structures_1={structures_1}<BR>
+anastruc_1={anastruc_1}<BR>
+rotate180_0={rotate180_0}<BR>
+crossdock=crossdock<BR>
+rigidmini=rigidmini<BR>
+randorien=randorien<BR>
+rigidtrans=rigidtrans<BR>
+initiosteps=initiosteps<BR>
+cool1_steps=cool1_steps<BR>
+cool2_steps=cool2_steps<BR>
+cool3_steps=cool3_steps<BR>
 submit_save=Save updated parameters<BR>
 </h4><!-- HADDOCK -->
 </body>
 </html>
 """
 
-def run_haddock(dock_name, work_dir=None, docker=True, job=None):
+def run_haddock(dock_name, work_dir=None, docker=True, toil=False, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
-    #assert any(os.path.isfile(os.path.join(work_dir, f)) for f in ("new.html", "run.cns"))
+    assert any(os.path.isfile(os.path.join(work_dir, f)) for f in ("new.html", "run.cns"))
+
+    if toil:
+        image = 'edraizen/haddock-toil:latest'
+        parameters = [
+          "--provisioner", "aws",
+          "--nodeTypes", "t2.small,t2.small:0.0069",
+          "--defaultCores", "1",
+          "--maxCores", "1",
+          "--maxNodes", "1,99",
+          "--maxLocalJobs", "100",
+          "--targetTime", "1",
+          "--batchSystem", "mesos",
+          "--defaultMemory", "997Mi",
+          "--defaultDisk", "42121Mi",
+          "--logFile", "{}.log".format(dock_name),
+          "aws:us-east-1:haddock-{}".format(dock_name),
+        ]
+    else:
+        image = 'edraizen/haddock:latest'
+        parameters = []
 
     if docker and apiDockerCall is not None and job is not None:
         oldcwd = os.getcwd()
         os.chdir(work_dir)
         try:
             out = apiDockerCall(job,
-                          'edraizen/haddock:latest',
                           working_dir="/data",
                           volumes={work_dir:{"bind":"/data", "mode":"rw"}},
-                          # parameters=
-                          # [
-                          #   "--provisioner", "aws",
-                          #   "--nodeTypes", "t2.small,t2.small:0.0069",
-                          #   "--defaultCores", "1",
-                          #   "--maxCores", "1",
-                          #   "--maxNodes", "1,99",
-                          #   "--maxLocalJobs", "100",
-                          #   "--targetTime", "1",
-                          #   "--batchSystem", "mesos",
-                          #   "--defaultMemory", "997Mi",
-                          #   "--defaultDisk", "42121Mi",
-                          #   "--logFile", "{}.log".format(dock_name),
-                          #   "aws:us-east-1:haddock-{}".format(dock_name),
-                          # ]
+                          parameters=parameters
                           )
         except (SystemExit, KeyboardInterrupt):
             raise
@@ -81,8 +100,9 @@ def run_haddock(dock_name, work_dir=None, docker=True, job=None):
             #raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
     return out
 
-def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, tbl_file=None,
-  settings_file=None, work_dir=None, docker=True, job=None):
+def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, structures0=1000,
+  structures1=200, anastruc1=200, refine=False, small_refine=False,
+  tbl_file=None, settings_file=None, work_dir=None, docker=True, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
@@ -93,17 +113,56 @@ def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, tbl_file=None,
         with open(tbl_file, "w") as tbl:
             generate_air_restraints(chain1, sites1, chain2, sites2, tbl)
 
+    parameters = {
+        "TBL_FILE": tbl_file,
+        "HADDOCK_DIR": "/opt/haddock2.2" if docker else haddock_path,
+        "PDB1": os.path.join("/data", os.path.basename(pdb1)) if docker else pdb1,
+        "PDB2": os.path.join("/data", os.path.basename(pdb2)) if docker else pdb2,
+        "CHAIN1": chain1,
+        "CHAIN2": chain2
+    }
+
+    if small_refine:
+        refine=True
+
+    if refine:
+        parameters.update({
+            "cmrest": "true",
+            "surfrest":  "true",
+            "structures_0": 5 if small_refine else structures0,
+            "structures_1": 5 if small_refine else structures_1,
+            "anastruc_1": 1 if small_refine else anastruc_1,
+            "rotate180_0": "false",
+            "crossdock": "false",
+            "rigidmini": "false",
+            "randorien": "false",
+            "rigidtrans": "false",
+            "initiosteps": 0,
+            "cool1_steps": 0,
+            "cool2_steps": 0,
+            "cool3_steps": 0
+        })
+    else:
+        parameters.update({
+            "cmrest": "false",
+            "surfrest": "false",
+            "rotate180_0": "true",
+            "crossdock": "true",
+            "rigidmini": "true",
+            "randorien": "true",
+            "rigidtrans": "true",
+            "initiosteps": 500,
+            "cool1_steps": 500,
+            "cool2_steps": 1000,
+            "cool3_steps": 1000
+        })
+
+
     #Write settings file
     if settings_file is None:
         settings_file = os.path.join(work_dir, "new.html")
         with open(settings_file, "w") as settings:
-            start_file.format(
-                TBL_FILE=tbl_file,
-                HADDOCK_DIR="/opt/haddock" if docker else haddock_path,
-                PDB1=os.path.join("/data", os.path.basename(pdb1)) if docker else pdb1,
-                PDB2=os.path.join("/data", os.path.basename(pdb2)) if docker else pdb2,
-                CHAIN1=chain1, CHAIN2=chain2
-                )
+            start_file.format(**parameters)
 
     #Run haddock first to create run.cns
     try:

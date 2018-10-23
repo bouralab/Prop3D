@@ -1,13 +1,31 @@
 import os
+import subprocss
+
 from molmimic.generate_data.iostore import IOStore
 from molmimic.parsers.haddock import dock
-from molmimic.parsers.ce import align
+from molmimic.parsers.superpose import align
 
-def inferred_dock(job, dock_name, superfam_inf, pdb_inf, chain_inf, sdi_inf, \
-  domNo_inf, resi_inf, superfam_obs, pdb_obs, chain_obs, sdi_obs, domNo_obs, resi_obs, align_chain):
+def prep(f1, f2, work_dir=None):
+    if work_dir is None:
+        work_dir = os.getcwd()
+
+    for i, f in (f1, f2):
+        newf = os.path.join(work_dir, "{}.pdb".format(i))
+        with open(newf, "w") as new:
+            subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-{}".format(i), f], stdout=new)
+        yield newf
+
+def inferred_dock(job, inferred_row, observed_row)
+  dock_name,
+  superfam_inf, pdb_inf, chain_inf, sdi_inf, \
+  domNo_inf, resi_inf, superfam_obs, pdb_obs, chain_obs, sdi_obs, domNo_obs, resi_obs,
+  ):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
+
+    dock_name = inferred_row["int_id"]
+
 
     inf_prefix = "{}/{}_{}_sdi{}_d{}.pdb".format(superfam_inf, pdb_inf, chain_inf,
         sdi_inf, domNo_inf)
@@ -19,9 +37,18 @@ def inferred_dock(job, dock_name, superfam_inf, pdb_inf, chain_inf, sdi_inf, \
     obs_file = os.path.join(work_dir, obs_prefix)
     in_store.read_input_file(obs_prefix, obs_file)
 
-    aligned_inf_pdb = align(inf_file, chain_inf, obs_file, align_chain)
+    obs_partner_prefix = "{}/{}_{}_sdi{}_d{}.pdb".format(superfam_obs, pdb_obs, chain_obs,
+        sdi_obs, domNo_obs)
+    obs_partner = os.path.join(work_dir, obs_partner_prefix)
+    in_store.read_input_file(obs_partner_prefix, obs_partner)
+
+    #Set chain names as 1=inf, 2=obs
+    inf_file, obs_prefix = list(prep(inf_file, obs_prefix))
+
+    aligned_inf_pdb = align(inf_file, chain_inf, obs_partner, align_chain)
+
     dock(dock_name, aligned_inf_pdb, chain_inf, resi_inf, obs_file, chain_obs,
-        domNo_inf, structures0=10, structures1=2, anastruc1=2, job=job)
+        domNo_inf, small_refine=True, job=job)
 
 def observed_dock(job, dock_name, superfam1, pdb1, chain1, sdi1, domNo1, resi1, \
   superfam2, pdb2, chain2, sdi2, domNo2, resi2):
@@ -38,7 +65,7 @@ def observed_dock(job, dock_name, superfam1, pdb1, chain1, sdi1, domNo1, resi1, 
     in_store.read_input_file(prefix2, file2)
 
     dock(dock_name, file1, chain1, resi1, file2, chain2, domNo2, structures0=10,
-        structures1=2, anastruc1=2, job=job)
+        structures1=2, anastruc1=2, small_refine=True, job=job)
 
 def start_toil(job):
     work_dir = job.fileStore.getLocalTempDir()
