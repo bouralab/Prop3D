@@ -19,7 +19,7 @@ def align(fixed_file, moving_file, work_dir=None, job=None):
                           volumes={work_dir:{"bind":"/data", "mode":"rw"}},
                           parameters=[
                             "--file1", os.path.basename(fixed_file),
-                            "--file2", os.path.basename(moving_file)
+                            "--file2", os.path.basename(moving_file),
                             "-outputPDB",
                             "-outFile", os.path.basename(outFile)])
         except (SystemExit, KeyboardInterrupt):

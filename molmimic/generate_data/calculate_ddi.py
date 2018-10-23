@@ -4,7 +4,7 @@ from molmimic.parsers.haddock import dock
 from molmimic.parsers.ce import align
 
 def inferred_dock(job, dock_name, superfam_inf, pdb_inf, chain_inf, sdi_inf, \
-  domNo_inf, resi_inf, superfam_obs, pdb_obs, chain_obs, sdi_obs, domNo_inf, resi_obs, align_chain):
+  domNo_inf, resi_inf, superfam_obs, pdb_obs, chain_obs, sdi_obs, domNo_obs, resi_obs, align_chain):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
