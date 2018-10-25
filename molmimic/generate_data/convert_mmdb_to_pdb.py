@@ -20,7 +20,7 @@ def convert_row(job, row):
         frm, to = list(mmdb_to_pdb_resi(row["pdbId"], row["chnLett"], resi, replace_nulls=True))
     except (IOError, TypeError, ValueError, InvalidSIFTS) as e:
         job.log("Error mapping mmdb for {} '{}' {} {}".format(row["pdbId"], row["chnLett"], resi, e))
-        frm, to = np.nan, np.nan
+        return None
 
     return pd.Series({"from":frm, "to":to})
 
@@ -90,15 +90,15 @@ def merge(job, jobStoreIDs, cores=4):
 
     sfams = pd.read_hdf(unicode(os.path.join(data_path_prefix, "MMDB.h5")), "Superfamilies")
     sfams = df[['sdsf_id', 'sdi', 'sfam_id', 'label', 'whole_chn', 'mmdb_id', 'mol_id', 'pssm']]
-    sfams.to_hdf(unicode(output), "Superfamilies", complevel=9, complib="bzip2", min_itemsize=768)
+    sfams.to_hdf(unicode(output), "Superfamilies", format="table", table=True, complevel=9, complib="bzip2", min_itemsize=768)
 
     sdoms = pd.read_hdf(unicode(output+".tmp"), "StructuralDomains")
     merged = pd.merge(sdoms, sfams, how="left", on="sdi").dropna()
-    merged.to_hdf(unicode(output), "merged", complevel=9, complib="bzip2", min_itemsize=768)
+    merged.to_hdf(unicode(output), "merged", format="table", table=True, complevel=9, complib="bzip2", min_itemsize=768)
 
     resolu = pd.read_table("ftp://ftp.wwpdb.org/pub/pdb/derived_data/index/resolu.idx",
         header=None, names=["pdbId", "resolution"], skiprows=6, sep="\t;\t")
-    resolu.to_hdf(unicode(output+".tmp"), "resolu", complevel=9, complib="bzip2", min_itemsize=768)
+    resolu.to_hdf(unicode(output+".tmp"), "resolu", format="table", table=True, complevel=9, complib="bzip2", min_itemsize=768)
 
     jobStore.write_output_file(output, "PDB.h5")
 
@@ -132,25 +132,16 @@ def start_toil(job, name="mmdb2pdb"):
     job.addFollowOnJobFn(merge, group_files)
 
 if __name__ == "__main__":
-    if len(sys.argv) == 1:
-        submit_jobs()
-    elif len(sys.argv) == 2 and sys.argv[1] == "merge":
-        merge()
-    elif len(sys.argv) == 2:
-        convert_pdb_group(sys.argv[1])
+    from toil.common import Toil
+    from toil.job import Job
 
-# def submit_jobs(job_name="mmdb2pdb"):
-#     pdb_dir = os.path.join(data_path_prefix, "pdb", "pdb")
-#     tmp_path = os.path.join(data_path_prefix, "__mmdb_to_pdb")
-#     if os.path.isdir(tmp_path):
-#         shutil.rmtree(tmp_path)
-#     os.makedirs(tmp_path)
-#     job = SlurmJob(job_name, walltime="3-00:00:00")
-#     for pdb_group in next(os.walk(pdb_dir))[1]:
-#         job += "{} {} {}\n".format(sys.executable, __file__, os.path.basename(pdb_group))
-#     jid = job.run()
-#
-#     job2 = SlurmJob(job_name+"_merge", walltime="3:00:00", individual=True)
-#     job2 += "{} {} merge\n".format(sys.executable, __file__)
-#     jid2 = job2.submit_individual(dependency="afterany:"+jid)
-#     return jid2
+    parser = Job.Runner.getDefaultArgumentParser()
+    options = parser.parse_args()
+    options.logLevel = "DEBUG"
+    options.clean = "always"
+
+    print "Running"
+
+    job = Job.wrapJobFn(start_toil)
+    with Toil(options) as toil:
+        toil.start(job)

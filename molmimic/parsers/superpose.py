@@ -18,7 +18,7 @@ def align(fixed_file, fixed_chain, moving_file, moving_chain, method="tmalign", 
         parameters = lambda f, m: [m, f, "-o", outfile+".sup"]
     elif method == "ce":
         image = "edraizen/ce:latest:
-        parameters = lambda f, m, o: ["--file1", f, "--file2", m, "-outputPDB", "-outFile", outfile+".sup"])
+        parameters = lambda f, m: ["--file1", f, "--file2", m, "-outputPDB", "-outFile", outfile+".sup"])
 
     if docker and apiDockerCall is not None and job is not None:
         try:
