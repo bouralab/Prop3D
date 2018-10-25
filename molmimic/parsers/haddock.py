@@ -33,14 +33,14 @@ structures_0={structures_0}<BR>
 structures_1={structures_1}<BR>
 anastruc_1={anastruc_1}<BR>
 rotate180_0={rotate180_0}<BR>
-crossdock=crossdock<BR>
-rigidmini=rigidmini<BR>
-randorien=randorien<BR>
-rigidtrans=rigidtrans<BR>
-initiosteps=initiosteps<BR>
-cool1_steps=cool1_steps<BR>
-cool2_steps=cool2_steps<BR>
-cool3_steps=cool3_steps<BR>
+crossdock={crossdock}<BR>
+rigidmini={rigidmini}<BR>
+randorien={randorien}<BR>
+rigidtrans={rigidtrans}<BR>
+initiosteps={initiosteps}<BR>
+cool1_steps={cool1_steps}<BR>
+cool2_steps={cool2_steps}<BR>
+cool3_steps={cool3_steps}<BR>
 submit_save=Save updated parameters<BR>
 </h4><!-- HADDOCK -->
 </body>
@@ -78,6 +78,7 @@ def run_haddock(dock_name, work_dir=None, docker=True, toil=False, job=None):
         os.chdir(work_dir)
         try:
             out = apiDockerCall(job,
+                          image,
                           working_dir="/data",
                           volumes={work_dir:{"bind":"/data", "mode":"rw"}},
                           parameters=parameters
