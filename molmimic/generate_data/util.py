@@ -62,6 +62,23 @@ def SubprocessChain(commands, output):
         raise RuntimeError
     return final_proc.communicate()
 
+def get_file(job, prefix, path_or_fileStoreID):
+    if os.path.isfile(path_or_fileStoreID):
+        return path_or_pdbFileStoreID
+    else:
+        work_dir = job.fileStore.getLocalTempDir()
+        new_file = os.path.join(work_dir, prefix)
+
+        if isinstance(path_or_fileStoreID, str):
+            with job.fileStore.readGlobalFileStream(path_or_fileStoreID) as fs, open(new_file, "w") as nf:
+                for line in fs:
+                    nf.write(line)
+        elif hasattr("read_input_file", path_or_fileStoreID):
+            #Might be file store itself
+            in_store.read_input_file(prefix, new_file)
+
+        return new_file
+
 def PDBTools(commands, output):
     cmds = [[sys.executable, "-m", "pdb-tools.pdb_{}".format(cmd[0])]+cmd[1:] \
         for cmd in commands]
@@ -136,6 +153,7 @@ def iter_unique_superfams():
     CDD = CDD["sfam_id"].drop_duplicates().dropna()
     for cdd in CDD:
         yield cdd
+    dell CFF
 
 class InvalidPDB(RuntimeError):
     pass
@@ -296,3 +314,14 @@ def izip_missing(iterA, iterB, **kwds):
                 raise RuntimeError("Invalid comparator")
     except StopIteration:
         pass
+
+def make_h5_tables(files, iostore):
+    for f in files:
+        iostore.read_input_file(f, f)
+        store = pd.HDFStore(unicode(f))
+        for key in store.keys():
+            df = store.get(key)
+            df.to_hdf(unicode(f+".new"), "table", format="table",
+                table=True, complevel=9, complib="bzip2", min_itemsize=1024)
+        iostore.write_output_file(f+".new", f)
+        

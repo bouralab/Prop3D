@@ -271,7 +271,16 @@ class IOStore(object):
         """
         Return the number of items in path if it exits, or None otherwise
         """
+
         raise NotImplementedError()
+
+    def remove_file(self, path):
+        """
+        Removes the object from the store
+        """
+
+        raise NotImplementedError()
+
 
     @staticmethod
     def absolute(store_string):
@@ -581,6 +590,12 @@ class FileIOStore(IOStore):
 
         return sum(1 for name in os.listdir(path) if os.path.isfile(name))
 
+    def remove_file(self, path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
 class BackoffError(RuntimeError):
     """
     Represents an error from running out of retries during exponential back-off.
@@ -739,8 +754,8 @@ class S3IOStore(IOStore):
 
         self.__connect()
 
-        bucket = self.s3r.Bucket(self.bucket_name).objects.all() if path is None \
-            else self.s3r.Bucket(self.bucket_name).filter(Prefix=path)
+        bucket = self.s3r.Bucket(self.bucket_name).objects.all() if input_path is None \
+            else self.s3r.Bucket(self.bucket_name).filter(Prefix=input_path)
 
         for key in bucket:
             yield key
@@ -799,6 +814,9 @@ class S3IOStore(IOStore):
         """
 
         return sum(1 for _ in self.list_input_directory(path))
+
+    def remove_file(self, path):
+        self.s3r.Bucket(self.bucket_name).delete_key(path)
 
 
 class AzureIOStore(IOStore):

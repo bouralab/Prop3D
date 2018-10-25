@@ -440,8 +440,8 @@ def get_asa(df):
 
     obs_interface_asa = r.face1_asa_obs+r.face2_asa
     ratio = (face1_asa+r.face2_asa)/obs_interface_asa if obs_interface_asa > 0. else 0.
-    #ratio = (r.mol_resn.count(",")+r.n_res_int+1)/float(r.n_res_mol+r.n_res_int)
-    predicted_bsa = r.obs_bsa*ratio #asa+r["c2_asa"]-r["complex_asa_obs"]
+    
+    predicted_bsa = r.obs_bsa*ratio
     complex_asa = asa+r.c2_asa-predicted_bsa
 
     for ppi_type, (low_cut, high_cut) in cutoffs.iteritems():
