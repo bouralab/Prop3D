@@ -1,5 +1,5 @@
 import os
-import subprocss
+import subprocess
 
 from molmimic.generate_data.iostore import IOStore
 from molmimic.parsers.haddock import dock
