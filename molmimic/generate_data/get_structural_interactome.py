@@ -95,7 +95,7 @@ def merge_interactome_resi(job, sfam_id, converted_residues, newIbisFileStoreID,
     ibis_path = get_file(newIbisFileStoreID)
 
     #Merge resdides with inferred interactrome
-    ints = pd.read_hdf(unicode(ibis_path), "table", query="mol_superfam_id=={}".format(sfam_id))
+    ints = pd.read_hdf(unicode(ibis_path), "table", where="mol_superfam_id=={}".format(sfam_id))
     ints.loc[:, new_cols] = conv_resi
 
     #Save to file
@@ -120,7 +120,7 @@ def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFil
     mmdb_path = get_file(job, "PDB.h5", out_store)
 
     #Read in PPIs and save from the given CDD
-    obs_ints = pd.read_hdf(unicode(ibis_obs_path), "ObsInt", query="mol_superfam_id=={}".format(sfam_id))
+    obs_ints = pd.read_hdf(unicode(ibis_obs_path), "ObsInt", where="mol_superfam_id=={}".format(sfam_id))
     #obs_ints = obs_ints[obs_ints["mol_superfam_id"]==sfam_id]
 
     #Read in face1 residues
@@ -183,7 +183,7 @@ def process_inferred_sfam_table(job, mol_sfam_id, table, groupInfFileStoreID, pd
     tmp_df_file = get_file(job, "tmp"+df_key, groupInfFileStoreID)
 
     sfams_file = get_file(job, "PDB.h5", pdbFileStoreID)
-    sfams = pd.read_hdf(unicode(sfams_file, "Superfamilies", query="sfam_id=={}".format(float(mol_sfam_id)))
+    sfams = pd.read_hdf(unicode(sfams_file, "Superfamilies", where="sfam_id=={}".format(float(mol_sfam_id)))
     sfams = sfams[["sdi", "label"]] #[sfams["sfam_id"]==float(mol_sfam_id)]
 
     convert_residues = lambda row: decode_residues(row["pdbId"], row["chnLett"], row["resi"], row)
@@ -295,7 +295,7 @@ def get_inferred_structural_interactome_by_table(job, table, pdbFileStoreID):
     struct_domains = pd.read_hdf(unicode(pdb_file), "StructuralDomains")
 
     #Read in H5 for entire table
-    infpath = get_file(job, "IBIS_inferred.h5", in_store)
+    infpath = get_file(job, "IBIS_inferred_{}.h5".format(table), in_store)
 
     try:
         inferred_interfaces = pd.read_hdf(unicode(infpath), "Intrac{}".format(table))
@@ -388,7 +388,7 @@ def start_toil(job):
     pdbFileStoreID = job.fileStore.writeGlobalFile(sdoms_file)
 
     obsjob = job.addChildJobFn(start_toil_observed, pdbFileStoreID)
-    infjob = obsjob.addFollowOnJobFn(start_toil_inferred, pdbFileStoreID)
+    #infjob = obsjob.addFollowOnJobFn(start_toil_inferred, pdbFileStoreID)
 
 if __name__ == "__main__":
     from toil.common import Toil
