@@ -6,9 +6,9 @@ from xml.etree.cElementTree import fromstring, parse, ParseError, tostring
 
 import requests
 
-from util import natural_keys, get_pdb_residues, izip_missing
+from molmimic.generate_data.iostore import IOStore
+from molmimic.generate_data.util import natural_keys, get_pdb_residues, izip_missing
 
-data_path_prefix = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 class InvalidSIFTS(RuntimeError):
     pass
@@ -27,7 +27,7 @@ def process_residue(residue):
 
     return pdb, ncbi
 
-def mmdb_to_pdb_resi(pdb_name, chain, resi, replace_nulls=False):
+def mmdb_to_pdb_resi(pdb_name, chain, resi, replace_nulls=False, job=None):
     if len(resi) == 1 and isinstance(resi[0], str) and "," in resi[0]:
         resi = resi[0].split(",")
 
@@ -37,7 +37,7 @@ def mmdb_to_pdb_resi(pdb_name, chain, resi, replace_nulls=False):
 
     residue_mapping = {}
     #sys.stdout = None
-    with get_sifts(pdb_name) as sifts_file:
+    with get_sifts(pdb_name, job=job) as sifts_file:
         xml = gzip.GzipFile(None, "rb", 9, sifts_file).read()
         try:
             root = fromstring(xml)
@@ -115,11 +115,24 @@ def mmdb_to_pdb_resi(pdb_name, chain, resi, replace_nulls=False):
     del residue_mapping
 
 @contextmanager
-def get_sifts(pdb):
+def get_sifts(pdb, job=None):
+    if job is not None:
+        work_dir = job.fileStore.getLocalTempDir()
+        prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+        in_store = IOStore.get("{}:molmimic-sifts".format(prefix))
+        sifts_prefix = "{}/{}.xml.gz".format(pdb[1:3].lower(), "{}.xml.gz".format(pdb.lower()))
+	sifts_file = os.path.join(work_dir, sifts_prefix)        
+        in_store.read_input_file(sifts_prefix, sifts_path)
+        
+        with open(sifts_path) as f:
+	    yield f
+
+        os.remove(sifts_path)
+    
     path = os.path.join(os.environ.get("PDB_SNAPSHOT", os.path.join(data_path_prefix, "pdb")), "sifts", pdb[1:3].lower(), "{}.xml.gz".format(pdb.lower()))
     try:
-        file = open(path)
-        yield file
+        with open(path) as f:
+            yield file
     except IOError as e:
         url = "ftp://ftp.ebi.ac.uk/pub/databases/msd/sifts/xml/{}.xml.gz".format(pdb.lower())
         try:
@@ -127,8 +140,11 @@ def get_sifts(pdb):
             file = StringIO(sifts.content)
             yield file
         except requests.exceptions.RequestException:
+            file.close()
             raise InvalidSIFTS("Not found: "+url+" orgig error:"+str(e))
-    file.close()
+        finally:
+            file.close()
+            os.remove(sifts)
 
 def comare_to_pdb(pdb_file, resi):
     if len(resi) == 1 and isinstance(resi[0], str) and "," in resi[0]:

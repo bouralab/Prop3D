@@ -6,6 +6,7 @@ import subprocess
 from contextlib import contextmanager
 
 import pandas as pd
+import toil.fileStore
 
 #Auto-scaling on AWS with toil has trouble finding modules? Heres the workaround
 PDB_TOOLS = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pdb_tools")
@@ -63,19 +64,22 @@ def SubprocessChain(commands, output):
     return final_proc.communicate()
 
 def get_file(job, prefix, path_or_fileStoreID):
-    if os.path.isfile(path_or_fileStoreID):
+    if isinstance(path_or_fileStoreID, str) and os.path.isfile(path_or_fileStoreID):
         return path_or_pdbFileStoreID
     else:
         work_dir = job.fileStore.getLocalTempDir()
         new_file = os.path.join(work_dir, prefix)
 
-        if isinstance(path_or_fileStoreID, str):
+        if isinstance(path_or_fileStoreID, (toil.fileStore.FileID, str)):
             with job.fileStore.readGlobalFileStream(path_or_fileStoreID) as fs, open(new_file, "w") as nf:
                 for line in fs:
                     nf.write(line)
-        elif hasattr("read_input_file", path_or_fileStoreID):
+        elif hasattr(path_or_fileStoreID, "read_input_file"):
             #Might be file store itself
-            in_store.read_input_file(prefix, new_file)
+            path_or_fileStoreID.read_input_file(prefix, new_file)
+
+        else:
+            raise RuntimeError("Invalid path_or_fileStoreID {} {}".format(type(path_or_fileStoreID), path_or_fileStoreID))
 
         return new_file
 
@@ -153,7 +157,7 @@ def iter_unique_superfams():
     CDD = CDD["sfam_id"].drop_duplicates().dropna()
     for cdd in CDD:
         yield cdd
-    dell CFF
+    del CDD
 
 class InvalidPDB(RuntimeError):
     pass
