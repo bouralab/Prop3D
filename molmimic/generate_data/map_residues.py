@@ -120,31 +120,32 @@ def get_sifts(pdb, job=None):
         work_dir = job.fileStore.getLocalTempDir()
         prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
         in_store = IOStore.get("{}:molmimic-sifts".format(prefix))
-        sifts_prefix = "{}/{}.xml.gz".format(pdb[1:3].lower(), "{}.xml.gz".format(pdb.lower()))
-	sifts_file = os.path.join(work_dir, sifts_prefix)        
+        sifts_prefix = "{}/{}.xml.gz".format(pdb[1:3].lower(), pdb.lower())
+	sifts_path = os.path.join(work_dir, os.path.basename(sifts_prefix))        
+        job.log("Saving {}:molmimic-sifts :: {} to {}".format(prefix, sifts_prefix, sifts_path))
         in_store.read_input_file(sifts_prefix, sifts_path)
         
         with open(sifts_path) as f:
 	    yield f
 
         os.remove(sifts_path)
-    
-    path = os.path.join(os.environ.get("PDB_SNAPSHOT", os.path.join(data_path_prefix, "pdb")), "sifts", pdb[1:3].lower(), "{}.xml.gz".format(pdb.lower()))
-    try:
-        with open(path) as f:
-            yield file
-    except IOError as e:
-        url = "ftp://ftp.ebi.ac.uk/pub/databases/msd/sifts/xml/{}.xml.gz".format(pdb.lower())
+    else: 
+        path = os.path.join(os.environ.get("PDB_SNAPSHOT", os.path.join(data_path_prefix, "pdb")), "sifts", pdb[1:3].lower(), "{}.xml.gz".format(pdb.lower()))
         try:
-            sifts = requests.get(url)
-            file = StringIO(sifts.content)
-            yield file
-        except requests.exceptions.RequestException:
-            file.close()
-            raise InvalidSIFTS("Not found: "+url+" orgig error:"+str(e))
-        finally:
-            file.close()
-            os.remove(sifts)
+            with open(path) as f:
+                yield file
+        except IOError as e:
+            url = "ftp://ftp.ebi.ac.uk/pub/databases/msd/sifts/xml/{}.xml.gz".format(pdb.lower())
+            try:
+                sifts = requests.get(url)
+                file = StringIO(sifts.content)
+                yield file
+            except requests.exceptions.RequestException:
+                file.close()
+                raise InvalidSIFTS("Not found: "+url+" orgig error:"+str(e))
+            finally:
+                file.close()
+        os.remove(sifts)
 
 def comare_to_pdb(pdb_file, resi):
     if len(resi) == 1 and isinstance(resi[0], str) and "," in resi[0]:

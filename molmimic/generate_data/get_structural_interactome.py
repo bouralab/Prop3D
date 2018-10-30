@@ -58,18 +58,65 @@ def decode_residues(job, pdb, chain, res, row):
         residues.insert(0, "mmdb")
         return ",".join(map(str,residues))
 
-def convert_residues(job, row, only_mol=False):
+def process_interaction(job, int_id, ibisFileStoreID, pdbFileStoreID, inferred=False):
+    work_dir = job.fileStore.getLocalTempDir()
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+    out_store = IOStore.get("{}:molmimic-ibis".format(prefix))
+    
+    mmdb_path = get_file(job, "PDB.h5", pdbFileStoreID)
+
+    if not inferred:
+        ibis_path = get_file(job, "IBIS_obs.h5", ibisFileStoreID)
+        row = pd.read_hdf(ibis_path, "ObsInt", where="obs_int_id={}".format(int_id))
+    else:
+        assert 0
+        ibis_path = get_file(job, "IBIS_inf.h5", ibisFileStoreID)
+        row = None
+
     try:
-        resi = {"mol_res": decode_residues(job, row["mol_pdb"], row["mol_chain"], row["mol_res"], row)}
-        if not only_mol:
-            resi["int_res"] = decode_residues(job, row["int_pdb"], row["int_chain"], row["int_res"], row)
-        return pd.Series(resi)
+        #Read in face1 residues
+        face1 = pd.read_hdf(unicode(ibis_path), "MolResFace", where="obs_int_id=row['obs_int_id']")
+        face1.columns = ["obs_int_id", "mol_res"]
+        print face1.shape
+        #Keep entries from current CDD
+        row = pd.merge(row, face1, how="left", on="obs_int_id")
+        del face1
+
+        #Read in face2 residues and convert gzipped asn1 into res numbers
+        face2 = pd.read_hdf(unicode(ibis_path), "IntResFace", where="obs_int_id=row['obs_int_id']")
+        face2.columns = ["obs_int_id", "int_res"]
+        print face2.shape
+
+        #Keep entries from current CDD
+        row = pd.merge(row, face2, how="left", on="obs_int_id")
+        print row.shape
+        del face2
+
+        st_domain_mol = pd.read_hdf(unicode(mmdb_path), "StructuralDomains", where="sdi=row['mol_sdi_id']")
+        st_domain_mol.columns = ['mol_sdi_id', 'mol_domNo', 'mol_gi', 'mol_pdb', 'mol_chain', 'mol_sdi_from', 'mol_sdi_to']
+        row = pd.merge(row, st_domain_mol, how="left", on="mol_sdi_id")
+        del st_domain_mol
+        
+        row = row.assign(mol_res=decode_residues(job, row["mol_pdb"].iloc[0], row["mol_chain"].iloc[0], row["mol_res"].iloc[0], row))
+
+        if not inferred:
+            st_domain_int = pd.read_hdf(unicode(mmdb_path), "StructuralDomains", where="sdi=row['int_sdi_id']")
+            st_domain_int.columns = ['int_sdi_id', 'int_domNo', 'int_gi', 'int_pdb', 'int_chain', 'int_sdi_from', 'int_sdi_to']
+            row = pd.merge(row, st_domain_int, how="left", on="int_sdi_id")
+            del st_domain_int
+            row = row.assign(int_res=decode_residues(job, row["int_pdb"].iloc[0], row["int_chain"].iloc[0], row["int_res"].iloc[0], row))
+
+        path = job.fileStore.getLocalTempFileName()
+        row.to_hdf(path, "table", table=True, format="table", complib="bzip2", complevel=9, min_itemsize=1024)
+        rowFileStore = job.fileStore.writeGlobalFile(path)
+        return rowFileStore
     except (SystemExit, KeyboardInterrupt):
         raise
-    except:
+    except Exception as e:
+        raise
         return None
 
-def merge_interactome_resi(job, sfam_id, converted_residues, newIbisFileStoreID, inferred_table=None):
+def merge_interactome_rows(job, sfam_id, converted_residues, inferred_table=None):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     out_store = IOStore.get("{}:molmimic-interfaces".format(prefix))
@@ -85,34 +132,29 @@ def merge_interactome_resi(job, sfam_id, converted_residues, newIbisFileStoreID,
         resi_prefix = "{}.observed_interactome".format(int(sfam_id))
         data_cols = ["obs_int_id", "mol_sdi", "int_sdi"]
 
+    resi_path = os.path.join(work_dir, resi_prefix)
+    job.log("CON RESI PROMISES: {}".format(converted_residues))
     #Combine residues into dataframe
-    conv_resi = pd.concat(converted_residues)
-
-    if conv_resi.shape[0] == 0:
-        job.log("Failed reading converted {} residues from {}".format(status, sfam_id))
-
-    #Downlaod IBIS obs ints
-    ibis_path = get_file(newIbisFileStoreID)
-
-    #Merge resdides with inferred interactrome
-    ints = pd.read_hdf(unicode(ibis_path), "table")
-    ints.loc[:, new_cols] = conv_resi
-
-    #Save to file
-    resi_path = os.path.join(work_dir, resi_path)
-    job.log("Writing {} interactome: {}".format(sfam_id, resi_path))
-    try:
-        obs_ints.to_hdf(unicode(path), "table", table=True, format="table",
-            data_columns=data_cols, complib="bzip2", complevel=9, min_itemsize=1024)
-    except TypeError:
-        job.log("Failed writing {}: {}".format(sfam_id, resi_path))
-        raise
+    for conv_store in converted_residues:
+        job.log("Running {} {}".format(conv_store, type(conv_store)))
+        conv_file = job.fileStore.readGlobalFile(conv_store)
+        df = pd.read_hdf(conv_file, "table")
+        try:
+            df.to_hdf(unicode(resi_path), "table", table=True, format="table",
+                data_columns=data_cols, complib="bzip2", complevel=9, min_itemsize=1024)
+            job.fileStore.deleteGlobalFile(conv_store)
+        except TypeError:
+            job.log("Failed writing {}: {}".format(sfam_id, resi_path))
+            try:
+                os.remove(resi_path)
+            except OSError:
+                pass
+            raise
 
     #Upload to S3
     out_store.write_output_file(resi_path, os.path.join(str(int(sfam_id)), resi_prefix))
 
     #Cleanup
-    job.fileStore.deleteGlobalFile(newIbisFileStoreID)
     os.remove(resi_path)
 
 def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID):
@@ -121,57 +163,45 @@ def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFil
     out_store = IOStore.get("{}:molmimic-ibis".format(prefix))
 
     ibis_obs_path = get_file(job, "IBIS_obs.h5", ibisObsFileStoreID)
-    mmdb_path = get_file(job, "PDB.h5", out_store)
+    df = pd.read_hdf(unicode(ibis_obs_path), "ObsInt", where="mol_superfam_id=={}".format(sfam_id))
+    int_ids = df["obs_int_id"].drop_duplicates().dropna()
+    
+    #Add jobs for each interaction
+    rows = [job.addChildJobFn(process_interaction, int_id, ibisObsFileStoreID, pdbFileStoreID).rv() for int_id in int_ids]
+    job.log("{}".format(rows))
+    #Merge converted residues
+    job.addFollowOnJobFn(merge_interactome_rows, sfam_id, rows)
+    return
 
     #Read in PPIs and save from the given CDD
-    obs_ints = pd.read_hdf(unicode(ibis_obs_path), "ObsInt", where="mol_superfam_id=={}".format(sfam_id))
-    #obs_ints = obs_ints[obs_ints["mol_superfam_id"]==sfam_id]
-    print obs_ints.shape
-    #Read in face1 residues
-    face1 = pd.read_hdf(unicode(ibis_obs_path), "MolResFace", where="obs_int_id=obs_ints['obs_int_id']")
-    face1.columns = ["obs_int_id", "mol_res"]
-    print face1.shape
-    #Keep entries from current CDD
-    obs_ints = pd.merge(obs_ints, face1, how="left", on="obs_int_id")
-    del face1
+    for obs_ints in pd.read_hdf(unicode(ibis_obs_path), "ObsInt", chunksize=100, where="mol_superfam_id=={}".format(sfam_id)):
+        print obs_ints.shape
+        st_domain_mol = pd.read_hdf(unicode(mmdb_path), "StructuralDomains", where="sdi=obs_ints['mol_sdi_id']")
+        st_domain_mol.columns = ['mol_sdi_id', 'mol_domNo', 'mol_gi', 'mol_pdb', 'mol_chain', 'mol_sdi_from', 'mol_sdi_to']
+        obs_ints = pd.merge(obs_ints, st_domain_mol, how="left", on="mol_sdi_id")
+        print obs_ints.shape
+        del st_domain_mol
 
-    #Read in face2 residues and convert gzipped asn1 into res numbers
-    face2 = pd.read_hdf(unicode(ibis_obs_path), "IntResFace", where="obs_int_id=obs_ints['obs_int_id']")
-    face2.columns = ["obs_int_id", "int_res"]
-    print face2.shape
-    #Keep entries from current CDD
-    obs_ints = pd.merge(obs_ints, face2, how="left", on="obs_int_id")
-    del face2
-    print obs_ints.shape
+        st_domain_int = pd.read_hdf(unicode(mmdb_path), "StructuralDomains", where="sdi=obs_ints['int_sdi_id']")
+        st_domain_int.columns = ['int_sdi_id', 'int_domNo', 'int_gi', 'int_pdb', 'int_chain', 'int_sdi_from', 'int_sdi_to']
+        obs_ints = ps.merge(obs_ints, st_domain_int, how="left", on="int_sdi_id")
+        print obs_ints.shape
+        del st_domain_int
 
-    st_domain = pd.read_hdf(unicode(mmdb_path), "StructuralDomains")
-    st_domain.columns = ['mol_sdi', 'mol_domNo', 'mol_gi', 'mol_pdb', 'mol_chain', 'mol_sdi_from', 'mol_sdi_to']
-
-    obs_ints = pd.merge(obs_ints, st_domain, how="left", left_on="mol_sdi_id", right_on="mol_sdi")
-
-    st_domain.columns = ['int_sdi', 'int_domNo', 'int_gi', 'int_pdb', 'int_chain', 'int_sdi_from', 'int_sdi_to']
-    obs_ints = pd.merge(obs_ints, st_domain, how="left", left_on="int_sdi_id", right_on="int_sdi")
-    del st_domain
-
-    #sfams = pd.read_hdf(unicode(mmdb_path), "Superfamilies")[["sdi", "label", "sfam_id"]].dropna(axis=0, subset=["sfam_id"])
-    #sfams = sfams[sfams["sfam_id"]==sfam_id].rename(columns={"sdi":"mol_sdi", "label":"int_superfam_label", "sfam_id":"int_superfam_id"})
-    #obs_ints = pd.merge(obs_ints, sfams, how="left", on="mol_sdi").dropna(axis=0, subset=["mol_sdi"])
-    #del sfams
-
-    new_obs_path = os.path.join(work_dir, "{}.observed_interactome.tmp".format(int(sfam_id)))
-    try:
-        obs_ints.to_hdf(unicode(new_obs_path), "table", table=True,
-            data_columns=["obs_int_id", "mol_sdi", "int_sdi"], format="table", complevel=9, complib="bzip2", min_itemsize=1024)
-    except TypeError:
-        job.log("Failed writing {}: {}".format(sfam_id, new_obs_path))
-        raise
+        try:
+            obs_ints.to_hdf(unicode(new_obs_path), "table", table=True, mode="a",
+                data_columns=["obs_int_id", "mol_sdi", "int_sdi"], format="table", 
+                complevel=9, complib="bzip2", min_itemsize=1024)
+        except TypeError:
+            job.log("Failed writing {}: {}".format(sfam_id, new_obs_path))
+            raise
 
     #Add ibis info into local job store
     newIbisObsFileStoreID = job.fileStore.writeGlobalFile(new_obs_path)
 
     #Add jobs for each interaction
     save_cols = ["mol_pdb", "mol_chain", "mol_res" "int_pdb", "int_chain", "int_res"]
-    resi = [job.addChildJobFn(convert_residues).rv() for obs_int in \
+    resi = [job.addChildJobFn(convert_residues, newIbisObsFileStoreID).rv() for obs_int in \
         obs_ints[save_cols].itertuples()]
 
     #Merge converted residues
