@@ -96,15 +96,22 @@ def process_interaction(job, int_id, ibisFileStoreID, pdbFileStoreID, inferred=F
         st_domain_mol.columns = ['mol_sdi_id', 'mol_domNo', 'mol_gi', 'mol_pdb', 'mol_chain', 'mol_sdi_from', 'mol_sdi_to']
         row = pd.merge(row, st_domain_mol, how="left", on="mol_sdi_id")
         del st_domain_mol
-        
-        row = row.assign(mol_res=decode_residues(job, row["mol_pdb"].iloc[0], row["mol_chain"].iloc[0], row["mol_res"].iloc[0], row))
 
         if not inferred:
             st_domain_int = pd.read_hdf(unicode(mmdb_path), "StructuralDomains", where="sdi=row['int_sdi_id']")
             st_domain_int.columns = ['int_sdi_id', 'int_domNo', 'int_gi', 'int_pdb', 'int_chain', 'int_sdi_from', 'int_sdi_to']
             row = pd.merge(row, st_domain_int, how="left", on="int_sdi_id")
             del st_domain_int
-            row = row.assign(int_res=decode_residues(job, row["int_pdb"].iloc[0], row["int_chain"].iloc[0], row["int_res"].iloc[0], row))
+        
+        updated_resi = {"mol_res":[]}
+        if not inferred:
+            updated_resi["int_res"] = []
+
+        for resi in row.itertuples():
+            updated_resi["mol_res"].append(decode_residues(job, resi.mol_pdb, resi.mol_chain, resi.mol_res, resi))
+            if not inferred:
+                updated_resi["int_res"].append(decode_residues(job, resi.int_pdb, resi.int_chain, resi.int_res, resi))
+        row = row.assign(**updated_resi)
 
         path = job.fileStore.getLocalTempFileName()
         row.to_hdf(path, "table", table=True, format="table", complib="bzip2", complevel=9, min_itemsize=1024)
@@ -218,8 +225,8 @@ def process_inferred_sfam_table(job, mol_sfam_id, table, groupInfFileStoreID, pd
     tmp_df_file = get_file(job, "tmp"+df_key, groupInfFileStoreID)
 
     sfams_file = get_file(job, "PDB.h5", pdbFileStoreID)
-    sfams = pd.read_hdf(unicode(sfams_file), "Superfamilies", where="sfam_id=={}".format(float(mol_sfam_id)))
-    sfams = sfams[["sdi", "label"]] #[sfams["sfam_id"]==float(mol_sfam_id)]
+    #sfams = pd.read_hdf(unicode(sfams_file), "Superfamilies", where="sfam_id=={}".format(float(mol_sfam_id)))
+    #sfams = sfams[["sdi", "label"]] #[sfams["sfam_id"]==float(mol_sfam_id)]
 
     convert_residues = lambda row: decode_residues(row["pdbId"], row["chnLett"], row["resi"], row)
 
@@ -307,7 +314,7 @@ def process_inferred_sfam_table(job, mol_sfam_id, table, groupInfFileStoreID, pd
     inferred_interfaces.to_hdf(unicode(df_file), "table", format="table",
         table=True, complevel=9, complib="bzip2", min_itemsize=1024,
         data_coumns=["nbr_obs_int_id", "nbr_sdi", "mol_sdi", "int_sdi"],
-        #scheduler="multiprocessing", dask_kwargs={"num_workers":NUM_WORKERS}
+        scheduler="multiprocessing", dask_kwargs={"num_workers":cores}
         )
     job.log("Wrote "+df_file)
 
@@ -404,7 +411,6 @@ def start_toil_observed(job, pdbFileStoreID):
             job.addChildJobFn(get_observed_structural_interactome, int(sfam_id), pdbFileStoreID, ibisObsFileStoreID)
         except ValueError:
             job.log("Cannot convert {} to string".format(sfam_id))
-        break #Only test first sfam
 
 def start_toil_inferred(job, pdbFileStoreID):
     for table in xrange(1, 87):
@@ -438,7 +444,7 @@ if __name__ == "__main__":
     options = parser.parse_args()
     options.logLevel = "DEBUG"
     options.clean = "always"
-    dataset_name = options.jobStore.split(":")[-1]
+    options.targetTime = 0
 
     print "Running"
 
