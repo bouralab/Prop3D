@@ -123,8 +123,14 @@ def get_sifts(pdb, job=None):
         sifts_prefix = "{}/{}.xml.gz".format(pdb[1:3].lower(), pdb.lower())
 	sifts_path = os.path.join(work_dir, os.path.basename(sifts_prefix))        
         job.log("Saving {}:molmimic-sifts :: {} to {}".format(prefix, sifts_prefix, sifts_path))
-        in_store.read_input_file(sifts_prefix, sifts_path)
         
+        try:
+            in_store.read_input_file(sifts_prefix, sifts_path)
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except:
+            raise InvalidSIFTS("Cannot open {}".format(pdb))
+
         with open(sifts_path) as f:
 	    yield f
 

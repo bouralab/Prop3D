@@ -705,9 +705,9 @@ class S3IOStore(IOStore):
 
             # Connect to the s3 bucket service where we keep everything
             self.s3 = boto3.client('s3', self.region, config=
-                botocore.client.Config(signature_version='s3v4'))
+                botocore.client.Config(signature_version='s3v4', retries={"max_attempts":20}))
             self.s3r = boto3.resource('s3', self.region, config=
-                botocore.client.Config(signature_version='s3v4'))
+                botocore.client.Config(signature_version='s3v4', retries={"max_attempts":20}))
             try:
                 self.s3.head_bucket(Bucket=self.bucket_name)
             except:

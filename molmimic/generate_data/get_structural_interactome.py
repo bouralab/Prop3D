@@ -21,7 +21,8 @@ except ImportError:
 
 from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.util import iter_unique_superfams, get_file
-from molmimic.generate_data.map_residues import mmdb_to_pdb_resi
+from molmimic.generate_data.job_utils import map_job
+from molmimic.generate_data.map_residues import mmdb_to_pdb_resi, InvalidSIFTS
 
 dask.config.set(scheduler='multiprocessing', num_workers=4)
 dask.config.set(pool=ThreadPool(4))
@@ -52,9 +53,9 @@ def decode_residues(job, pdb, chain, res, row):
 
     try:
         return ",".join(map(str, mmdb_to_pdb_resi(pdb, chain, residues, job=job)))
-    except (IOError, TypeError) as error:
+    except:
         print "Error mapping mmdb for", pdb, chain, error, row
-
+        raise
         residues.insert(0, "mmdb")
         return ",".join(map(str,residues))
 
@@ -108,14 +109,20 @@ def process_interaction(job, int_id, ibisFileStoreID, pdbFileStoreID, inferred=F
             updated_resi["int_res"] = []
 
         for resi in row.itertuples():
-            updated_resi["mol_res"].append(decode_residues(job, resi.mol_pdb, resi.mol_chain, resi.mol_res, resi))
-            if not inferred:
-                updated_resi["int_res"].append(decode_residues(job, resi.int_pdb, resi.int_chain, resi.int_res, resi))
-        row = row.assign(**updated_resi)
+            try:
+                updated_resi["mol_res"].append(decode_residues(job, resi.mol_pdb, resi.mol_chain, resi.mol_res, resi))
+                if not inferred:
+                    updated_resi["int_res"].append(decode_residues(job, resi.int_pdb, resi.int_chain, resi.int_res, resi))
+            except InvalidSIFTS:
+                #This Row has failed return None
+                return None
+        if len(updated_resi["mol_res"]) > 0:
+            row = row.assign(**updated_resi)
 
         path = job.fileStore.getLocalTempFileName()
         row.to_hdf(path, "table", table=True, format="table", complib="bzip2", complevel=9, min_itemsize=1024)
         rowFileStore = job.fileStore.writeGlobalFile(path)
+        print "Done row", int_id
         return rowFileStore
     except (SystemExit, KeyboardInterrupt):
         raise
@@ -124,6 +131,7 @@ def process_interaction(job, int_id, ibisFileStoreID, pdbFileStoreID, inferred=F
         return None
 
 def merge_interactome_rows(job, sfam_id, converted_residues, inferred_table=None):
+    print "Start merge", sfam_id
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     out_store = IOStore.get("{}:molmimic-interfaces".format(prefix))
@@ -141,13 +149,20 @@ def merge_interactome_rows(job, sfam_id, converted_residues, inferred_table=None
 
     resi_path = os.path.join(work_dir, resi_prefix)
     job.log("CON RESI PROMISES: {}".format(converted_residues))
+    
+    if len(converted_residues) == 0:
+        job.log("FAILED {} no converted_residues".format(resi_path))
+        print "FAILED {} no converted_residues".format(resi_path)
+        return
+
     #Combine residues into dataframe
     for conv_store in converted_residues:
         job.log("Running {} {}".format(conv_store, type(conv_store)))
+        if not conv_store: continue
         conv_file = job.fileStore.readGlobalFile(conv_store)
         df = pd.read_hdf(conv_file, "table")
         try:
-            df.to_hdf(unicode(resi_path), "table", table=True, format="table",
+            df.to_hdf(unicode(resi_path), "table", table=True, format="table", mode="a",
                 data_columns=data_cols, complib="bzip2", complevel=9, min_itemsize=1024)
             job.fileStore.deleteGlobalFile(conv_store)
         except TypeError:
@@ -158,11 +173,22 @@ def merge_interactome_rows(job, sfam_id, converted_residues, inferred_table=None
                 pass
             raise
 
-    #Upload to S3
-    out_store.write_output_file(resi_path, os.path.join(str(int(sfam_id)), resi_prefix))
-
-    #Cleanup
-    os.remove(resi_path)
+    if os.path.isfile(resi_path):
+        #Upload to S3
+        for i in xrange(4):
+            try:
+                out_store.write_output_file(resi_path, os.path.join(str(int(sfam_id)), resi_prefix))
+                break
+            except:
+                if i<3:
+                    continue
+                raise
+        #Cleanup
+        os.remove(resi_path)
+        print "End merge", sfam_id
+    else:
+        job.log("Failed merging: {}".format(resi_path))
+        print "Failed merging: {}".format(resi_path)
 
 def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID):
     work_dir = job.fileStore.getLocalTempDir()
@@ -170,8 +196,12 @@ def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFil
     out_store = IOStore.get("{}:molmimic-ibis".format(prefix))
 
     ibis_obs_path = get_file(job, "IBIS_obs.h5", ibisObsFileStoreID)
-    df = pd.read_hdf(unicode(ibis_obs_path), "ObsInt", where="mol_superfam_id=={}".format(sfam_id))
+    df = pd.read_hdf(unicode(ibis_obs_path), "ObsInt", where=["mol_superfam_id=={}".format(float(sfam_id)), "mol_superfam_id=={}".format(sfam_id)])
     int_ids = df["obs_int_id"].drop_duplicates().dropna()
+    if len(int_ids) == 0:
+        job.log("FAILED OBS SFAM {}".format(sfam_id))
+        print "FAILED OBS SFAM {}".format(sfam_id)
+        return
     
     #Add jobs for each interaction
     rows = [job.addChildJobFn(process_interaction, int_id, ibisObsFileStoreID, pdbFileStoreID).rv() for int_id in int_ids]
@@ -393,6 +423,7 @@ def start_toil_observed(job, pdbFileStoreID):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-ibis".format(prefix))
+    out_store = IOStore.get("{}:molmimic-interfaces".format(prefix))
 
     ibis_obs_prefix = "IBIS_observed.h5"
     ibis_obs_path = os.path.join(work_dir, ibis_obs_prefix)
@@ -401,25 +432,47 @@ def start_toil_observed(job, pdbFileStoreID):
     #Add ibis info into local job store
     ibisObsFileStoreID = job.fileStore.writeGlobalFile(ibis_obs_path)
     
+    print "start obs 1"
     pdb_path = job.fileStore.readGlobalFile(pdbFileStoreID)
-    sfams= pd.read_hdf(unicode(pdb_path), "Superfamilies")
-    sfams = sfams["sfam_id"].drop_duplicates().dropna()
-    os.remove(pdb_path)
-    for sfam_id in sfams:
-        job.log("Running {}".format(sfam_id))
-        try:
-            job.addChildJobFn(get_observed_structural_interactome, int(sfam_id), pdbFileStoreID, ibisObsFileStoreID)
-        except ValueError:
-            job.log("Cannot convert {} to string".format(sfam_id))
+    skip_sfam = set([float(f.key.split("/", 1)[0]) for f in out_store.list_input_directory(None) \
+        if f.key.endswith(".observed_interactome")])
+    job.log("start obs 2")
+    pdb = pd.read_hdf(unicode(pdb_path), "Superfamilies", columns=["sfam_id"])
+    sfams = pdb[~pdb["sfam_id"].isin(skip_sfam)]["sfam_id"].drop_duplicates().dropna().astype(int)
+    print "SFAMS", sfams
+    map_job(job, get_observed_structural_interactome, sfams, pdbFileStoreID, ibisObsFileStoreID)
+    print "Finished adding jobs"
 
+    #for df in pd.read_hdf(unicode(pdb_path), "Superfamilies", columns=["sfam_id"], chunksize=100):
+    #    sfams = df["sfam_id"].drop_duplicates().dropna()
+    #    for sfam_id in sfams:
+    #        if sfam_id in skip_sfam: continue
+    #        job.log("Running {}".format(sfam_id))
+    #        print "Running {}".format(sfam_id)
+    #        continue
+    #        try:
+    #            job.addChildJobFn(get_observed_structural_interactome, int(sfam_id), pdbFileStoreID, ibisObsFileStoreID)
+    #        except ValueError:
+    #            job.log("Cannot convert {} to string".format(sfam_id))
+    os.remove(pdb_path)
+    print "FINISHED obs"
 def start_toil_inferred(job, pdbFileStoreID):
     for table in xrange(1, 87):
         job.addChildJobFn(get_inferred_structural_interactome_by_table, table, pdbFileStoreID)
-    for sfam_id in iter_unique_superfams():
-        try:
-            job.addFollowJobFn(merge_inferred_interactome, int(sfam_id), pdbFileStoreID)
-        except ValueError:
-            job.log("Cannot convert {} to string".format(sfam_id))
+    
+    out_store = IOStore.get("{}:molmimic-interfaces".format(prefix))
+    pdb_path = job.fileStore.readGlobalFile(pdbFileStoreID)
+    skip_sfam = set([f.key.split("/", 1)[0] for f in out_store.list_input_directory(None) \
+        if f.key.endswith(".inferred_interactome")])
+    for df in pd.read_hdf(unicode(pdb_path), "Superfamilies", columns=["sfam_id"], chunksize=100):
+        sfams = df["sfam_id"].drop_duplicates().dropna()
+        for sfam_id in sfams:
+            if sfam_id in skip_sfam: continue
+            try:
+                job.addFollowJobFn(merge_inferred_interactome, int(sfam_id), pdbFileStoreID)
+            except ValueError:
+                job.log("Cannot convert {} to string".format(sfam_id))
+    os.remove(pdb_path)
 
 def start_toil(job):
     work_dir = job.fileStore.getLocalTempDir()
@@ -444,7 +497,7 @@ if __name__ == "__main__":
     options = parser.parse_args()
     options.logLevel = "DEBUG"
     options.clean = "always"
-    options.targetTime = 0
+    options.targetTime = 1
 
     print "Running"
 
