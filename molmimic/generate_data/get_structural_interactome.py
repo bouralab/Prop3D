@@ -66,13 +66,20 @@ def process_observed_interaction(job, int_id, ibisFileStoreID, pdbFileStoreID):
 
         for resi in row.itertuples():
             try:
-                updated_resi["mol_res"].append(decode_residues(resi.mol_pdb, resi.mol_chain, resi.mol_res, resi))
-                updated_resi["int_res"].append(decode_residues(resi.int_pdb, resi.int_chain, resi.int_res, resi))
+                updated_resi["mol_res"].append(decode_residues(job, resi.mol_pdb, resi.mol_chain, resi.mol_res, resi))
+                updated_resi["int_res"].append(decode_residues(job, resi.int_pdb, resi.int_chain, resi.int_res, resi))
             except InvalidSIFTS:
-                #This Row has failed return None
-                return None
+                #This Row has failed converting binary to string skip iti
+                updated_resi["mol_res"].append(np.NaN)
+                updated_resi["int_res"].append(np.NaN)
+                continue
+
         if len(updated_resi["mol_res"]) > 0:
             row = row.assign(**updated_resi)
+            row.dropna()
+        else:
+            #This entire interation failed; returned None
+            return None
 
         path = job.fileStore.getLocalTempFileName()
         row.to_hdf(path, "table", table=True, format="table", complib="bzip2", complevel=9, min_itemsize=1024)
@@ -85,7 +92,7 @@ def process_observed_interaction(job, int_id, ibisFileStoreID, pdbFileStoreID):
         raise
         return None
 
-def merge_interactome_rows(job, sfam_id, converted_residues, inferred_table=None):
+def merge_interactome_rows(job, sfam_id, converted_residues):
     print "Start merge", sfam_id
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
@@ -147,46 +154,10 @@ def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFil
         return
 
     #Add jobs for each interaction
-    rows = [job.addChildJobFn(process_interaction, int_id, ibisObsFileStoreID, pdbFileStoreID).rv() for int_id in int_ids]
+    rows = [job.addChildJobFn(process_observed_interaction, int_id, ibisObsFileStoreID, pdbFileStoreID).rv() for int_id in int_ids]
     job.log("{}".format(rows))
     #Merge converted residues
     job.addFollowOnJobFn(merge_interactome_rows, sfam_id, rows)
-    return
-
-    #Read in PPIs and save from the given CDD
-    for obs_ints in pd.read_hdf(unicode(ibis_obs_path), "ObsInt", chunksize=100, where="mol_superfam_id=={}".format(sfam_id)):
-        print obs_ints.shape
-        st_domain_mol = pd.read_hdf(unicode(mmdb_path), "StructuralDomains", where="sdi=obs_ints['mol_sdi_id']")
-        st_domain_mol.columns = ['mol_sdi_id', 'mol_domNo', 'mol_gi', 'mol_pdb', 'mol_chain', 'mol_sdi_from', 'mol_sdi_to']
-        obs_ints = pd.merge(obs_ints, st_domain_mol, how="left", on="mol_sdi_id")
-        print obs_ints.shape
-        del st_domain_mol
-
-        st_domain_int = pd.read_hdf(unicode(mmdb_path), "StructuralDomains", where="sdi=obs_ints['int_sdi_id']")
-        st_domain_int.columns = ['int_sdi_id', 'int_domNo', 'int_gi', 'int_pdb', 'int_chain', 'int_sdi_from', 'int_sdi_to']
-        obs_ints = ps.merge(obs_ints, st_domain_int, how="left", on="int_sdi_id")
-        print obs_ints.shape
-        del st_domain_int
-
-        try:
-            obs_ints.to_hdf(unicode(new_obs_path), "table", table=True, mode="a",
-                data_columns=["obs_int_id", "mol_sdi", "int_sdi"], format="table",
-                complevel=9, complib="bzip2", min_itemsize=1024)
-        except TypeError:
-            job.log("Failed writing {}: {}".format(sfam_id, new_obs_path))
-            raise
-
-    #Add ibis info into local job store
-    newIbisObsFileStoreID = job.fileStore.writeGlobalFile(new_obs_path)
-
-    #Add jobs for each interaction
-    save_cols = ["mol_pdb", "mol_chain", "mol_res" "int_pdb", "int_chain", "int_res"]
-    resi = [job.addChildJobFn(convert_residues, newIbisObsFileStoreID).rv() for obs_int in \
-        obs_ints[save_cols].itertuples()]
-
-    #Merge converted residues
-    job.addFollowOnJobFn(merge_interactome_resi, sfam_id, resi, pdbFileStoreID, \
-        newIbisObsFileStoreID)
 
 def start_toil_observed(job, pdbFileStoreID):
     work_dir = job.fileStore.getLocalTempDir()
@@ -237,7 +208,7 @@ if __name__ == "__main__":
     options = parser.parse_args()
     options.logLevel = "DEBUG"
     options.clean = "always"
-    options.targetTime = 1
+    options.targetTime = 0
 
     print "Running"
 
