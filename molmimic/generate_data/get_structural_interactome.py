@@ -2,6 +2,7 @@ import os, sys
 import glob
 from multiprocessing.pool import ThreadPool
 import shutil
+import itertools as it
 
 import numpy as np
 import pandas as pd
@@ -17,7 +18,7 @@ except ImportError:
 
 from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.util import iter_unique_superfams, get_file
-from molmimic.generate_data.job_utils import map_job
+from molmimic.generate_data.job_utils import map_job, map_job_rv, map_job_rv_list
 from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
 
 dask.config.set(scheduler='multiprocessing', num_workers=4)
@@ -112,7 +113,7 @@ def merge_interactome_rows(job, sfam_id, converted_residues):
         return
 
     #Combine residues into dataframe
-    for conv_store in converted_residues:
+    for conv_store in it.chain.from_iterable(converted_residues):
         job.log("Running {} {}".format(conv_store, type(conv_store)))
         if not conv_store: continue
         conv_file = job.fileStore.readGlobalFile(conv_store)
@@ -154,7 +155,7 @@ def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFil
         return
 
     #Add jobs for each interaction
-    rows = [job.addChildJobFn(process_observed_interaction, int_id, ibisObsFileStoreID, pdbFileStoreID).rv() for int_id in int_ids]
+    rows = map_job_rv(process_interaction, int_ids, ibisObsFileStoreID, pdbFileStoreID)
     job.log("{}".format(rows))
     #Merge converted residues
     job.addFollowOnJobFn(merge_interactome_rows, sfam_id, rows)
