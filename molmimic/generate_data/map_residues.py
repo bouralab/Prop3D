@@ -3,8 +3,11 @@ import gzip
 from cStringIO import StringIO
 from contextlib import contextmanager
 from xml.etree.cElementTree import fromstring, parse, ParseError, tostring
-
+import numpy as np
 import requests
+import binascii
+import zlib
+from pyasn1.codec.ber import decoder
 
 from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.util import natural_keys, get_pdb_residues, izip_missing
@@ -121,9 +124,9 @@ def get_sifts(pdb, job=None):
         prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
         in_store = IOStore.get("{}:molmimic-sifts".format(prefix))
         sifts_prefix = "{}/{}.xml.gz".format(pdb[1:3].lower(), pdb.lower())
-	sifts_path = os.path.join(work_dir, os.path.basename(sifts_prefix))        
+	    sifts_path = os.path.join(work_dir, os.path.basename(sifts_prefix))
         job.log("Saving {}:molmimic-sifts :: {} to {}".format(prefix, sifts_prefix, sifts_path))
-        
+
         try:
             in_store.read_input_file(sifts_prefix, sifts_path)
         except (SystemExit, KeyboardInterrupt):
@@ -135,7 +138,7 @@ def get_sifts(pdb, job=None):
 	    yield f
 
         os.remove(sifts_path)
-    else: 
+    else:
         path = os.path.join(os.environ.get("PDB_SNAPSHOT", os.path.join(data_path_prefix, "pdb")), "sifts", pdb[1:3].lower(), "{}.xml.gz".format(pdb.lower()))
         try:
             with open(path) as f:
@@ -161,3 +164,38 @@ def comare_to_pdb(pdb_file, resi):
 
     for test_resi, known_resi in izip_missing(iter(resi), get_pdb_residues(pdb_file)):
         yield test_resi
+
+def decode_residues(pdb, chain, res, row=None):
+    if not pdb or pdb == np.NaN:
+        raise InvalidSIFTS
+
+    residues = []
+
+    if res.startswith("0x"):
+        res = res[2:]
+    try:
+        res = binascii.unhexlify(res)
+    except:
+        pass
+
+    try:
+        code, rest = decoder.decode(zlib.decompress(res, 16 + zlib.MAX_WBITS))
+    except Exception as e:
+        if type(res, str) and "," in res:
+            return res
+        else:
+            return np.NaN
+
+    for i in xrange(len(code)):
+        c = code[i]
+        range_from, range_to, gi = tuple([c[j] for j in range(len(c))])
+        for x in xrange(range_from, range_to + 1):
+            residues.append(x)
+
+    try:
+        return ",".join(map(str, mmdb_to_pdb_resi(pdb, chain, residues, job=job)))
+    except Exception as error:
+        print "Error mapping mmdb for", pdb, chain, error, row
+        raise
+        residues.insert(0, "mmdb")
+        return ",".join(map(str,residues))
