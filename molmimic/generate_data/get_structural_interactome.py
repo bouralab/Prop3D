@@ -2,6 +2,7 @@ import os, sys
 import glob
 from multiprocessing.pool import ThreadPool
 import shutil
+import itertools as it
 
 import numpy as np
 import pandas as pd
@@ -17,7 +18,7 @@ except ImportError:
 
 from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.util import iter_unique_superfams, get_file
-from molmimic.generate_data.job_utils import map_job
+from molmimic.generate_data.job_utils import map_job, map_job_rv, map_job_rv_list
 from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
 
 dask.config.set(scheduler='multiprocessing', num_workers=4)
@@ -105,7 +106,7 @@ def merge_interactome_rows(job, sfam_id, converted_residues, inferred_table=None
         return
 
     #Combine residues into dataframe
-    for conv_store in converted_residues:
+    for conv_store in it.chain.from_iterable(converted_residues):
         job.log("Running {} {}".format(conv_store, type(conv_store)))
         if not conv_store: continue
         conv_file = job.fileStore.readGlobalFile(conv_store)
@@ -147,46 +148,11 @@ def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFil
         return
 
     #Add jobs for each interaction
-    rows = [job.addChildJobFn(process_interaction, int_id, ibisObsFileStoreID, pdbFileStoreID).rv() for int_id in int_ids]
+    rows = map_job_rv(process_interaction, int_ids, ibisObsFileStoreID, pdbFileStoreID)
+    #rows = [job.addChildJobFn(process_interaction, int_id, ibisObsFileStoreID, pdbFileStoreID).rv() for int_id in int_ids]
     job.log("{}".format(rows))
     #Merge converted residues
     job.addFollowOnJobFn(merge_interactome_rows, sfam_id, rows)
-    return
-
-    #Read in PPIs and save from the given CDD
-    for obs_ints in pd.read_hdf(unicode(ibis_obs_path), "ObsInt", chunksize=100, where="mol_superfam_id=={}".format(sfam_id)):
-        print obs_ints.shape
-        st_domain_mol = pd.read_hdf(unicode(mmdb_path), "StructuralDomains", where="sdi=obs_ints['mol_sdi_id']")
-        st_domain_mol.columns = ['mol_sdi_id', 'mol_domNo', 'mol_gi', 'mol_pdb', 'mol_chain', 'mol_sdi_from', 'mol_sdi_to']
-        obs_ints = pd.merge(obs_ints, st_domain_mol, how="left", on="mol_sdi_id")
-        print obs_ints.shape
-        del st_domain_mol
-
-        st_domain_int = pd.read_hdf(unicode(mmdb_path), "StructuralDomains", where="sdi=obs_ints['int_sdi_id']")
-        st_domain_int.columns = ['int_sdi_id', 'int_domNo', 'int_gi', 'int_pdb', 'int_chain', 'int_sdi_from', 'int_sdi_to']
-        obs_ints = ps.merge(obs_ints, st_domain_int, how="left", on="int_sdi_id")
-        print obs_ints.shape
-        del st_domain_int
-
-        try:
-            obs_ints.to_hdf(unicode(new_obs_path), "table", table=True, mode="a",
-                data_columns=["obs_int_id", "mol_sdi", "int_sdi"], format="table",
-                complevel=9, complib="bzip2", min_itemsize=1024)
-        except TypeError:
-            job.log("Failed writing {}: {}".format(sfam_id, new_obs_path))
-            raise
-
-    #Add ibis info into local job store
-    newIbisObsFileStoreID = job.fileStore.writeGlobalFile(new_obs_path)
-
-    #Add jobs for each interaction
-    save_cols = ["mol_pdb", "mol_chain", "mol_res" "int_pdb", "int_chain", "int_res"]
-    resi = [job.addChildJobFn(convert_residues, newIbisObsFileStoreID).rv() for obs_int in \
-        obs_ints[save_cols].itertuples()]
-
-    #Merge converted residues
-    job.addFollowOnJobFn(merge_interactome_resi, sfam_id, resi, pdbFileStoreID, \
-        newIbisObsFileStoreID)
 
 def start_toil_observed(job, pdbFileStoreID):
     work_dir = job.fileStore.getLocalTempDir()
