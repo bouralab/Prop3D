@@ -24,7 +24,7 @@ from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
 dask.config.set(scheduler='multiprocessing', num_workers=4)
 dask.config.set(pool=ThreadPool(4))
 
-def process_observed_interaction(job, int_id, ibisFileStoreID, pdbFileStoreID):
+def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileStoreID):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     out_store = IOStore.get("{}:molmimic-ibis".format(prefix))
@@ -82,18 +82,19 @@ def process_observed_interaction(job, int_id, ibisFileStoreID, pdbFileStoreID):
             #This entire interation failed; returned None
             return None
 
-        path = job.fileStore.getLocalTempFileName()
+        path = "{}.h5".format(int_id)
         row.to_hdf(path, "table", table=True, format="table", complib="bzip2", complevel=9, min_itemsize=1024)
-        rowFileStore = job.fileStore.writeGlobalFile(path)
+        out_store.write_output_file(path, "{}/_obsrows/{}".format(int(sfam_id), path))
         print "Done row", int_id
-        return rowFileStore
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
         job.log("FAILED {} {}".format(int_id, e))
-        return None
+        with open("fail_file") as f:
+            f.write(e)
+        out_store.write_output_file("fail_file", "{}/_obsrows/{}.failed".format(int(sfam_id), path))
 
-def merge_interactome_rows(job, sfam_id, converted_residues):
+def merge_interactome_rows(job, sfam_id):
     print "Start merge", sfam_id
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
@@ -105,30 +106,29 @@ def merge_interactome_rows(job, sfam_id, converted_residues):
     data_cols = ["obs_int_id", "mol_sdi", "int_sdi"]
 
     resi_path = os.path.join(work_dir, resi_prefix)
-    job.log("CON RESI PROMISES: {}".format(converted_residues))
-
-    if len(converted_residues) == 0:
-        job.log("FAILED {} no converted_residues".format(resi_path))
-        print "FAILED {} no converted_residues".format(resi_path)
-        return
 
     #Combine residues into dataframe
-    for conv_store in it.chain.from_iterable(converted_residues):
-        job.log("Running {} {}".format(conv_store, type(conv_store)))
-        if not conv_store: continue
-        conv_file = job.fileStore.readGlobalFile(conv_store)
-        df = pd.read_hdf(conv_file, "table")
+    for row_prefix in out_store.list_input_directory("{}/_obsrows/".format(int(sfam_id)):
+        if row_prefix.endswith("failed"): continue
+        job.log("Running {} {}".format(sfam_id, row_prefix))
+
+        row_file = os.path.join(work_dir, os.path.basename(row_prefix))
+        out_store.read_input_file(row_prefix, row_file)
+
+        df = pd.read_hdf(row_file, "table")
         try:
             df.to_hdf(unicode(resi_path), "table", table=True, format="table", mode="a",
                 data_columns=data_cols, complib="bzip2", complevel=9, min_itemsize=1024)
             job.fileStore.deleteGlobalFile(conv_store)
-        except TypeError:
-            job.log("Failed writing {}: {}".format(sfam_id, resi_path))
-            try:
-                os.remove(resi_path)
-            except OSError:
-                pass
-            raise
+        except TypeError as e:
+            job.log("Failed writing {}: {}".format(sfam_id, resi_path, e))
+
+        try:
+            os.remove(row_file)
+        except OSError:
+            pass
+
+        out_store.remove_file(row_prefix)
 
     if os.path.isfile(resi_path):
         #Upload to S3
@@ -155,8 +155,8 @@ def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFil
         return
 
     #Add jobs for each interaction
-    rows = map_job_rv(job, process_observed_interaction, int_ids, ibisObsFileStoreID, pdbFileStoreID)
-    job.log("{}".format(rows))
+    map_job(job, process_observed_interaction, int_ids, sfam_id, ibisObsFileStoreID, pdbFileStoreID)
+
     #Merge converted residues
     job.addFollowOnJobFn(merge_interactome_rows, sfam_id, rows)
 
