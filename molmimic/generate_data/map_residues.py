@@ -124,7 +124,7 @@ def get_sifts(pdb, job=None):
         prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
         in_store = IOStore.get("{}:molmimic-sifts".format(prefix))
         sifts_prefix = "{}/{}.xml.gz".format(pdb[1:3].lower(), pdb.lower())
-	    sifts_path = os.path.join(work_dir, os.path.basename(sifts_prefix))
+        sifts_path = os.path.join(work_dir, os.path.basename(sifts_prefix))
         job.log("Saving {}:molmimic-sifts :: {} to {}".format(prefix, sifts_prefix, sifts_path))
 
         try:
@@ -165,8 +165,8 @@ def comare_to_pdb(pdb_file, resi):
     for test_resi, known_resi in izip_missing(iter(resi), get_pdb_residues(pdb_file)):
         yield test_resi
 
-def decode_residues(pdb, chain, res, row=None):
-    if not pdb or pdb == np.NaN:
+def decode_residues(job, pdb, chain, res, row=None):
+    if not pdb or pdb == np.NaN or not isinstance(pdb, str):
         raise InvalidSIFTS
 
     residues = []
@@ -196,6 +196,6 @@ def decode_residues(pdb, chain, res, row=None):
         return ",".join(map(str, mmdb_to_pdb_resi(pdb, chain, residues, job=job)))
     except Exception as error:
         print "Error mapping mmdb for", pdb, chain, error, row
-        raise
+        raise InvalidSIFTS
         residues.insert(0, "mmdb")
         return ",".join(map(str,residues))

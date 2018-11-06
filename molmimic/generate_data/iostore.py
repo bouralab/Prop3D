@@ -721,6 +721,7 @@ class S3IOStore(IOStore):
                         CreateBucketConfiguration={'LocationConstraint': self.region},
                     )
 
+    @backoff
     def read_input_file(self, input_path, local_path):
         """
         Get input from S3.
@@ -734,6 +735,7 @@ class S3IOStore(IOStore):
         # Download the file contents.
         self.s3.download_file(self.bucket_name, os.path.join(self.name_prefix, input_path), local_path)
 
+    @backoff
     def list_input_directory(self, input_path, recursive=False,
         with_times=False):
         """
@@ -773,6 +775,7 @@ class S3IOStore(IOStore):
         # Download the file contents.
         self.s3.upload_file(local_path, self.bucket_name, os.path.join(self.name_prefix, output_path))
 
+    @backoff
     def exists(self, path):
         """
         Returns true if the given input or output file exists in the store
@@ -808,6 +811,7 @@ class S3IOStore(IOStore):
 
         raise NotImplementedError()
 
+    @backoff
     def get_number_of_items(self, path=None):
         """
         Return the number of items in path if it exits, or None otherwise

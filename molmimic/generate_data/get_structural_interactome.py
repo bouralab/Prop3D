@@ -67,13 +67,20 @@ def process_observed_interaction(job, int_id, ibisFileStoreID, pdbFileStoreID):
 
         for resi in row.itertuples():
             try:
-                updated_resi["mol_res"].append(decode_residues(resi.mol_pdb, resi.mol_chain, resi.mol_res, resi))
-                updated_resi["int_res"].append(decode_residues(resi.int_pdb, resi.int_chain, resi.int_res, resi))
+                updated_resi["mol_res"].append(decode_residues(job, resi.mol_pdb, resi.mol_chain, resi.mol_res, resi))
+                updated_resi["int_res"].append(decode_residues(job, resi.int_pdb, resi.int_chain, resi.int_res, resi))
             except InvalidSIFTS:
-                #This Row has failed return None
-                return None
+                #This Row has failed converting binary to string skip iti
+                updated_resi["mol_res"].append(np.NaN)
+                updated_resi["int_res"].append(np.NaN)
+                continue
+
         if len(updated_resi["mol_res"]) > 0:
             row = row.assign(**updated_resi)
+            row.dropna()
+        else:
+            #This entire interation failed; returned None
+            return None
 
         path = job.fileStore.getLocalTempFileName()
         row.to_hdf(path, "table", table=True, format="table", complib="bzip2", complevel=9, min_itemsize=1024)
@@ -83,10 +90,10 @@ def process_observed_interaction(job, int_id, ibisFileStoreID, pdbFileStoreID):
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
-        raise
+        job.log("FAILED {} {}".format(int_id, e))
         return None
 
-def merge_interactome_rows(job, sfam_id, converted_residues, inferred_table=None):
+def merge_interactome_rows(job, sfam_id, converted_residues):
     print "Start merge", sfam_id
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
@@ -143,13 +150,12 @@ def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFil
     df = pd.read_hdf(unicode(ibis_obs_path), "ObsInt", where=["mol_superfam_id=={}".format(float(sfam_id)), "mol_superfam_id=={}".format(sfam_id)])
     int_ids = df["obs_int_id"].drop_duplicates().dropna()
     if len(int_ids) == 0:
-        job.log("FAILED OBS SFAM {}".format(sfam_id))
-        print "FAILED OBS SFAM {}".format(sfam_id)
+        job.log("EMPTY OBS SFAM {}".format(sfam_id))
+        print "EMPTY OBS SFAM {}".format(sfam_id)
         return
 
     #Add jobs for each interaction
-    rows = map_job_rv(process_interaction, int_ids, ibisObsFileStoreID, pdbFileStoreID)
-    #rows = [job.addChildJobFn(process_interaction, int_id, ibisObsFileStoreID, pdbFileStoreID).rv() for int_id in int_ids]
+    rows = map_job_rv(job, process_observed_interaction, int_ids, ibisObsFileStoreID, pdbFileStoreID)
     job.log("{}".format(rows))
     #Merge converted residues
     job.addFollowOnJobFn(merge_interactome_rows, sfam_id, rows)
@@ -203,7 +209,7 @@ if __name__ == "__main__":
     options = parser.parse_args()
     options.logLevel = "DEBUG"
     options.clean = "always"
-    options.targetTime = 1
+    options.targetTime = 0
 
     print "Running"
 
