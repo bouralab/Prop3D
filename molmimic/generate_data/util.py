@@ -6,6 +6,7 @@ import subprocess
 from contextlib import contextmanager
 
 import pandas as pd
+import numpy as np
 import toil.fileStore
 
 #Auto-scaling on AWS with toil has trouble finding modules? Heres the workaround
@@ -82,6 +83,25 @@ def get_file(job, prefix, path_or_fileStoreID):
             raise RuntimeError("Invalid path_or_fileStoreID {} {}".format(type(path_or_fileStoreID), path_or_fileStoreID))
 
         return new_file
+
+def filter_hdf(hdf_path, dataset, column, value, columns=None):
+    df = pd.read_hdf(unicode(hdf_path), dataset, where="{}={}".format(column, value), columns=columns)
+    if df.shape[0] == 0:
+        if columns is not None and not isinstance(columns, (list, tuple)):
+            names = [columns]
+        else:
+            names = columns if columns is not None else df.columns
+        del df
+        df = pd.DataFrame({name:[] for name in names})
+        for _df in pd.read_hdf(unicode(hdf_path), dataset, chunksize=500):
+             filtered_df = _df[_df[column]==value].copy()
+             if filtered_df.shape[0]>0:
+                 if columns is not None:
+                     filtered_df = filtered_df[columns]
+                 df = pd.concat((df, filtered_df), axis=0) if df is not None else filtered_df
+             del _df
+             _df = None
+    return df
 
 def PDBTools(commands, output):
     cmds = [[sys.executable, "-m", "pdb-tools.pdb_{}".format(cmd[0])]+cmd[1:] \

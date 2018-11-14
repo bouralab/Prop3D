@@ -33,14 +33,17 @@ import dateutil
 import traceback
 import stat
 from toil.realtimeLogger import RealtimeLogger
-
+import subprocess
 import datetime
+import json
 
 # Need stuff for Amazon s3
 try:
     import boto3
     import botocore
     have_s3 = True
+    os.environ["AWS_SECRET_KEY"] = "AKIAJCI3AJKBTBRO6RJA"
+    os.environ["AWS_SECURITY_TOKEN"] = "XB81NeUZsPRHLhMkViFSB4BRAnB0vd1J2U2doXte"
 except ImportError:
     have_s3 = False
     pass
@@ -736,7 +739,7 @@ class S3IOStore(IOStore):
         self.s3.download_file(self.bucket_name, os.path.join(self.name_prefix, input_path), local_path)
 
     @backoff
-    def list_input_directory(self, input_path, recursive=False,
+    def list_input_directory(self, input_path=None, recursive=False,
         with_times=False):
         """
         Yields each of the subdirectories and files in the given input path.
@@ -753,14 +756,31 @@ class S3IOStore(IOStore):
         Gives relative file/directory names.
 
         """
+        #cmd = ["aws", "s3api", "list-objects", "--bucket", self.bucket_name]
+     
+        #if input_path is not None:
+        #    cmd += ["--prefix", "'{}'".format(input_path)]
+        
+        #print " ".join(cmd)
+   
+        if with_times:
+            get_output = lambda f: (f.key, f.last_modified)
+        else:
+            get_output = lambda f: f.key
+
+        #output = subprocess.check_output(cmd)
+        #print output
+        #result = json.loads(output)
+        #for f in result:
+        #    yield get_output(f)             
 
         self.__connect()
 
         bucket = self.s3r.Bucket(self.bucket_name).objects.all() if input_path is None \
-            else self.s3r.Bucket(self.bucket_name).filter(Prefix=input_path)
+            else self.s3r.Bucket(self.bucket_name).objects.filter(Prefix=input_path)
 
-        for key in bucket:
-            yield key
+        for obj in bucket:
+            yield get_output(obj)
 
     def write_output_file(self, local_path, output_path):
         """
@@ -773,7 +793,8 @@ class S3IOStore(IOStore):
             output_path))
 
         # Download the file contents.
-        self.s3.upload_file(local_path, self.bucket_name, os.path.join(self.name_prefix, output_path))
+        #self.s3.upload_file(local_path, self.bucket_name, os.path.join(self.name_prefix, output_path))
+        self.s3r.Bucket(self.bucket_name).upload_file(local_path, os.path.join(self.name_prefix, output_path))
 
     @backoff
     def exists(self, path):
@@ -820,7 +841,7 @@ class S3IOStore(IOStore):
         return sum(1 for _ in self.list_input_directory(path))
 
     def remove_file(self, path):
-        self.s3r.Bucket(self.bucket_name).delete_key(path)
+        self.s3r.Object(self.bucket_name, path).delete()
 
 
 class AzureIOStore(IOStore):

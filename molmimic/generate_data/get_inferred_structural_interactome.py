@@ -136,7 +136,7 @@ def merge_table_sfam(job, sfam_id, table):
     resi_path = os.path.join(work_dir, resi_prefix)
 
     #Combine residues into dataframe
-    for row_prefix in out_store.list_input_directory("{}/_infrows/Intrac{}".format(int(sfam_id), table):
+    for row_prefix in out_store.list_input_directory("{}/_infrows/Intrac{}".format(int(sfam_id), table)):
         job.log("Running  {} {}".format(sfam_id, row_prefix))
 
         row_file = os.path.join(work_dir, os.path.basename(row_prefix))
@@ -179,17 +179,23 @@ def get_table_sfams(job, mol_sfam_id, table, tableInfPath, pdbFileStoreID):
 
     tableInfPath = get_file(job, "IBIS_inferred_{}.h5".format(table), tableInfPath)
 
-    inf_job_ids = (row for pd.read_hdf([unicode(tableInfPath)], "/table", mode="r", \
-        chunksize=100, columns=["nbr_obs_int_id", "nbr_sdi", "mol_sdi", "int_sdi"] \
-        where=[
-            "nbr_obs_int_id=={}".format(nbr_obs_int_id),
-            "nbr_sdi=={}".format(nbr_sdi),
-            "mol_sdi=={}".format(mol_sdi),
-            "int_sdi=={}".format(int_sdi),
-            ]
-        ) for row in df.itertuples(index=False))
+    #inf_job_ids = (row for pd.read_hdf([unicode(tableInfPath)], "/table", mode="r", \
+    #    chunksize=100, columns=["nbr_obs_int_id", "nbr_sdi", "mol_sdi", "int_sdi"], \
+    #    where=["nbr_obs_int_id=={}".format(nbr_obs_int_id), \
+    #           "nbr_sdi=={}".format(nbr_sdi), \
+    #           "mol_sdi=={}".format(mol_sdi), \
+    #           "int_sdi=={}".format(int_sdi), \
+    #        ]) for row in df.itertuples(index=False))
+    
+    def inf_job_ids():
+        for df in pd.read_hdf(unicode(tableInfPath), "/table", mode="r", chunksize=100, \
+          columns=["nbr_obs_int_id", "nbr_sdi", "mol_sdi", "int_sdi"], \
+          where=["nbr_obs_int_id=={}".format(nbr_obs_int_id), "nbr_sdi=={}".format(nbr_sdi), \
+                 "mol_sdi=={}".format(mol_sdi), "int_sdi=={}".format(int_sdi)]):
+            for row in df.itertuples(index=False):
+                yield row
 
-    map_job(job, process_inferred_interaction, inf_job_ids, mol_sfam_id, table, tableInfPath, pdbFileStoreID)
+    map_job(job, process_inferred_interaction, inf_job_ids(), mol_sfam_id, table, tableInfPath, pdbFileStoreID)
 
     job.addFollowJobFn(merge_table_sfam, mol_sfam_id, table)
 
