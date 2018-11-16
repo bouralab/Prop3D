@@ -5,7 +5,7 @@ import shutil
 import itertools as it
 
 from molmimic.generate_data.iostore import IOStore
-from molmimic.generate_data.util import get_file
+from molmimic.generate_data.util import get_file, filter_hdf
 from molmimic.generate_data.job_utils import map_job
 from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
 
@@ -29,14 +29,14 @@ def process_inferred_interaction(job, nbr_obs_int_id, nbr_sdi, mol_sdi, int_sdi,
             return
 
         pdb_file = get_file(job, "PDB.h5", pdbFileStoreID)
-        struct_domains = pd.read_hdf(unicode(pdb_file), "StructuralDomains", mode="r", where="mol_sdi_id=={}".format(mol_sdi))
+        struct_domains = filter_hdf(pdb_file, "StructuralDomains", "mol_sdi_id", mol_sdi)
 
         #Add PDB, chain, and sdi information. Inner join to only allow sdi's that are in databses, not obsolete
         inferred_interfaces = pd.merge(inferred_interfaces, struct_domains, how="inner", left_on="mol_sdi_id", right_on="sdi")
 
         obspath = get_file(job, "{}.observed_interactome".format(mol_sfam_id), out_store)
         try:
-            observed_interactome = pd.read_hdf(unicode(obspath), "table", where="obs_int_id=={}".format(obs_int_id))
+            observed_interactome = filter_hdf(obspath, "table", "obs_int_id", obs_int_id)
         except TypeError:
             job.log("Failed reading {}".format(obspath))
             raise
@@ -114,11 +114,14 @@ def process_inferred_interaction(job, nbr_obs_int_id, nbr_sdi, mol_sdi, int_sdi,
         out_store.write_output_file(path, "{}/_infrows/Intrac{}/{}".format(int(mol_sfam_id), table, path))
     except (KeyboardInterrupt, SystemExit):
         raise
-    except Exception as e:
-        job.log("FAILED {} {}".format(path, e))
-        with open("fail_file") as f:
-            f.write(e)
-        out_store.write_output_file("fail_file", "{}/_obsrows/{}.failed".format(int(mol_sfam_id), path))
+    except:
+        import traceback
+        tb = traceback.format_ecx()
+        job.log("FAILED {} {}".format(mol_sfam_id, tb))
+        fail_file = os.path.join(work_dir, "fail_file")
+        with open(fail_file) as f:
+            f.write(tb)
+        out_store.write_output_file(fail_file, "{}/_obsrows/{}.failed".format(int(mol_sfam_id), path))
 
 def merge_table_sfam(job, sfam_id, table):
     work_dir = job.fileStore.getLocalTempDir()
@@ -136,6 +139,7 @@ def merge_table_sfam(job, sfam_id, table):
     resi_path = os.path.join(work_dir, resi_prefix)
 
     #Combine residues into dataframe
+    possible_error = []
     for row_prefix in out_store.list_input_directory("{}/_infrows/Intrac{}".format(int(sfam_id), table)):
         job.log("Running  {} {}".format(sfam_id, row_prefix))
 
@@ -147,8 +151,13 @@ def merge_table_sfam(job, sfam_id, table):
             df.to_hdf(unicode(resi_path), "table", table=True, format="table", mode="a",
                 data_columns=data_cols, complib="bzip2", complevel=9, min_itemsize=1024)
             job.fileStore.deleteGlobalFile(conv_store)
-        except TypeError as e:
-            job.log("Failed writing {}: {} {}".format(sfam_id, resi_path, e))
+        except (SystemExit, KeybaordInterrupt):
+            raise
+        except:
+            import traceback
+            tb = traceback.format_exc()
+            job.log("Failed writing {}: {} {}".format(sfam_id, resi_path, tb))
+            possible_errors.append(tb)
 
         try:
             os.remove(row_file)
@@ -167,9 +176,13 @@ def merge_table_sfam(job, sfam_id, table):
     else:
         job.log("Failed merging: {}".format(resi_path))
         print "Failed merging: {}".format(resi_path)
-        with open("fail_file") as f:
-            f.write(e)
-        out_store.write_output_file("fail_file", "{}/_inftables/{}.failed".format(int(sfam_id), resi_prefix))
+        fail_file = os.path.join(work_dir, "fail_file")
+        with open(fail_file, "w") as f:
+            f.write("no rows?\n")
+            for e in possible_errors:
+                f.write(e)
+                f.write("\n")
+        out_store.write_output_file(fail_file, "{}/_inftables/{}.failed".format(int(sfam_id), resi_prefix))
 
 
 def get_table_sfams(job, mol_sfam_id, table, tableInfPath, pdbFileStoreID):
@@ -195,7 +208,7 @@ def get_table_sfams(job, mol_sfam_id, table, tableInfPath, pdbFileStoreID):
             for row in df.itertuples(index=False):
                 yield row
 
-    map_job(job, process_inferred_interaction, inf_job_ids(), mol_sfam_id, table, tableInfPath, pdbFileStoreID)
+    map_job(job, process_inferred_interaction, list(inf_job_ids()), mol_sfam_id, table, tableInfPath, pdbFileStoreID)
 
     job.addFollowJobFn(merge_table_sfam, mol_sfam_id, table)
 
@@ -247,10 +260,7 @@ def merge_inferred_interactome(job):
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     out_store = IOStore.get("{}:molmimic-interfaces".format(prefix))
     pdb_path = job.fileStore.readGlobalFile(pdbFileStoreID)
-    skip_sfam = set([f.key.split("/", 1)[0] for f in out_store.list_input_directory(None) \
-        if f.key.endswith(".inferred_interactome")])
-
-    all_sfam = [os.path.basname(f.key).split(".") for f in out_store.list_input_directory(None)]
+    all_sfam = [os.path.basname(f).split(".") for f in out_store.list_input_directory() if not f.endswith("failed")]
     skip_sfam = [f[0] for f in all_sfam if f[1] == "inferred_interactome"]
     sfam_to_run = [f[0] for f in all_sfam if f[1] == "observed_interactome" \
         and f[0] not in skip_sfam]
