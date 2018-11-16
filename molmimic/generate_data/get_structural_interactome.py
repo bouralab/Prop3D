@@ -14,7 +14,7 @@ except ImportError:
         return args
 
 from molmimic.generate_data.iostore import IOStore
-from molmimic.generate_data.util import iter_unique_superfams, get_file, filter_hdf
+from molmimic.generate_data.util import iter_unique_superfams, get_file, filter_hdf, filter_hdf_chunks
 from molmimic.generate_data.job_utils import map_job, map_job_rv, map_job_rv_list
 from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
 
@@ -30,7 +30,7 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
 
     try:
         #Read in face1 residues
-        face1 = filter_hdf(unicode(ibis_path), "MolResFace", "obs_int_id", row['obs_int_id'])
+        face1 = filter_hdf(unicode(ibis_path), "MolResFace", "obs_int_id", int_id)
         face1.columns = ["obs_int_id", "mol_res"]
         print face1.shape
         #Keep entries from current CDD
@@ -38,7 +38,7 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
         del face1
 
         #Read in face2 residues and convert gzipped asn1 into res numbers
-        face2 = filter_hdf(unicode(ibis_path), "IntResFace", "obs_int_id", row['obs_int_id'])
+        face2 = filter_hdf(unicode(ibis_path), "IntResFace", "obs_int_id", int_id)
         face2.columns = ["obs_int_id", "int_res"]
         print face2.shape
 
@@ -47,12 +47,12 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
         print row.shape
         del face2
 
-        st_domain_mol = filter_hdf(unicode(mmdb_path), "StructuralDomains", "sdi", row['mol_sdi_id'])
+        st_domain_mol = filter_hdf(unicode(mmdb_path), "StructuralDomains", "sdi", row.iloc[0]['mol_sdi_id'])
         st_domain_mol.columns = ['mol_sdi_id', 'mol_domNo', 'mol_gi', 'mol_pdb', 'mol_chain', 'mol_sdi_from', 'mol_sdi_to']
         row = pd.merge(row, st_domain_mol, how="left", on="mol_sdi_id")
         del st_domain_mol
 
-        st_domain_int = filter_hdf(unicode(mmdb_path), "StructuralDomains", "sdi", row['int_sdi_id'])
+        st_domain_int = filter_hdf(unicode(mmdb_path), "StructuralDomains", "sdi", row.iloc[0]['int_sdi_id'])
         st_domain_int.columns = ['int_sdi_id', 'int_domNo', 'int_gi', 'int_pdb', 'int_chain', 'int_sdi_from', 'int_sdi_to']
         row = pd.merge(row, st_domain_int, how="left", on="int_sdi_id")
         del st_domain_int
@@ -83,11 +83,14 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
-        job.log("FAILED {} {}".format(int_id, e))
+        import traceback
+        tb = traceback.format_exc()
+        job.log("FAILED {} {}".format(int_id, e, tb))
         fail_file = os.path.join(work_dir, "fail_file")
-        with open(fail_file) as f:
-            f.write(e)
-        out_store.write_output_file(fail_file, "{}/_obsrows/{}.failed".format(int(sfam_id), path))
+        with open(fail_file, "w") as f:
+            f.write(str(e))
+            f.write(str(tb))
+        out_store.write_output_file(fail_file, "{}/_obsrows/{}.failed".format(int(sfam_id), int_id))
         try:
             os.remove(fail_file)
         except OSError:
@@ -107,7 +110,8 @@ def merge_interactome_rows(job, sfam_id):
     resi_path = os.path.join(work_dir, resi_prefix)
 
     #Combine residues into dataframe
-    for row_prefix in out_store.list_input_directory("{}/_obsrows/".format(int(sfam_id))):
+    possible_errors = []
+    for nrows, row_prefix in enumerate(out_store.list_input_directory("{}/_obsrows/".format(int(sfam_id)))):
         if row_prefix.endswith("failed"): continue
         job.log("Running {} {}".format(sfam_id, row_prefix))
 
@@ -118,8 +122,13 @@ def merge_interactome_rows(job, sfam_id):
         try:
             df.to_hdf(unicode(resi_path), "table", table=True, format="table", mode="a",
                 data_columns=data_cols, complib="bzip2", complevel=9, min_itemsize=1024)
-        except TypeError as e:
-            job.log("Failed writing {}: {}".format(sfam_id, resi_path, e))
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except:
+            import traceback
+            tb = traceback.format_exc()
+            job.log("Failed writing {}: {} {}".format(sfam_id, resi_path, tb))
+            possible_errors.append(tb)
             continue
 
         try:
@@ -140,8 +149,11 @@ def merge_interactome_rows(job, sfam_id):
         job.log("Failed merging: {}".format(resi_path))
         print "Failed merging: {}".format(resi_path)
         fail_file = os.path.join(work_dir, "fail_file")
-        with open(fail_file) as f:
-            f.write(e)
+        with open(fail_file, "w") as f:
+            f.write("No rows?")
+            for e in possible_errors:
+                f.write(e)
+                f.write("\n")
         out_store.write_output_file(fail_file, "{}/{}.failed".format(int(sfam_id), path))
         try:
             os.remove(fail_file)
@@ -166,6 +178,7 @@ def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFil
     except Exception as e:
         job.log("FAILED OBS SFAM {} {}".format(sfam_id, e))
         print "FAILED OBS SFAM {} {}".format(sfam_id, e)
+        return
 
     current_rows = set(int(os.path.basename(key)[:-3]) for key in out_store.list_input_directory("{}/_obsrows".format(int(sfam_id))) if not key.endswith("failed"))
     int_ids = list(set(int_ids)-current_rows)
@@ -232,8 +245,8 @@ def start_toil(job, pdbFileStoreID=None):
     skip_sfam = set([float(f.split("/", 1)[0]) for f in out_store.list_input_directory() \
         if f.endswith(".observed_interactome")])
     job.log("start obs 2")
-    pdb = pd.read_hdf(unicode(pdb_path), "Superfamilies", columns=["sfam_id"])
-    sfams = pdb[~pdb["sfam_id"].isin(skip_sfam)]["sfam_id"].drop_duplicates().dropna().astype(int)
+    pdb = filter_hdf_chunks(unicode(ibis_obs_path), "ObsInt", columns=["mol_superfam_id"])
+    sfams = pdb[~pdb["mol_superfam_id"].isin(skip_sfam)]["mol_superfam_id"].drop_duplicates().dropna().astype(int)
     print "SFAMS", sfams
     map_job(job, get_observed_structural_interactome, sfams, pdbFileStoreID, ibisObsFileStoreID)
     print "Finished adding jobs"

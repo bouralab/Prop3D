@@ -86,21 +86,21 @@ def get_file(job, prefix, path_or_fileStoreID):
 
 def filter_hdf(hdf_path, dataset, column, value, columns=None):
     df = pd.read_hdf(unicode(hdf_path), dataset, where="{}={}".format(column, value), columns=columns)
-    if df.shape[0] == 0:
-        if columns is not None and not isinstance(columns, (list, tuple)):
-            names = [columns]
-        else:
-            names = columns if columns is not None else df.columns
-        del df
-        df = pd.DataFrame({name:[] for name in names})
-        for _df in pd.read_hdf(unicode(hdf_path), dataset, chunksize=500):
-             filtered_df = _df[_df[column]==value].copy()
-             if filtered_df.shape[0]>0:
-                 if columns is not None:
-                     filtered_df = filtered_df[columns]
-                 df = pd.concat((df, filtered_df), axis=0) if df is not None else filtered_df
-             del _df
-             _df = None
+    return df if df.shape[0] > 0 else filter_hdf_chunks(hdf_path, dataset, \
+        column=column, value=value, columns=columns)
+
+def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, chunksize=500):
+    df = None
+    for _df in pd.read_hdf(unicode(hdf_path), dataset, chunksize=500):
+        filtered_df = _df[_df[column]==value].copy() if columns is not None and value is not None else _df.copy()
+        if df is None or filtered_df.shape[0]>0:
+            if columns is not None:
+                filtered_df = filtered_df[columns]
+            df = pd.concat((df, filtered_df), axis=0) if df is not None else filtered_df
+            del _df
+            _df = None
+    if df is None:
+        raise RuntimeError("Unable to parse HDF")
     return df
 
 def PDBTools(commands, output):
