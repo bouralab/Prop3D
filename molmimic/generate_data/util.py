@@ -84,17 +84,41 @@ def get_file(job, prefix, path_or_fileStoreID):
 
         return new_file
 
-def filter_hdf(hdf_path, dataset, column, value, columns=None):
-    df = pd.read_hdf(unicode(hdf_path), dataset, where="{}={}".format(column, value), columns=columns)
-    return df if df.shape[0] > 0 else filter_hdf_chunks(hdf_path, dataset, \
-        column=column, value=value, columns=columns)
+def filter_hdf(hdf_path, dataset, column=None, value=None, columns=None, **query):
+    assert len(query) > 0 or (column is not None and value is not None)
+    if len(query) == 0 and (column is not None and value is not None): 
+        if not isinstance(column, (list, tuple)) or not isinstance(value, (list, tuple)):
+            where = "{}={}".format(column, value)
+        elif len(column) == len(value):
+            where = ["{}={}".format(c, v) for c, v in zip(column, value)]
+        else:
+            raise RuntimeError("Cols and values must match")
+    else:
+        where = ["{}={}".format(c,v) for c, v in query.iteritems()]
+    try:    
+        df = pd.read_hdf(unicode(hdf_path), dataset, where=where, columns=columns)
+        if df.shape[0] == 0: raise KeyError
+    except (KeyError, ValueError): 
+        df = filter_hdf_chunks(hdf_path, dataset, column=column, value=value, columns=columns, **query)
+    return df
 
-def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, chunksize=500):
+def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, chunksize=500, **query):
     df = None
-    for _df in pd.read_hdf(unicode(hdf_path), dataset, chunksize=500):
-        filtered_df = _df[_df[column]==value].copy() if columns is not None and value is not None else _df.copy()
+    for _df in pd.read_hdf(unicode(hdf_path), dataset, chunksize=chunksize):
+        if len(query) > 0:
+            filtered_df = _df.query("("+") & (".join(["{}=={}".format(c, v) for c, v in query.iteritems()])+")")
+        elif columns is not None and value is not None:
+            if not isinstance(column, (list, tuple)) or not isinstance(value, (list, tuple)):
+                filtered_df = _df[_df[column]==value].copy()
+            elif len(column) == len(value):
+                filtered_df = _df.query(" & ".join(["{}=={}".format(c, v) for c, v in zip(column, value)]))
+            else:
+                raise RuntimeError("Cols and values must match")
+        else:
+            filtered_df = _df.copy()
         if df is None or filtered_df.shape[0]>0:
             if columns is not None:
+                print(columns, filtered_df.columns)
                 filtered_df = filtered_df[columns]
             df = pd.concat((df, filtered_df), axis=0) if df is not None else filtered_df
             del _df
