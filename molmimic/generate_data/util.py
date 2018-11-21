@@ -12,14 +12,6 @@ import toil.fileStore
 #Auto-scaling on AWS with toil has trouble finding modules? Heres the workaround
 PDB_TOOLS = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pdb_tools")
 
-data_path_prefix = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-
-structures_path_prefix = os.path.join(data_path_prefix, "structures")
-
-features_path_prefix = os.path.join(data_path_prefix, "features")
-
-interfaces_path_prefix = os.path.join(data_path_prefix, "interfaces")
-
 def SubprocessChain(commands, output):
     if len(commands) > 2:
         prev_proc = subprocess.Popen(
@@ -107,8 +99,9 @@ def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, 
     for _df in pd.read_hdf(unicode(hdf_path), dataset, chunksize=chunksize):
         if len(query) > 0:
             filtered_df = _df.query("("+") & (".join(["{}=={}".format(c, v) for c, v in query.iteritems()])+")")
-        elif columns is not None and value is not None:
-            if not isinstance(column, (list, tuple)) or not isinstance(value, (list, tuple)):
+        elif column is not None and value is not None:
+            if not isinstance(column, (list, tuple)) and not isinstance(value, (list, tuple)):
+                print("FILTER COL VAL", column, value)
                 filtered_df = _df[_df[column]==value].copy()
             elif len(column) == len(value):
                 filtered_df = _df.query(" & ".join(["{}=={}".format(c, v) for c, v in zip(column, value)]))
@@ -116,7 +109,9 @@ def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, 
                 raise RuntimeError("Cols and values must match")
         else:
             filtered_df = _df.copy()
-        if df is None or filtered_df.shape[0]>0:
+        if filtered_df.shape[0]>0:
+            print("FOUND ROW MATCHING query", query, "("+") & (".join(["{}=={}".format(c, v) for c, v in query.iteritems()])+")", column, value)
+            print(filtered_df.iloc[0])
             if columns is not None:
                 print(columns, filtered_df.columns)
                 filtered_df = filtered_df[columns]
@@ -137,23 +132,6 @@ def get_jobstore_name(job, name="raw-files"):
 
 def get_jobstore(job, name="raw-files"):
     return Toil.getJobStore(get_jobstore_name(job, None))
-
-def get_structures_path(dataset_name):
-    return os.path.join(structures_path_prefix, dataset_name)
-
-def get_features_path(dataset_name):
-    features_path = os.path.join(features_path_prefix, dataset_name)
-    if not os.path.isdir(features_path):
-        features_path = os.path.join(features_path_prefix, "features_{}".format(dataset_name))
-    return features_path
-
-def get_interfaces_path(dataset_name):
-    return os.path.join(interfaces_path_prefix, dataset_name)
-
-def initialize_data(dataset_name):
-    os.environ["MOLMIMIC_STRUCTURES"] = get_structures_path(dataset_name)
-    os.environ["MOLMIMIC_FEATURES"] = get_features_path(dataset_name)
-    os.environ["MOLMIMIC_INTERFACES"] = get_interfaces_path(dataset_name)
 
 def iter_cdd(use_label=True, use_id=False, label=None, id=None, group_superfam=False, all_superfam=False):
     if use_label and not use_id:

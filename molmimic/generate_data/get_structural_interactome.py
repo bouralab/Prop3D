@@ -120,7 +120,7 @@ def merge_interactome_rows(job, sfam_id):
 
         df = pd.read_hdf(row_file, "table")
         try:
-            df.to_hdf(unicode(resi_path), "table", table=True, format="table", mode="a",
+            df.to_hdf(unicode(resi_path), "table", table=True, format="table", append=True, mode="a",
                 data_columns=data_cols, complib="bzip2", complevel=9, min_itemsize=1024)
         except (SystemExit, KeyboardInterrupt):
             raise
@@ -261,7 +261,7 @@ if __name__ == "__main__":
     options = parser.parse_args()
     options.logLevel = "DEBUG"
     options.clean = "always"
-    options.targetTime = 0
+    options.targetTime = 1
 
     print "Running"
 
