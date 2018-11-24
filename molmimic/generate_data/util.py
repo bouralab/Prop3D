@@ -78,7 +78,7 @@ def get_file(job, prefix, path_or_fileStoreID):
 
 def filter_hdf(hdf_path, dataset, column=None, value=None, columns=None, **query):
     assert len(query) > 0 or (column is not None and value is not None)
-    if len(query) == 0 and (column is not None and value is not None): 
+    if len(query) == 0 and (column is not None and value is not None):
         if not isinstance(column, (list, tuple)) or not isinstance(value, (list, tuple)):
             where = "{}={}".format(column, value)
         elif len(column) == len(value):
@@ -87,10 +87,10 @@ def filter_hdf(hdf_path, dataset, column=None, value=None, columns=None, **query
             raise RuntimeError("Cols and values must match")
     else:
         where = ["{}={}".format(c,v) for c, v in query.iteritems()]
-    try:    
+    try:
         df = pd.read_hdf(unicode(hdf_path), dataset, where=where, columns=columns)
         if df.shape[0] == 0: raise KeyError
-    except (KeyError, ValueError): 
+    except (KeyError, ValueError):
         df = filter_hdf_chunks(hdf_path, dataset, column=column, value=value, columns=columns, **query)
     return df
 
@@ -110,8 +110,9 @@ def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, 
         else:
             filtered_df = _df.copy()
         if filtered_df.shape[0]>0:
-            print("FOUND ROW MATCHING query", query, "("+") & (".join(["{}=={}".format(c, v) for c, v in query.iteritems()])+")", column, value)
-            print(filtered_df.iloc[0])
+            if (column and value) or len(query)>0:
+                print("FOUND ROW MATCHING query", query, "("+") & (".join(["{}=={}".format(c, v) for c, v in query.iteritems()])+")", column, value)
+                print(filtered_df.iloc[0])
             if columns is not None:
                 print(columns, filtered_df.columns)
                 filtered_df = filtered_df[columns]
@@ -119,7 +120,7 @@ def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, 
             del _df
             _df = None
     if df is None:
-        raise RuntimeError("Unable to parse HDF")
+        raise TypeError("Unable to parse HDF")
     return df
 
 def PDBTools(commands, output):
@@ -350,4 +351,3 @@ def make_h5_tables(files, iostore):
             df.to_hdf(unicode(f+".new"), "table", format="table",
                 table=True, complevel=9, complib="bzip2", min_itemsize=1024)
         iostore.write_output_file(f+".new", f)
-        

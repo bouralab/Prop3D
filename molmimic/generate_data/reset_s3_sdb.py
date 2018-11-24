@@ -17,15 +17,17 @@ for bucket in buckets:
         version.delete()
     bucket.delete()
 
-client = boto3.client('ec2')
+client = boto3.client('ec2', 'us-east-1')
+spots = client.describe_spot_instance_requests()
+for spot in spots["SpotInstanceRequests"]:
+    if spot["State"] == "active":
+        client.terminate_instances(InstanceIds=[spot["InstanceId"]])
+    if spot["State"] in ["open", "active"]:
+        print "Closing", spot["SpotInstanceRequestId"]
+        client.cancel_spot_instance_requests(SpotInstanceRequestIds=[spot["SpotInstanceRequestId"]])
+
 response = client.describe_instances()
 for reservation in response["Reservations"]:
     for instance in reservation["Instances"]:
         if instance["InstanceType"] == "t2.small":
             client.terminate_instances(InstanceIds=[instance["InstanceId"]])
-
-spots = client.describe_spot_instance_requests()
-for spot in spots["SpotInstanceRequests"]:
-    if spot["State"] == "open":
-        print "Closing", spot["SpotInstanceRequestId"]
-        client.cancel_spot_instance_requests(SpotInstanceRequestIds=[spot["SpotInstanceRequestId"]])

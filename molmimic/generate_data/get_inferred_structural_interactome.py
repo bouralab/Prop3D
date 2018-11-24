@@ -9,7 +9,6 @@ pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 1000)
 
-
 from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.util import get_file, filter_hdf, filter_hdf_chunks
 from molmimic.generate_data.job_utils import map_job
@@ -33,8 +32,8 @@ def process_inferred_interaction(job, inf_int_id, mol_sfam, table, tableInfStore
             nbr_sdi_id = nbr_sdi,
             mol_sdi_id = mol_sdi)
         print inf_int_id_file, inferred_interfaces
-        job.log("{} {}".format(inf_int_id_file, inferred_interfaces.iloc[0]))
-        inferred_interfaces = inferred_interfaces.iloc[inf_int_id].to_frame().T
+        job.log("{} {}".format(inf_int_id_file, inferred_interfaces.loc[inf_int_id]))
+        inferred_interfaces = inferred_interfaces.loc[inf_int_id].to_frame().T
         job.log("FRAME: {}".format(inferred_interfaces.iloc[0]))
         print "FRAME: {}".format(inferred_interfaces.iloc[0])
         inferred_interfaces["mol_sdi_id"] = inferred_interfaces["mol_sdi_id"].astype(int)
@@ -49,7 +48,12 @@ def process_inferred_interaction(job, inf_int_id, mol_sfam, table, tableInfStore
             return
 
         pdb_file = get_file(job, "PDB.h5", pdbFileStoreID)
-        struct_domains = filter_hdf(pdb_file, "StructuralDomains", "sdi", mol_sdi)
+
+        try:
+            struct_domains = filter_hdf(pdb_file, "StructuralDomains", "sdi", mol_sdi)
+        except RuntimeError:
+            job.log("SDI {} is obsolete".format(mol_sdi))
+            return
 
         #Add PDB, chain, and sdi information. Inner join to only allow sdi's that are in databses, not obsolete
         inferred_interfaces = pd.merge(inferred_interfaces, struct_domains, how="inner", left_on="mol_sdi_id", right_on="sdi")
@@ -142,7 +146,7 @@ def process_inferred_interaction(job, inf_int_id, mol_sfam, table, tableInfStore
         print "ADD RESI", resi
         print "WIL WERITW DF 3", inferred_interfaces.iloc[0]
         inferred_interfaces = inferred_interfaces.assign(mol_res=resi)
-        #inferred_interfaces["mol_res"] = resi        
+        #inferred_interfaces["mol_res"] = resi
         del inferred_interfaces["mol_resi"]
         inferred_interfaces["nbr_sdi_id"] = inferred_interfaces["nbr_sdi_id"].astype(int)
         inferred_interfaces["nbr_taxid"] = inferred_interfaces["nbr_taxid"].astype(int)
@@ -161,7 +165,7 @@ def process_inferred_interaction(job, inf_int_id, mol_sfam, table, tableInfStore
 
         #Add ibis info into out store
         out_store.write_output_file(df_file, "{}/_infrows/Intrac{}/{}.h5".format(int(mol_sfam), table, inf_int_id_file))
-    
+
         for f in (df_file, pdb_file, tableInfFile, obspath):
             try:
                 os.remove(f)
@@ -180,10 +184,10 @@ def process_inferred_interaction(job, inf_int_id, mol_sfam, table, tableInfStore
             f.write("\n")
             f.write(tb)
         out_store.write_output_file(fail_file, "{}/_infrows/Intrac{}/{}.failed".format(int(mol_sfam), table, inf_int_id_file))
-        try:    
+        try:
             os.remove(fail_file)
         except OSError:
-             pass    
+             pass
 
 def merge_table_sfam(job, sfam_id, table):
     work_dir = job.fileStore.getLocalTempDir()
@@ -253,30 +257,23 @@ def get_table_sfams(job, mol_sfam_id, table, tableInfStoreID, pdbFileStoreID):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-ibis".format(prefix))
+    out_store = IOStore.get("{}:molmimic-interfaces".format(prefix))
 
     tableInfPath = get_file(job, "IBIS_inferred_{}.h5".format(table), tableInfStoreID)
+    skip_int = set([tuple(f[:-3].split("_")) for f in out_store.list_input_directory(
+        "{}/_infrows/Intrac{}".format(int(mol_sfam_id),  table)) if f.endswith(".h5")])
+    try:
+        inf_int_ids = filter_hdf_chunks(tableInfPath, "Intrac{}".format(table), chunksize=100,
+            columns=["nbr_obs_int_id", "nbr_sdi_id", "mol_sdi_id"],
+            nbr_superfam_id=mol_sfam_id)
+    except (RuntimeError, TypeError):
+        job.log("Unable to find sfam {} in table {}, Skipping".format(mol_sfam_id, table))
+        return
 
-    #inf_job_ids = (row for pd.read_hdf([unicode(tableInfPath)], "/table", mode="r", \
-    #    chunksize=100, columns=["nbr_obs_int_id", "nbr_sdi", "mol_sdi", "int_sdi"], \
-    #    where=["nbr_obs_int_id=={}".format(nbr_obs_int_id), \
-    #           "nbr_sdi=={}".format(nbr_sdi), \
-    #           "mol_sdi=={}".format(mol_sdi), \
-    #           "int_sdi=={}".format(int_sdi), \
-    #        ]) for row in df.itertuples(index=False))
-    
-    #def inf_job_ids():
-    #    for df in pd.read_hdf(unicode(tableInfPath), "/table", mode="r", chunksize=100, \
-    #      columns=["nbr_obs_int_id", "nbr_sdi", "mol_sdi", "int_sdi"], \
-    #      where=["nbr_obs_int_id=={}".format(nbr_obs_int_id), "nbr_sdi=={}".format(nbr_sdi), \
-    #             "mol_sdi=={}".format(mol_sdi), "int_sdi=={}".format(int_sdi)]):
-    #        for row in df.itertuples(index=False):
-    #            yield row
-    inf_int_ids = filter_hdf_chunks(tableInfPath, "Intrac{}".format(table), chunksize=100,
-        columns=["nbr_obs_int_id", "nbr_sdi_id", "mol_sdi_id"],
-        nbr_superfam_id=mol_sfam_id).iloc[:1]
-    inf_int_ids = [list(row) for row in inf_int_ids.itertuples()]
-    print inf_int_ids
-    map_job(job, process_inferred_interaction, inf_int_ids, mol_sfam_id, table, tableInfStoreID, pdbFileStoreID)
+    inf_int_ids = set([tuple(row) for row in inf_int_ids.itertuples()])
+    inf_int_ids -= skip_int
+    print "Starting table sfam", mol_sfam_id, inf_int_ids
+    map_job(job, process_inferred_interaction, list(inf_int_ids), mol_sfam_id, table, tableInfStoreID, pdbFileStoreID)
 
     job.addFollowOnJobFn(merge_table_sfam, mol_sfam_id, table)
 
@@ -289,14 +286,20 @@ def get_inferred_structural_interactome_by_table(job, table, pdbFileStoreID):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-ibis".format(prefix))
+    out_store = IOStore.get("{}:molmimic-interfaces".format(prefix))
 
     #Read in H5 for entire table
     tableInfPath = get_file(job, "IBIS_inferred_{}.h5".format(table), in_store)
     tableInfPathFileStoreID = job.fileStore.writeGlobalFile(tableInfPath)
-    sfams = filter_hdf_chunks(tableInfPath, "Intrac{}".format(table), columns=["nbr_superfam_id"]).drop_duplicates().dropna().iloc[:1]
+    #sfams = filter_hdf_chunks(tableInfPath, "Intrac{}".format(table), columns=["nbr_superfam_id"]).drop_duplicates().dropna()
+    #skip_sfam = set([int(f.split("/", 1)[0]) for f in out_store.list_input_directory() \
+    #    if f.endswith(".inferred_interactome")])
+    #sfams = sfams[~sfams["nbr_superfam_id"].isin(skip_sfam)]["nbr_superfam_id"].drop_duplicates().dropna().astype(int).tolist()
+
+    sfams = [294153]
     #sfams = set(sfam for df in pd.read_hdf([unicode(tableInfPath)], "/table", chunksize=1000, mode="r", \
     #    columns=["mol_superfam_id"]) for sfam in df["mol_superfam_id"].drop_duplicates.dropna())
-    map_job(job, get_table_sfams, sfams["nbr_superfam_id"].tolist(), table, tableInfPathFileStoreID, pdbFileStoreID)
+    map_job(job, get_table_sfams, sfams, table, tableInfPathFileStoreID, pdbFileStoreID)
 
     try:
         os.remove(tableInfPath)
@@ -310,11 +313,11 @@ def merge_inferred_interactome_sfam(job, sfam_id):
 
     sfam_prefix = "{}/_inftables".format(int(sfam_id))
     sfam_file = "{s}/{s}.inferred_interactome".format(s=int(sfam_id))
-    merged_file = job.fileStore.getLocalTempFileName()    
+    merged_file = job.fileStore.getLocalTempFileName()
 
     for table_prefix in iostore.list_input_directory(sfam_prefix):
         if table_prefix.endswith("failed"): continue
-        
+
         print "Running table sfam", table_prefix
         table_file = os.path.join(work_dir, os.path.basename(table_prefix))
         iostore.read_input_file(table_prefix, table_file)
@@ -360,6 +363,7 @@ def merge_inferred_interactome(job):
     map_job(job, merge_inferred_interactome_sfam, sfam_to_run)
 
 def start_toil(job):
+    print "Starting job"
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-ibis".format(prefix))
@@ -371,7 +375,9 @@ def start_toil(job):
     #Add pdb info into local job store
     pdbFileStoreID = job.fileStore.writeGlobalFile(pdb_file)
 
-    tables = [1] #xrange(1, 87)
+    tables = set(range(1,87))-set([51])
+
+    job.log("Running tables: {}".format(tables))
     map_job(job, get_inferred_structural_interactome_by_table, tables, pdbFileStoreID)
     job.addFollowOnJobFn(merge_inferred_interactome)
 

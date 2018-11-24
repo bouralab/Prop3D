@@ -47,15 +47,20 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
         print row.shape
         del face2
 
-        st_domain_mol = filter_hdf(unicode(mmdb_path), "StructuralDomains", "sdi", row.iloc[0]['mol_sdi_id'])
-        st_domain_mol.columns = ['mol_sdi_id', 'mol_domNo', 'mol_gi', 'mol_pdb', 'mol_chain', 'mol_sdi_from', 'mol_sdi_to']
-        row = pd.merge(row, st_domain_mol, how="left", on="mol_sdi_id")
-        del st_domain_mol
+        try:
+            st_domain_mol = filter_hdf(unicode(mmdb_path), "StructuralDomains", "sdi", row.iloc[0]['mol_sdi_id'])
+            st_domain_mol.columns = ['mol_sdi_id', 'mol_domNo', 'mol_gi', 'mol_pdb', 'mol_chain', 'mol_sdi_from', 'mol_sdi_to']
+            row = pd.merge(row, st_domain_mol, how="left", on="mol_sdi_id")
+            del st_domain_mol
 
-        st_domain_int = filter_hdf(unicode(mmdb_path), "StructuralDomains", "sdi", row.iloc[0]['int_sdi_id'])
-        st_domain_int.columns = ['int_sdi_id', 'int_domNo', 'int_gi', 'int_pdb', 'int_chain', 'int_sdi_from', 'int_sdi_to']
-        row = pd.merge(row, st_domain_int, how="left", on="int_sdi_id")
-        del st_domain_int
+            st_domain_int = filter_hdf(unicode(mmdb_path), "StructuralDomains", "sdi", row.iloc[0]['int_sdi_id'])
+            st_domain_int.columns = ['int_sdi_id', 'int_domNo', 'int_gi', 'int_pdb', 'int_chain', 'int_sdi_from', 'int_sdi_to']
+            row = pd.merge(row, st_domain_int, how="left", on="int_sdi_id")
+            del st_domain_int
+        except TypeError:
+            #SDI's don't exists, must be obsolete
+            print "Done row", int_id
+            return
 
         updated_resi = {"mol_res":[], "int_res": []}
 
@@ -111,6 +116,7 @@ def merge_interactome_rows(job, sfam_id):
 
     #Combine residues into dataframe
     possible_errors = []
+    nrows = None
     for nrows, row_prefix in enumerate(out_store.list_input_directory("{}/_obsrows/".format(int(sfam_id)))):
         if row_prefix.endswith("failed"): continue
         job.log("Running {} {}".format(sfam_id, row_prefix))
@@ -145,7 +151,7 @@ def merge_interactome_rows(job, sfam_id):
         #Cleanup
         os.remove(resi_path)
         print "End merge", sfam_id
-    else:
+    elif nrows is not None:
         job.log("Failed merging: {}".format(resi_path))
         print "Failed merging: {}".format(resi_path)
         fail_file = os.path.join(work_dir, "fail_file")
@@ -154,7 +160,7 @@ def merge_interactome_rows(job, sfam_id):
             for e in possible_errors:
                 f.write(e)
                 f.write("\n")
-        out_store.write_output_file(fail_file, "{}/{}.failed".format(int(sfam_id), path))
+        out_store.write_output_file(fail_file, "{}/{}.failed".format(int(sfam_id), resi_prefix))
         try:
             os.remove(fail_file)
         except OSError:
@@ -191,47 +197,31 @@ def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFil
     #Merge converted residues
     job.addFollowOnJobFn(merge_interactome_rows, sfam_id)
 
-def start_toil_observed(job, pdbFileStoreID):
-    work_dir = job.fileStore.getLocalTempDir()
+def cleanup(job):
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
-    in_store = IOStore.get("{}:molmimic-ibis".format(prefix))
-    out_store = IOStore.get("{}:molmimic-interfaces".format(prefix))
+    in_store = IOStore.get("{}:molmimic-interfaces".format(prefix))
+    keys = list(in_store.list_input_directory())
+    finished = set(key.split("/")[0] for key in keys if key.endswith("observed_interactome"))
+    failed = set(key.split("/")[0] for key in keys if "_obsrows" in key and key.endswith("failed"))
 
-    ibis_obs_prefix = "IBIS_observed.h5"
-    ibis_obs_path = os.path.join(work_dir, ibis_obs_prefix)
-    in_store.read_input_file(ibis_obs_prefix, ibis_obs_path)
-
-    #Add ibis info into local job store
-    ibisObsFileStoreID = job.fileStore.writeGlobalFile(ibis_obs_path)
-
-    print "start obs 1"
-    pdb_path = job.fileStore.readGlobalFile(pdbFileStoreID)
-    skip_sfam = set([float(f.split("/", 1)[0]) for f in out_store.list_input_directory() \
-        if f.endswith(".observed_interactome")])
-    job.log("start obs 2")
-    pdb = pd.read_hdf(unicode(pdb_path), "Superfamilies", columns=["sfam_id"])
-    sfams = pdb[~pdb["sfam_id"].isin(skip_sfam)]["sfam_id"].drop_duplicates().dropna().astype(int)
-    print "SFAMS", sfams
-    map_job(job, get_observed_structural_interactome, sfams, pdbFileStoreID, ibisObsFileStoreID)
-    print "Finished adding jobs"
-    os.remove(pdb_path)
-    print "FINISHED obs"
+    for key in failed-finished:
+        in_store.remove_file(key)
 
 def start_toil(job, pdbFileStoreID=None):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-ibis".format(prefix))
     out_store = IOStore.get("{}:molmimic-interfaces".format(prefix))
-    print "Start toil"
 
-    if pdbFileStoreID  is None:
+    if pdbFileStoreID is None:
         #Download PDB info
-        pdb_file = os.path.join(work_dir, "PDB.h5")
-        in_store.read_input_file("PDB.h5", pdb_file)
+        pdb_path = os.path.join(work_dir, "PDB.h5")
+        in_store.read_input_file("PDB.h5", pdb_path)
 
         #Add pdb info into local job store
-        pdbFileStoreID = job.fileStore.writeGlobalFile(pdb_file)
-        print "Added PDB to store"
+        pdbFileStoreID = job.fileStore.writeGlobalFile(pdb_path)
+    else:
+        pdb_path = job.fileStore.readGlobalFile(pdbFileStoreID)
 
     ibis_obs_prefix = "IBIS_observed.h5"
     ibis_obs_path = os.path.join(work_dir, ibis_obs_prefix)
@@ -240,18 +230,20 @@ def start_toil(job, pdbFileStoreID=None):
     #Add ibis info into local job store
     ibisObsFileStoreID = job.fileStore.writeGlobalFile(ibis_obs_path)
 
-    print "start obs 1"
-    pdb_path = job.fileStore.readGlobalFile(pdbFileStoreID)
+    #Choose which superfamilies to run, skip those already present
     skip_sfam = set([float(f.split("/", 1)[0]) for f in out_store.list_input_directory() \
         if f.endswith(".observed_interactome")])
-    job.log("start obs 2")
-    pdb = filter_hdf_chunks(unicode(ibis_obs_path), "ObsInt", columns=["mol_superfam_id"])
+    pdb = filter_hdf_chunks(unicode(ibis_obs_path), "ObsInt", columns=["mol_superfam_id"]).drop_duplicates()
     sfams = pdb[~pdb["mol_superfam_id"].isin(skip_sfam)]["mol_superfam_id"].drop_duplicates().dropna().astype(int)
-    print "SFAMS", sfams
+    print "Will run a total of {} SFAMS".format(len(sfams))
+
+    #Run all superfamilies
     map_job(job, get_observed_structural_interactome, sfams, pdbFileStoreID, ibisObsFileStoreID)
-    print "Finished adding jobs"
+
+    #Cleanup
+    job.addFollowOnJobFn(cleanup)
+    os.remove(ibis_obs_path)
     os.remove(pdb_path)
-    print "FINISHED obs"
 
 if __name__ == "__main__":
     from toil.common import Toil
@@ -262,8 +254,6 @@ if __name__ == "__main__":
     options.logLevel = "DEBUG"
     options.clean = "always"
     options.targetTime = 1
-
-    print "Running"
 
     job = Job.wrapJobFn(start_toil)
     with Toil(options) as toil:
