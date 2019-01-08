@@ -11,3 +11,5 @@ toolz >= 0.7.3
 partd >= 0.3.8
 cloudpickle >= 0.2.1
 tables
+freesasa
+git+git://github.com/haddocking/binding_affinity

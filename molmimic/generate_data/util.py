@@ -101,7 +101,6 @@ def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, 
             filtered_df = _df.query("("+") & (".join(["{}=={}".format(c, v) for c, v in query.iteritems()])+")")
         elif column is not None and value is not None:
             if not isinstance(column, (list, tuple)) and not isinstance(value, (list, tuple)):
-                print("FILTER COL VAL", column, value)
                 filtered_df = _df[_df[column]==value].copy()
             elif len(column) == len(value):
                 filtered_df = _df.query(" & ".join(["{}=={}".format(c, v) for c, v in zip(column, value)]))
@@ -110,11 +109,7 @@ def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, 
         else:
             filtered_df = _df.copy()
         if filtered_df.shape[0]>0:
-            if (column and value) or len(query)>0:
-                print("FOUND ROW MATCHING query", query, "("+") & (".join(["{}=={}".format(c, v) for c, v in query.iteritems()])+")", column, value)
-                print(filtered_df.iloc[0])
             if columns is not None:
-                print(columns, filtered_df.columns)
                 filtered_df = filtered_df[columns]
             df = pd.concat((df, filtered_df), axis=0) if df is not None else filtered_df
             del _df
@@ -351,3 +346,37 @@ def make_h5_tables(files, iostore):
             df.to_hdf(unicode(f+".new"), "table", format="table",
                 table=True, complevel=9, complib="bzip2", min_itemsize=1024)
         iostore.write_output_file(f+".new", f)
+
+def read_pdb(file):
+    with open(file) as f:
+        points = np.array([(float(line[30:38]), float(line[38:46]), float(line[46:54]) \
+            for line in f if line.startswith('ATOM')])
+    return points
+
+def replace_chains(pdb_file, new_file, **chains):
+    """Modified from pdbotools"""
+    coord_re = re.compile('^(ATOM|HETATM)')
+
+    with open(pdb_file) as f, open(new_file) as new:
+        for line in f:
+            if coord_re.match(line) and line[21] in chains:
+                yield line[:21] + chains[line[21]] + line[22:]
+            else:
+                yield line
+
+def extract_chains(pdb_file, chains, new_file=None):
+    """Modified from pdbotools"""
+    coord_re = re.compile('^(ATOM|HETATM)')
+
+    if new_file is None:
+        name, ext = os.path.splitext(pdb_file)
+        new_file = "{}.{}.pdb".format(name, chains)
+
+    with open(pdb_file) as f, open(new_file) as new:
+        for line in f:
+            if coord_re.match(line) and line[21] in chains:
+                print >> new, line[:21] + chains[line[21]] + line[22:]
+            else:
+                print >> new, line
+
+    return new_file

@@ -92,7 +92,7 @@ def get_pdb(pdb, chain1, chain2, sdi1, sdi2):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE)
         renamechain1 = subprocess.Popen(
-            [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-1"],
+            [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-M"],
             stdin=splitdomain1.stdout,
             stdout=output,
             stderr=subprocess.PIPE)
@@ -121,7 +121,7 @@ def get_pdb(pdb, chain1, chain2, sdi1, sdi2):
 
             #Change chain name to fix intra-chain interactions
             renamechain2 = subprocess.Popen(
-                [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-2"],
+                [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-I"],
                 stdin=splitdomain2.stdout,
                 stdout=output,
                 stderr=subprocess.PIPE)
@@ -166,17 +166,17 @@ def calculate_buried_surface_area(pdb_file, pdb, sdi_sel1=None, sdi_sel2=None, f
     parameters = ["--chain-groups=12+1+2"]#["freesasa", "--format=json", "--chain-groups=12+1+2"]
 
     if sdi_sel1 is not None and sdi_sel1 is not None:
-        command.append("--select='domain1, chain 1 and resi {}'".format("+".join(sdi_sel1).replace("-", "\-")))
-        command.append("--select='domain2, chain 2 and resi {}'".format("+".join(sdi_sel2).replace("-", "\-")))
+        command.append("--select='domain1, chain I and resi {}'".format("+".join(sdi_sel1).replace("-", "\-")))
+        command.append("--select='domain2, chain M and resi {}'".format("+".join(sdi_sel2).replace("-", "\-")))
 
     if face1 is not None:
         residues1 = face1.replace(",", "+").replace("-", "\-")
-        selection1 = "binding-site1, chain 1 and resi {}".format(residues1)
+        selection1 = "binding-site1, chain M and resi {}".format(residues1)
         command.append("--select='{}'".format(selection1))
 
     if face2 is not None:
         residues2 = face2.replace(",", "+").replace("-", "\-")
-        selection2 = "binding-site2, chain 2 and resi {}".format(residues2)
+        selection2 = "binding-site2, chain I and resi {}".format(residues2)
         command.append("--select='{}'".format(selection2))
 
     #command.append(pdb_file)
@@ -252,14 +252,14 @@ def calculate_surface_area_chain(pdb_file, pdb, sdi=None, face=None, job=None):
     asa : float
         the calculated accesable surface area
     """
-    parameters = ["--chain-groups=1"]
+    parameters = ["--chain-groups=M"]
 
     if sdi is not None:
         command.append("--select=domain, resi {}".format(sdi))
 
     if face is not None:
         residues = face.replace(",", "+")
-        selection = "binding-site, chain 1 and resi {}".format(residues)
+        selection = "binding-site, chain M and resi {}".format(residues)
         command.append("--select='{}'".format(selection))
 
     #command.append(pdb_file)
@@ -440,7 +440,7 @@ def get_asa(df):
 
     obs_interface_asa = r.face1_asa_obs+r.face2_asa
     ratio = (face1_asa+r.face2_asa)/obs_interface_asa if obs_interface_asa > 0. else 0.
-    
+
     predicted_bsa = r.obs_bsa*ratio
     complex_asa = asa+r.c2_asa-predicted_bsa
 
