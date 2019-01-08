@@ -349,7 +349,7 @@ def make_h5_tables(files, iostore):
 
 def read_pdb(file):
     with open(file) as f:
-        points = np.array([(float(line[30:38]), float(line[38:46]), float(line[46:54]) \
+        points = np.array([(float(line[30:38]), float(line[38:46]), float(line[46:54])) \
             for line in f if line.startswith('ATOM')])
     return points
 

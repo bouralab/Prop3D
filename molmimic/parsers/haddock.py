@@ -51,6 +51,8 @@ def run_haddock(dock_name, work_dir=None, docker=True, toil=False, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
+    if job:
+        job.log(str(os.listdir(work_dir)))
     assert any(os.path.isfile(os.path.join(work_dir, f)) for f in ("new.html", "run.cns"))
 
     if toil:

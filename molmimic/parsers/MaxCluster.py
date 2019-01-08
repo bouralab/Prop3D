@@ -8,7 +8,11 @@ except ImportError:
     import subprocess
     maxcluster_path = os.path.dirname(os.path.dirname(subprocess.check_output(["which", "maxcluster"])))
 
-def run_maxcluster(*args, **kwds, work_dir=None, docker=True, job=None):
+def run_maxcluster(*args, **kwds):
+    work_dir = kwds.get("work_dir", None)
+    docker = kwds.get("docker", True)
+    job = kwds.get("job", None)
+
     if work_dir is None:
         work_dir = os.getcwd()
 
@@ -16,7 +20,7 @@ def run_maxcluster(*args, **kwds, work_dir=None, docker=True, job=None):
     in_file_kwds = ["e", "p", "l", "F", "M"]
     parameters = ["-"+a for a in args]+["-{}={}".format(k,v) for k,v in \
         kwds.iteritems() if k not in file_kwds]
-    file_parameters = {k:v in kwds.iteritems() if k in file_kwds}
+    file_parameters = {k:v for k, v in kwds.iteritems() if k in file_kwds}
 
     assert any(os.path.isfile(os.path.join(work_dir, f)) for f in ("new.html", "run.cns"))
 

@@ -1,5 +1,9 @@
 from collections import defaultdict
+
+from sklearn.metrics import jaccard_similarity_score
 from prodigy.predict_IC import calculate_ic
+import Bio.PDB
+from Bio.PDB import Select
 
 from molmimic.parsers.superpose import align
 from molmimic.generate_data.util import read_pdb, replace_chains, extract_chains
@@ -180,4 +184,10 @@ class Complex(Select):
         irmsd_best = rmsd(cm_rf, cm_best)
         return rmsdA, rmsdB, irmsd_avg, irmsd_best
 
-    def match_residues(self):
+    def match_residues(self, face1, face2, r=5.5):
+        face1, face2 = zip(*calculate_ic(s, distance_cutoff=r))
+        face1_pred = set([r.id[1] for r in face1])
+        face2_pred = set([r.id[1] for r in face2])
+        face1_score = jaccard_similarity_score(face1, face1_pred)
+        face2_score = jaccard_similarity_score(face2, face2_pred)
+        return face1_score, face2_score

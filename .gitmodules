@@ -1,3 +1,6 @@
 [submodule "molmimic/pdb_tools"]
 	path = molmimic/pdb_tools
 	url = https://github.com/edraizen/pdb-tools.git
+[submodule "prodigy"]
+	path = prodigy
+	url = https://github.com/haddocking/prodigy.git

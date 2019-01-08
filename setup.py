@@ -20,6 +20,8 @@ packages = [
     "molmimic.torch_model",
     "molmimic.util",
     "molmimic.visualize",
+    "prodigy",
+    "prodigy.lib"
 ]
 
 setup(
