@@ -1,5 +1,6 @@
 import os
 import shutil
+import tempfile
 
 try:
     from toil.lib.docker import apiDockerCall
@@ -9,26 +10,39 @@ except ImportError:
     maxcluster_path = os.path.dirname(os.path.dirname(subprocess.check_output(["which", "maxcluster"])))
 
 def run_maxcluster(*args, **kwds):
-    work_dir = kwds.get("work_dir", None)
-    docker = kwds.get("docker", True)
-    job = kwds.get("job", None)
+    work_dir = kwds.pop("work_dir", None)
+    docker = kwds.pop("docker", True)
+    job = kwds.pop("job", None)
 
     if work_dir is None:
         work_dir = os.getcwd()
 
+    if "file_list" in kwds and not "l" in kwds:
+        kwds["l"] = kwds.pop("file_list")
+    else:
+        kwds.pop("file_list", None)
+
+    log = kwds.get("log", False)
+    if log and not isinstance(log, str):
+        f = tempfile.NamedTemporaryFile(dir=work_dir, suffix=".log", delete=False)
+        f.close()
+        kwds["log"] = f.name
+
     file_kwds = ["log", "e", "p", "l", "R", "Rl", "Ru", "F", "M"]
     in_file_kwds = ["e", "p", "l", "F", "M"]
-    parameters = ["-"+a for a in args]+["-{}={}".format(k,v) for k,v in \
-        kwds.iteritems() if k not in file_kwds]
+    parameters = ["-"+a for a in args]
+    for k, v in kwds.iteritems():
+        if k not in file_kwds:
+            parameters += ["-{}".format(k), str(v)]
+    job.log("ORIG PARAMS: {}".format(parameters))
     file_parameters = {k:v for k, v in kwds.iteritems() if k in file_kwds}
-
-    assert any(os.path.isfile(os.path.join(work_dir, f)) for f in ("new.html", "run.cns"))
 
     if docker and apiDockerCall is not None and job is not None:
         for k,f in file_parameters.iteritems():
             if k in in_file_kwds and not os.path.abspath(os.path.dirname(f)) == os.path.abspath(work_dir):
-                shutil.copy(full, work_dir)
-            parameters.append("-{}={}".format(k, os.path.basename(f)))
+                shutil.copy(f, work_dir)
+            job.log("BASENAMING: {}".format(os.path.basename(f)))
+            parameters += ["-{}".format(k), os.path.basename(f)]
 
         oldcwd = os.getcwd()
         os.chdir(work_dir)
@@ -42,13 +56,17 @@ def run_maxcluster(*args, **kwds):
         except (SystemExit, KeyboardInterrupt):
             raise
         except:
+            job.log("FILE LIST IS [{}]".format(open(file_parameters["l"]).read()))
             raise
             #return run_scwrl(pdb_file, output_prefix=output_prefix, framefilename=framefilename,
             #    sequencefilename=sequencefilename, paramfilename=paramfilename, in_cystal=in_cystal,
             #    remove_hydrogens=remove_hydrogens, remove_h_n_term=remove_h_n_term, work_dir=work_dir, docker=False)
         os.chdir(oldcwd)
     else:
-        args = [maxcluster_path]+parameters
+        file_args = []
+        for k,f in file_parameters.iteritems():
+            parameters += ["-{}".format(k), f]
+        args = [maxcluster_path]+file_args+parameters
         try:
             out = subprocess.check_output(args)
         except (SystemExit, KeyboardInterrupt):
@@ -56,29 +74,31 @@ def run_maxcluster(*args, **kwds):
         except Exception as e:
             raise
             #raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
+
+    if "log" in kwds and os.path.isfile(kwds["log"]):
+        return kwds["log"]
     return out
 
-def get_centroid(file_list, work_dir=None, docker=True, job=None):
-    log_file = os.path.splitext(file_list)[0]+".log"
-    run_maxcluster(file_list=file_list, log=file_list+".log", work_dir=work_dir,
-        docker=docker, job=job)
-
+def get_centroid(log_file, work_dir=None, docker=True, job=None):
     parse_centroids = False
     best_centroid_size = None
     best_centroid_file = None
 
     with open(log_file) as log:
         for line in log:
+            job.log("LINE: {}".format(line.rstrip()))
             if not parse_centroids and line.startswith("INFO  : Centroids"):
+                parse_centroids = True
                 next(log)
                 next(log)
             elif parse_centroids and line.startswith("INFO  : ="):
                 break
             elif parse_centroids:
-                line = line[8:].rstrip()
-                cluster, centroid, size, spread, pdb_file = line.split()
-                if best_centroid_size is None or size>best_centroid_size:
-                    best_centroid_size = size
+                job.log("PARSING LINE: {}".format(line.rstrip()))
+                fields = line.rstrip().split()
+                size, pdb_file = fields[-3], fields[-1]
+                if best_centroid_size is None or int(size)>best_centroid_size:
+                    best_centroid_size = int(size)
                     best_centroid_file = pdb_file
 
     return best_centroid_file

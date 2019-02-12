@@ -9,6 +9,8 @@ import os
 import re
 import shutil
 
+import pandas as pd
+
 from molmimic.generate_data.util import izip_missing
 
 try:
@@ -49,21 +51,24 @@ def CNS(input_file, prefix, work_dir=None, docker=True, job=None, template=True,
 
         try:
             parameters = [os.path.join("/data", os.path.basename(inp))]
-	    output = apiDockerCall(job,
-	        image='edraizen/cns:latest',
-	        working_dir=work_dir,
-		parameters=parameters)
-	except (SystemExit, KeyboardInterrupt):
-	    raise
+    	    output = apiDockerCall(job,
+    	        image='edraizen/cns:latest',
+    	        working_dir=work_dir,
+    		    parameters=parameters)
+	    # except (SystemExit, KeyboardInterrupt):
+	    #        raise
         except:
             raise
-            return CNS.run(input_file, work_dir=work_dir, docker=False, job=job)
+            return CNS(input_file, work_dir=work_dir, docker=False, job=job)
     else:
         load_cns_environment()
         inp = generate_input(input_file, prefix, work_dir, **template_kwds)
         with open(input_file) as inp:
             output = subprocess.check_output(["cns"], stdin=inp)
     return output
+
+cns4char_re = re.compile("%CREAD-ERR: residue ID and insertion character ([0-9a-zA-Z]+) exceed 4 characters.")
+cns_output_re = re.compile("\| Etotal =([0-9\.]+)\s+grad\(E\)=([0-9\.]+)\s+E\(BOND\)=([0-9\.]+)\s+E\(ANGL\)=([0-9\.]+)\s+\|\n \| E\(DIHE\)=([0-9\.]+)\s+E\(IMPR\)=([0-9\.]+)\s+E\(VDW \)=([0-9\.]+)\s+E\(ELEC\)=([0-9\.]+)\s+\|\n -{79}\n LBFGS: normal termination - NSTEP limit reached")
 
 def Minimize(pdb_file, output_file_prefix=None, work_dir=None, docker=True, job=None):
     """Minimize a single protein.
@@ -87,7 +92,7 @@ def Minimize(pdb_file, output_file_prefix=None, work_dir=None, docker=True, job=
     if not os.path.isfile(minimized_file):
         raise RuntimeError("CNS minimization has failed!! Check output:\n{}".format(cns))
 
-    m = re.search("%CREAD-ERR: residue ID and insertion character ([0-9a-zA-Z]+) exceed 4 characters.")
+    m = cns4char_re.search(cns)
     if m:
         if len(m.group(1)) < 6:
             #Strange bug in CNS where resn is 4 and icode is 1, valid PDB but CNS chokes
@@ -101,9 +106,49 @@ def Minimize(pdb_file, output_file_prefix=None, work_dir=None, docker=True, job=
                     new.write(mline[0:22]+oline[22:27]+mline[27:])
             minimized_file = new_minimized_file
         else:
-            raise RuntimeError("CNS minimization has failed!! {}. Check output: {}".format(m.group(0), cns))
+            raise RuntimeError("CNS minimization has failed!! Check output: {}".format(cns))
 
-    return minimized_file
+    m = cns_output_re.search(cns)
+    if m:
+        results = pd.Series({
+             "cns_Etotal": m.group(1),
+             "cns_grad(E)": m.group(2),
+             "cns_E(BOND)": m.group(3),
+             "cns_E(ANGL)": m.group(4),
+             "cns_E(DIHE)": m.group(5),
+             "cns_E(IMPR)": m.group(6),
+             "cns_E(VDW )": m.group(7),
+             "cns_E(ELEC)": m.group(8)})
+    else:
+        raise RuntimeError("CNS minimization has failed!! Check output: {}".format(cns))
+
+    return minimized_file, results
+
+cns_energy_re = re.compile("\| Etotal =([0-9\.]+)\s+grad\(E\)=([0-9\.]+)\s+E\(BOND\)=([0-9\.]+)\s+E\(ANGL\)=([0-9\.]+)\s+\|\n \| E\(DIHE\)=([0-9\.]+)\s+E\(IMPR\)=([0-9\.]+)\s+E\(VDW \)=([0-9\.]+)\s+E\(ELEC\)=([0-9\.]+)\s+\|")
+def calculate_energy(pdb_file, work_dir=None, docker=True, job=None):
+    work_dir = work_dir or os.getcwd()
+    temp_energy_file = os.path.join(script_dir, "CNS-Templates", "model_energy.inp")
+    cns = CNS(temp_energy_file, pdb_file+".out", work_dir=work_dir,
+        docker=docker, job=job, INSERT_PDB_HERE=pdb_file)
+
+    job.log("ENERGY: {}".format(cns))
+
+    m = cns_energy_re.search(cns)
+    if m:
+        job.log("GROUPS: {}".format(m.groups()))
+        results = pd.Series({
+             "cns_Etotal": m.group(1),
+             "cns_grad(E)": m.group(2),
+             "cns_E(BOND)": m.group(3),
+             "cns_E(ANGL)": m.group(4),
+             "cns_E(DIHE)": m.group(5),
+             "cns_E(IMPR)": m.group(6),
+             "cns_E(VDW )": m.group(7),
+             "cns_E(ELEC)": m.group(8)})
+    else:
+        raise RuntimeError("CNS minimization has failed!! Check output: {}".format(cns))
+
+    return results
 
 def generate_input(template_file, prefix, work_dir, **kwds):
     """Minimize a single protein.

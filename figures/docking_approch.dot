@@ -1,0 +1,49 @@
+# http://www.graphviz.org/content/cluster
+
+digraph DDI {
+     // This attribute applies to the graph itself
+     //size="1,1";
+     rankdir=LR;
+
+     // The label attribute can be used to change the label of a node
+     original [label="Domain 1 : Domain 2\noriginal"];
+     simple [label="Simple Refine (CNS)"];
+     advanced [label="Advanced Refine (Haddock)"];
+
+     cscore [label="CNS Score"];
+     hscore [label="Haddock score"];
+     zscore [label="ZRank Score"];
+     IRMS [label="I-RMS"];
+     LRMS [label="L-RMS"]
+     fcc [label="FCC"]
+     IRMSD [label="iRMSD"];
+     props [label= <<B>Biophysical Properties</B><BR/><FONT POINT-SIZE="10">Buried Surface Area<BR/>Radii of gyration<BR/>Kd, %polar residues (PRODIGY)</FONT>> ];
+
+
+     // These edges both have different line properties
+     original -> simple;
+     original -> advanced;
+
+     original -> cscore;
+     original -> hscore;
+     original -> zscore;
+     original -> props;
+
+     simple -> cscore;
+     simple -> hscore;
+     simple -> zscore;
+     simple -> IRMS;
+     simple -> LRMS;
+     simple -> fcc;
+     simple -> IRMSD;
+     simple -> props;
+     advanced -> cscore;
+     advanced -> hscore;
+     advanced -> zscore;
+     advanced -> IRMS;
+     advanced -> LRMS;
+     advanced -> fcc;
+     advanced -> IRMSD;
+     advanced -> props;
+
+   }

@@ -10,6 +10,7 @@ from molmimic.parsers.psize import Psize
 try:
     from toil.lib.docker import apiDockerCall
 except ImportError:
+    print "Cannot load apiDocker"
     apiDockerCall = None
     import subprocess
 

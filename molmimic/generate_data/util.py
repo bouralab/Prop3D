@@ -4,6 +4,7 @@ import sys
 import re
 import subprocess
 from contextlib import contextmanager
+from itertools import izip
 
 import pandas as pd
 import numpy as np
@@ -46,6 +47,8 @@ def SubprocessChain(commands, output):
             stdout=output,
             stderr=subprocess.PIPE,
             env=os.environ)
+        print("Ran 2 commands", commands[1])
+        return final_proc.communicate()
     elif len(commands) == 1:
         final_proc = subprocess.Popen(
             commands[0],
@@ -190,27 +193,24 @@ def download_pdb(id):
     except IOError:
         raise InvalidPDB(id)
 
-def get_first_chain(pdb_file):
+def get_atom_lines(pdb_file):
     try:
         with open(pdb_file) as f:
             for line in f:
                 if line.startswith("ATOM"):
-                    return line[21]
+                    yield line
     except IOError:
         pass
 
+def get_first_chain(pdb_file):
+    for line in get_atom_lines(pdb_file):
+        return line[21]
     return None
 
 def get_all_chains(pdb_file):
     chains = set()
-    try:
-        with open(pdb_file) as f:
-            for line in f:
-                if line.startswith("ATOM"):
-                    chains.add(line[21])
-    except IOError:
-        pass
-
+    for line in get_atom_lines(pdb_file):
+        chains.add(line[21])
     return chains
 
 def is_ca_model(pdb_file):
@@ -348,23 +348,25 @@ def make_h5_tables(files, iostore):
         iostore.write_output_file(f+".new", f)
 
 def read_pdb(file):
-    with open(file) as f:
-        points = np.array([(float(line[30:38]), float(line[38:46]), float(line[46:54])) \
-            for line in f if line.startswith('ATOM')])
-    return points
+    return np.array([(float(line[30:38]), float(line[38:46]), float(line[46:54])) \
+        for line in get_atom_lines(file)])
 
 def replace_chains(pdb_file, new_file, **chains):
     """Modified from pdbotools"""
     coord_re = re.compile('^(ATOM|HETATM)')
 
-    with open(pdb_file) as f, open(new_file) as new:
+    with open(pdb_file) as f, open(new_file, "w") as new:
         for line in f:
             if coord_re.match(line) and line[21] in chains:
-                yield line[:21] + chains[line[21]] + line[22:]
+                print(line[:21] + chains[line[21]] + line[22:], file=new)
             else:
-                yield line
+                print(line, file=new)
 
-def extract_chains(pdb_file, chains, new_file=None):
+    print("NEW FILE", new_file)
+    assert os.path.isfile(new_file), new_file
+    return new_file
+
+def extract_chains(pdb_file, chains, rename=None, new_file=None):
     """Modified from pdbotools"""
     coord_re = re.compile('^(ATOM|HETATM)')
 
@@ -372,11 +374,45 @@ def extract_chains(pdb_file, chains, new_file=None):
         name, ext = os.path.splitext(pdb_file)
         new_file = "{}.{}.pdb".format(name, chains)
 
-    with open(pdb_file) as f, open(new_file) as new:
+    if isinstance(rename, (str, list, tuple)):
+        assert len(chains) == len(rename), "'{}', '{}'".format(chains, rename)
+        replace = dict(izip(chains, rename))
+        get_line = lambda l: line[:21] + replace[line[21]] + line[22:]
+    else:
+        get_line = lambda l: l
+
+    with open(pdb_file) as f, open(new_file, "w") as new:
         for line in f:
             if coord_re.match(line) and line[21] in chains:
-                print >> new, line[:21] + chains[line[21]] + line[22:]
-            else:
-                print >> new, line
+                new.write(get_line(line))
 
     return new_file
+
+def update_xyz(old_pdb, new_pdb, updated_pdb=None, process_new_lines=None):
+    if updated_pdb is None:
+        updated_pdb = "{}.rottrans.pdb".format(os.path.splitext(old_pdb)[0])
+
+    if process_new_lines is None:
+        def process_new_lines(f):
+            for line in get_atom_lines(f):
+                yield line[30:54]
+
+    with open(updated_pdb, "w") as updated:
+        for old_line, new_line in izip(
+          get_atom_lines(old_pdb),
+          process_new_lines(new_pdb)):
+            updated.write(old_line[:30]+new_line+old_line[54:])
+
+    return updated_pdb
+
+def rottrans(moving_pdb, matrix_file, new_file=None):
+    coords = read_pdb(moving_pdb)
+    m = pd.read_table(matrix_file, skiprows=1, nrows=3, delim_whitespace=True, index_col=0)
+    M = m.iloc[:, 1:].values
+    t = m.iloc[:, 1].values
+    coords = np.dot(coords, M)+t
+    def get_coords(mat):
+        for x, y, z in mat:
+            print("LINE:{:8.3f}{:8.3f}{:8.3f}".format(x, y, z))
+            yield "{:8.3f}{:8.3f}{:8.3f}".format(x, y, z)
+    return update_xyz(moving_pdb, coords, updated_pdb=new_file, process_new_lines=get_coords)

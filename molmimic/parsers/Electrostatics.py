@@ -142,7 +142,7 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
         print "Running docker in", work_dir
         _parameters += ["/data/{}".format(pdb_path), "/data/{}.pqr".format(pdb_path)]
         try:
-            apiDockerCall(job,
+            print apiDockerCall(job,
                           image='edraizen/pdb2pqr:latest',
                           working_dir=work_dir,
                           parameters=_parameters)
@@ -150,7 +150,7 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
         except (SystemExit, KeyboardInterrupt):
             raise
         except:
-            print apiDockerCall(job,
+            print "LS of /data", apiDockerCall(job,
                           image='edraizen/pdb2pqr:latest',
                           working_dir=work_dir,
                           entrypoint="ls",
@@ -160,6 +160,7 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
             #    parameters=parameters, work_dir=work_dir, docker=False)
 
     else:
+        print "HERE"
         pqr_file = os.path.join(work_dir, pqr_file)
         command = ["/usr/share/pdb2pqr/pdb2pqr.py"]+parameters
         command += [full_pdb_path, pqr_file]

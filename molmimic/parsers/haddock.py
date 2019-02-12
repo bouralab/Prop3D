@@ -1,4 +1,13 @@
 import os
+import sys
+import tarfile
+import shutil
+import pandas as pd
+import tempfile
+
+from toil.realtimeLogger import RealtimeLogger
+
+from molmimic.generate_data.util import PDB_TOOLS, SubprocessChain
 
 try:
     from toil.lib.docker import apiDockerCall
@@ -31,6 +40,7 @@ cmrest={cmrest}<BR>
 surfrest={surfrest}<BR
 structures_0={structures_0}<BR>
 structures_1={structures_1}<BR>
+waterrefine={waterrefine}<BR>
 anastruc_1={anastruc_1}<BR>
 rotate180_0={rotate180_0}<BR>
 crossdock={crossdock}<BR>
@@ -47,12 +57,12 @@ submit_save=Save updated parameters<BR>
 </html>
 """
 
-def run_haddock(dock_name, work_dir=None, docker=True, toil=False, job=None):
+def run_haddock(dock_name, setup=False, work_dir=None, docker=True, toil=False, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
     if job:
-        job.log(str(os.listdir(work_dir)))
+        print str(os.listdir(work_dir))
     assert any(os.path.isfile(os.path.join(work_dir, f)) for f in ("new.html", "run.cns"))
 
     if toil:
@@ -83,8 +93,17 @@ def run_haddock(dock_name, work_dir=None, docker=True, toil=False, job=None):
                           image,
                           working_dir="/data",
                           volumes={work_dir:{"bind":"/data", "mode":"rw"}},
-                          parameters=parameters
+                          parameters=parameters,
+                          detach=True
                           )
+            # if not setup:
+            for line in out.logs(stream=True):
+                # stream=True makes this loop blocking; we will loop until
+                # the container stops and there is no more output.
+                RealtimeLogger.info(line)
+            # else:
+            #     job.log(out)
+
         except (SystemExit, KeyboardInterrupt):
             raise
         except:
@@ -101,11 +120,56 @@ def run_haddock(dock_name, work_dir=None, docker=True, toil=False, job=None):
         except Exception as e:
             raise
             #raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
+    #job.log(out)
     return out
 
+def analyze_haddock(analysis_dir, docker=True, job=None):
+    if docker and apiDockerCall is not None and job is not None:
+        oldcwd = os.getcwd()
+        os.chdir(analysis_dir)
+        try:
+            out = apiDockerCall(job,
+                          'edraizen/haddock:latest',
+                          entrypoint="csh",
+                          working_dir="/data",
+                          volumes={analysis_dir:{"bind":"/data", "mode":"rw"}},
+                          parameters=["/opt/haddock2.2/tools/ana_structures.csh"],
+                          )
+            job.log(out)
+
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except Exception as e:
+            if "RMSD: Undefined variable" not in str(e):
+                raise
+        os.chdir(oldcwd)
+    else:
+        try:
+            oldcwd = os.getcwd()
+            os.chdir(analysis_dir)
+            out = subprocess.check_output(["csh", "/opt/haddock2.2/tools/ana_structures.csh"])
+            os.chdir(oldcwd)
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except Exception as e:
+            if "RMSD: Undefined variable" not in str(e):
+                raise
+            #raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
+
+    job.log("ANALYSIS_DIR: {}".format(os.listdir(analysis_dir)))
+    results = pd.read_table(
+        os.path.join(analysis_dir, "structures_haddock-sorted.stat"),
+        nrows=1,
+        delim_whitespace=True
+    )
+    results.columns = ["haddock_"+c for c in results.columns]
+    results = results.iloc[0]
+
+    return results
+
 def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, structures0=1000,
-  structures1=200, anastruc1=200, refine=False, small_refine=False,
-  tbl_file=None, settings_file=None, work_dir=None, docker=True, job=None):
+  structures1=200, waterrefine=200, anastruc1=200, refine=False, small_refine=False,
+  tbl_file=None, settings_file=None, work_dir=None, docker=True, cores=2, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
@@ -116,25 +180,30 @@ def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, structures0=1000,
         with open(tbl_file, "w") as tbl:
             generate_air_restraints(chain1, sites1, chain2, sites2, tbl)
 
+    job.log("Wrote tbl file")
+    with open(tbl_file) as f:
+        job.log(f.read())
+
     parameters = {
-        "TBL_FILE": tbl_file,
+        "TBL_FILE": os.path.join("/data", os.path.basename(tbl_file)) if docker else tbl_file,
         "HADDOCK_DIR": "/opt/haddock2.2" if docker else haddock_path,
+        "WORKDIR":"/data",
         "PDB1": os.path.join("/data", os.path.basename(pdb1)) if docker else pdb1,
         "PDB2": os.path.join("/data", os.path.basename(pdb2)) if docker else pdb2,
         "CHAIN1": chain1,
-        "CHAIN2": chain2
+        "CHAIN2": chain2,
+        "cpunumber_1": cores
     }
 
-    if small_refine:
-        refine=True
-
-    if refine:
+    if refine or small_refine:
+        job.log("REFINING INTERFACE")
         parameters.update({
             "cmrest": "true",
             "surfrest":  "true",
-            "structures_0": 5 if small_refine else structures0,
-            "structures_1": 5 if small_refine else structures_1,
-            "anastruc_1": 1 if small_refine else anastruc_1,
+            "structures_0": 2 if small_refine else structures0,
+            "structures_1": 2 if small_refine else structures1,
+            "waterrefine": 2 if small_refine else waterrefine,
+            "anastruc_1": 2 if small_refine else anastruc1,
             "rotate180_0": "false",
             "crossdock": "false",
             "rigidmini": "false",
@@ -147,6 +216,10 @@ def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, structures0=1000,
         })
     else:
         parameters.update({
+            "structures_0": structures0,
+            "structures_1": structures1,
+            "waterrefine": waterrefine,
+            "anastruc_1": anastruc1,
             "cmrest": "false",
             "surfrest": "false",
             "rotate180_0": "true",
@@ -160,16 +233,22 @@ def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, structures0=1000,
             "cool3_steps": 1000
         })
 
+    if job is not None:
+        job.log(str(parameters))
 
     #Write settings file
     if settings_file is None:
         settings_file = os.path.join(work_dir, "new.html")
         with open(settings_file, "w") as settings:
-            start_file.format(**parameters)
+            settings.write(start_file.format(**parameters))
+
+    print "Wrote settings file"
+    with open(settings_file) as f:
+        job.log(f.read())
 
     #Run haddock first to create run.cns
     try:
-        print run_haddock(int_id, work_dir=work_dir, job=job)
+        run_haddock(int_id, setup=True, work_dir=work_dir, job=job)
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
@@ -180,11 +259,60 @@ def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, structures0=1000,
                 tbl_file=tbl_file, settings_file=tbl_file, work_dir=work_dir, docker=False, job=job)
 
     run_dir = os.path.join(work_dir, "run1")
-    print os.listdir(work_dir)
-    assert os.path.isdir(run_dir)
+    job.log("DIR AFTER SETUP: {}".format(os.listdir(work_dir)))
+    assert os.path.exists(run_dir)
+    job.log("DONE")
 
     #Run haddock again in the run direcotry to dock
     run_haddock(int_id, work_dir=run_dir, job=job)
+
+    #complex_file = os.path.join(run_dir, "structures", "water", "analysis", "molmimicfit_1.pdb")
+    #assert os.path.isfile(complex_file)
+
+    water_dir = os.path.join(run_dir, "structures", "it1", "water")
+    results = analyze_haddock(water_dir, job=job)
+
+    _complex_file = os.path.join(water_dir, results["haddock_#struc"])
+    assert os.path.isfile(_complex_file)
+    with open(_complex_file) as f:
+        job.log("PDB SEG: {}".format(f.read()))
+
+    complex_file = os.path.join(work_dir, "{}.min.pdb".format(int_id))
+
+    cmds = [
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_segxchain.py"), _complex_file],
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
+    ]
+    with open(complex_file, "w") as f:
+        SubprocessChain(cmds, f)
+
+    with open(complex_file) as f:
+        job.log("PDB CHAIN: {}".format(f.read()))
+
+    assert os.path.isfile(complex_file)
+
+    _orig_file = os.path.join(run_dir, "begin", "molmimic_1.pdb")
+    assert os.path.isfile(_orig_file)
+
+    cmds = [
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_segxchain.py"), _orig_file],
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
+    ]
+
+    orig_file = os.path.join(work_dir, "{}.min.pdb".format(int_id))
+    with open(orig_file, "w") as f:
+        SubprocessChain(cmds, f)
+
+    assert os.path.isfile(orig_file)
+
+    results_zip = os.path.join(work_dir, "{}.tar.gz".format(int_id))
+    tar = tarfile.open(results_zip, "w:gz")
+    tar.add(os.path.join(run_dir, "structures"), arcname=str(int_id))
+    tar.close()
+
+    shutil.rmtree(run_dir)
+
+    return orig_file, complex_file, results, results_zip
 
 def generate_air_restraints(chain1, binding_site1, chain2, binding_site2, out):
     sites = [(chain1, binding_site1), (chain2, binding_site2)]
@@ -201,3 +329,34 @@ def generate_air_restraints(chain1, binding_site1, chain2, binding_site2, out):
             print >> out, "       )  2.0 2.0 0.0"
             if j<len(molsites)-1:
                 print >> out, "!"
+
+def score_complex(pdb_file, chain, iteration=None, work_dir=None, docker=True, job=None):
+    if work_dir is None:
+        work_dir = os.getcwd()
+
+    if docker and apiDockerCall is not None and job is not None:
+        if not os.path.abspath(os.path.dirname(pdb_file)) == os.path.abspath(work_dir):
+            shutil.copy(pdb_file, work_dir)
+        try:
+            parameters = ["score", os.path.basename(pdb_file), "--chain"]+list(chain)
+            if isinstance(iteration, int) and iteration in range(3):
+                parameters += ["--iteration", str(iteration)]
+            score = apiDockerCall(job,
+                          "edraizen/haddock:latest",
+                          working_dir="/data",
+                          volumes={work_dir:{"bind":"/data", "mode":"rw"}},
+                          parameters=parameters)
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except:
+            raise
+
+    results = pd.read_table(
+        os.path.join(work_dir, pdb_file+".haddock-sorted.stat"),
+        nrows=1,
+        delim_whitespace=True
+    )
+    results.columns = ["haddock_"+c for c in results.columns]
+    results = results.iloc[0]
+
+    return results

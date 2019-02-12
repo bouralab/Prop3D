@@ -12,8 +12,8 @@ from multiprocessing.pool import ThreadPool
 
 import pandas as pd
 import numpy as np
-import dask
-import dask.dataframe as dd
+# import dask
+# import dask.dataframe as dd
 from joblib import Parallel, delayed
 
 import freesasa
@@ -25,8 +25,8 @@ from molmimc.generate_data.mmcif2pdb import mmcif2pdb
 from molmimic.parsers.FreeSASA import run_freesasa
 
 NUM_WORKERS = 20
-dask.config.set(scheduler='multiprocessing', num_workers=NUM_WORKERS)
-dask.config.set(pool=ThreadPool(NUM_WORKERS))
+# dask.config.set(scheduler='multiprocessing', num_workers=NUM_WORKERS)
+# dask.config.set(pool=ThreadPool(NUM_WORKERS))
 
 RAW_PDB_PATH = os.path.join(data_path_prefix, "pdb", "pdb")
 PDB_TOOLS = os.path.join(os.path.dirname(data_path_prefix), "pdb-tools")

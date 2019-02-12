@@ -643,6 +643,7 @@ def backoff(original_function, retries=6, base_delay=10):
     # Make a new version of the function
     @functools.wraps(original_function)
     def new_function(*args, **kwargs):
+        last_error = None
         # Call backoff times, overriding parameters with stuff from kwargs
         for delay in backoff_times(retries=kwargs.get("retries", retries),
             base_delay=kwargs.get("base_delay", base_delay)):
@@ -655,7 +656,7 @@ def backoff(original_function, retries=6, base_delay=10):
                 time.sleep(delay)
             try:
                 return original_function(*args, **kwargs)
-            except:
+            except Exception as last_error:
                 # Report the formatted underlying exception with traceback
                 RealtimeLogger.error("{} failed due to: {}".format(
                     original_function.__name__,
@@ -664,8 +665,11 @@ def backoff(original_function, retries=6, base_delay=10):
 
         # If we get here, the function we're calling never ran through before we
         # ran out of backoff times. Give an error.
-        raise BackoffError("Ran out of retries calling {}".format(
-            original_function.__name__))
+        if last_error is None:
+            raise BackoffError("Ran out of retries calling {}".format(
+                original_function.__name__))
+        else:
+            raise last_error
 
     return new_function
 
@@ -757,12 +761,12 @@ class S3IOStore(IOStore):
 
         """
         #cmd = ["aws", "s3api", "list-objects", "--bucket", self.bucket_name]
-     
+
         #if input_path is not None:
         #    cmd += ["--prefix", "'{}'".format(input_path)]
-        
+
         #print " ".join(cmd)
-   
+
         if with_times:
             get_output = lambda f: (f.key, f.last_modified)
         else:
@@ -772,7 +776,7 @@ class S3IOStore(IOStore):
         #print output
         #result = json.loads(output)
         #for f in result:
-        #    yield get_output(f)             
+        #    yield get_output(f)
 
         self.__connect()
 
