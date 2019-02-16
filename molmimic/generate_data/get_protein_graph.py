@@ -48,7 +48,7 @@ def calculate_neighbors(struct, d_cutoff=21.0, level="R"):
     """
     atom_list = list(struct.get_atoms())
     ns = NeighborSearch(atom_list)
-    all_list = ns.search_all(radius=d_cutoff, level=level)\
+    all_list = ns.search_all(radius=d_cutoff, level=level)
 
     if not all_list:
         raise ValueError('No contacts found for selection')
@@ -58,7 +58,7 @@ def calculate_neighbors(struct, d_cutoff=21.0, level="R"):
 def get_node_features(r):
     res = r.get_resname()
     if res == "MSE":
-        res="MET"
+        res = "MET"
     try:
         index = three_to_index(res)
         mask = [int(i==index) for i in range(20)]
@@ -71,7 +71,6 @@ def get_node_features(r):
 def get_edge_features(r1, r2, rbf_function="multiquadric"):
     r1_pos = np.array([a.get_coords() for a in r1]).mean()
     r2_pos = np.array([a.get_coords() for a in r2]).mean()
-
 
     angle = angle_between(r1_pos, r2_pos)
     distance = Rbf(np.linalg.norm(r1_pos-r2_pos), function=rbf_function)
@@ -89,11 +88,27 @@ def get_edge_features(r1, r2, rbf_function="multiquadric"):
         "chirality":chirality
     }
 
-
 def get_protein_graph(sfam_id, pdb, chain, sdi, domNo, d_cuttoff=21.0):
+    """Get a protein graph using IBIS information. All domains have been spit out
+    from their full chain structures and can be accessed using sfam_id, pdb,
+    chain, sdi, and domNo.
+
+    Parameters
+    ----------
+    sfam_id : int
+        Superfamily of protein (usually from mol_superfam_id column)
+    pdb : str
+        4 letter pdb code  (usually from mol_pdb column)
+    chain : str
+        chain ID  (usually from mol_chain column)
+    sdi : int
+        Structural Domain ID  (usually from mol_sdi_id column)
+    domNo : int
+        Domain number  (usually from mol_domNo column)
+    """
     parser = PDBParser()
     structure_path = os.path.join(STRUCTURE_PATH, pdb[1:3].lower(),
-        "{}_{}_sdi{}_d{}".format(pdb.upper(), chain, sdi, domNo)
+        "{}_{}_sdi{}_d{}".format(pdb.upper(), chain, sdi, domNo))
     structure = parser.get_structure('dummy', structure_path)
 
     structure_graph = nx.Graph()
