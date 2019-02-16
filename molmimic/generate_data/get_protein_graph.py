@@ -4,6 +4,7 @@ import numpy as np
 from Bio.PDB import *
 from Bio.PDB.Polypeptide import three_to_index
 from scipy.interpolate import Rbf
+from sklearn.gaussian_process.kernels import RBF
 
 
 try:
@@ -68,12 +69,12 @@ def get_node_features(r):
 
     #Can add charge, surface area soon
 
-def get_edge_features(r1, r2, rbf_function="multiquadric"):
+def get_edge_features(r1, r2):
     r1_pos = np.array([a.get_coords() for a in r1]).mean()
     r2_pos = np.array([a.get_coords() for a in r2]).mean()
 
     angle = angle_between(r1_pos, r2_pos)
-    distance = Rbf(np.linalg.norm(r1_pos-r2_pos), function=rbf_function)
+    distance = RBF(1./18)(np.linalg.norm(r1_pos-r2_pos))
 
     #Add in features from gregarious paper
     #Left handed or right handed: direction of cross product
