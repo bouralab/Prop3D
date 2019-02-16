@@ -74,7 +74,7 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
                 updated_resi["int_res"].append(np.NaN)
                 continue
 
-        if len(updated_resi["mol_res"]) > 0:
+        if len(updated_resi["mol_res"].dropna()) > 0:
             row = row.assign(**updated_resi)
             row.dropna()
         else:
@@ -85,6 +85,10 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
         row.to_hdf(path, "table", table=True, format="table", complib="bzip2", complevel=9, min_itemsize=1024)
         out_store.write_output_file(path, "{}/_obsrows/{}".format(int(sfam_id), path))
         print "Done row", int_id
+        try:
+            os.remove(fail_file)
+        except OSError:
+            pass
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:

@@ -93,7 +93,7 @@ def filter_hdf(hdf_path, dataset, column=None, value=None, columns=None, **query
     try:
         df = pd.read_hdf(unicode(hdf_path), dataset, where=where, columns=columns)
         if df.shape[0] == 0: raise KeyError
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, SyntaxError):
         df = filter_hdf_chunks(hdf_path, dataset, column=column, value=value, columns=columns, **query)
     return df
 
@@ -101,7 +101,17 @@ def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, 
     df = None
     for _df in pd.read_hdf(unicode(hdf_path), dataset, chunksize=chunksize):
         if len(query) > 0:
-            filtered_df = _df.query("("+") & (".join(["{}=={}".format(c, v) for c, v in query.iteritems()])+")")
+            try:
+                filtered_df = _df.query("("+") & (".join(["{}=={}".format(c, v) for c, v in query.iteritems()])+")")
+            except SyntaxError:
+                expression = None
+                for c, v in query.iteritems():
+                    _exp = _df[c]==v
+                    if expression is None:
+                        expression = _exp
+                    else:
+                        expression &= _exp
+                filtered_df = [expression]
         elif column is not None and value is not None:
             if not isinstance(column, (list, tuple)) and not isinstance(value, (list, tuple)):
                 filtered_df = _df[_df[column]==value].copy()
