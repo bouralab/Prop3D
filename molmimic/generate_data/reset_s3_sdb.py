@@ -23,7 +23,7 @@ for spot in spots["SpotInstanceRequests"]:
     if spot["State"] == "active":
         client.terminate_instances(InstanceIds=[spot["InstanceId"]])
     if spot["State"] in ["open", "active"]:
-        print "Closing", spot["SpotInstanceRequestId"]
+        print("Closing", spot["SpotInstanceRequestId"])
         client.cancel_spot_instance_requests(SpotInstanceRequestIds=[spot["SpotInstanceRequestId"]])
 
 response = client.describe_instances()

@@ -24,7 +24,7 @@ def download_consurf_scores(pdb, chain, n_tries=3, consurf_path=None):
 
     consurf_db_file = os.path.join(consurf_path, pdb[1:3].upper(), pdb_id)
 
-    for _ in xrange(n_tries):
+    for _ in range(n_tries):
         try:
             r = requests.get(url)
             break
@@ -45,7 +45,7 @@ def parse_consurf_line(line, pdb_id=None, consurf_path=None, download_all=False,
     store = IOStore.get("aws:us-east-1:molmimic-consurf")
     if download_all or (pdb_id is not None and pdb_id in line):
         line = line.strip()
-        print line
+
         cluster_rep_id, cluster = line.split(":", 1)
         cluster_rep_pdb, cluster_rep_chain = cluster_rep_id.split("_")
         cluster_pdb_ids = cluster[:-1].split(", ")
@@ -61,7 +61,7 @@ def parse_consurf_line(line, pdb_id=None, consurf_path=None, download_all=False,
 
         if (done_consurf is not None and consurf_rep_pdb_id in done_consurf) or \
           (done_consurf is None and store.exists(consurf_rep_db_file)):
-            print "--Exists"
+            print("--Exists")
             consurf_f = os.path.join(consurf_path, consurf_rep_db_file+".scores")
             consurf_exists = True
             if not download_all:
@@ -70,48 +70,12 @@ def parse_consurf_line(line, pdb_id=None, consurf_path=None, download_all=False,
         else:
             consurf_exists = False
 
-            #else:
-                #for cluster_mem_pdb_id in cluster_pdb_ids:
-                #         cluster_pdb_key = "{0}/{1}".format(cluster_mem_pdb_id[1:3].upper(), cluster_mem_pdb_id)
-                #         if not store.exists(cluster_pdb_key):
-                #             print "----Updating to cluster member"
-                #             store.write_output_file(consurf_f, cluster_pdb_key)
-                # else
-
-        # found_cluster_member = False
-        # for cluster_mem_pdb_id in cluster_pdb_ids:
-        #     cluster_pdb_key = "{0}/{1}".format(cluster_mem_pdb_id[1:3].upper(), cluster_mem_pdb_id)
-        #     if store.exists(cluster_pdb_key):
-        #         print "----Updating from cluster member"
-        #         consurf_f = os.path.join(consurf_path, cluster_rep_id)
-        #         store.read_input_file(cluster_pdb_key, consurf_f)
-        #         store.write_output_file(consurf_f, consurf_db_file)
-        #         if not download_all:
-        #             return consurf_f
-        #         else:
-        #             found_cluster_member = True
-        #             break
-
-        # if found_cluster_member:
-        #     if download_all:
-        #         for cluster_mem_pdb_id in cluster_pdb_ids:
-        #             cluster_pdb_key = "{0}/{1}".format(cluster_mem_pdb_id[1:3].upper(), cluster_mem_pdb_id)
-        #             if not store.exists(cluster_pdb_key):
-        #                 print "----Updating to cluster member"
-        #                 store.write_output_file(consurf_f, consurf_db_file)
-        #                 if not download_all:
-        #                     return consurf_f
-        #                 else:
-        #                     found_cluster_member = True
-        #                     break
-        #     continue
-
         consurf_f = download_consurf_scores(cluster_rep_pdb, cluster_rep_chain, consurf_path=consurf_path)
         if not consurf_f:
             return False
 
         if download_all:
-            print "--Saving", consurf_rep_db_file
+            print("--Saving", consurf_rep_db_file)
             if not consurf_exists:
                 store.write_output_file(consurf_f, consurf_rep_db_file)
                 set_consurf = True
@@ -123,7 +87,7 @@ def parse_consurf_line(line, pdb_id=None, consurf_path=None, download_all=False,
                 if consurf_exists and not set_consurf:
                     consurf_f = store.read_input_file(consurf_rep_db_file, consurf_f)
                 pdb, chain = pc.split("_")
-                print "-----Saving", os.path.join(pdb[1:3].upper(), pc)
+                print("-----Saving", os.path.join(pdb[1:3].upper(), pc))
                 store.write_output_file(consurf_f, os.path.join(pdb[1:3].upper(), pc+".scores"))
 
         os.remove(consurf_f)

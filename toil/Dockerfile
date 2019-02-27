@@ -10,7 +10,7 @@ RUN add-apt-repository -y ppa:jonathonf/python-3.6
 
 RUN apt-get -y update
 
-RUN apt-get -y install libffi-dev python3.7 python3.7-dev python-dev python3-dev python-pip python3-pip libcurl4-openssl-dev libssl-dev wget curl openssh-server mesos=1.0.1-2.0.94.ubuntu1604 nodejs rsync screen tmux vim  && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN apt-get -y install libffi-dev python3.6 python3.6-dev python-dev python3-dev python-pip python3-pip libcurl4-openssl-dev libssl-dev wget curl openssh-server mesos=1.0.1-2.0.94.ubuntu1604 nodejs rsync screen tmux vim  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir /root/.ssh &&         chmod 700 /root/.ssh
 

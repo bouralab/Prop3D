@@ -17,6 +17,7 @@ from joblib import Parallel, delayed
 from Bio import SeqIO
 
 from toil.job import JobFunctionWrappingJob
+
 from toil.realtimeLogger import RealtimeLogger
 
 from molmimic.parsers.Electrostatics import run_pdb2pqr
@@ -31,11 +32,6 @@ from molmimic.generate_data.util import get_first_chain, get_all_chains, number_
 
 #Auto-scaling on AWS with toil has trouble finding modules? Heres the workaround
 PDB_TOOLS = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pdb_tools")
-
-class RealtimeLogger:
-    @staticmethod
-    def info(msg):
-        print msg
 
 def setup_dask(num_workers):
     dask.config.set(scheduler='multiprocessing')
@@ -152,13 +148,6 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
     if work_dir is None:
         work_dir = os.getcwd()
 
-    with open(pdb_file) as f:
-        content = f.read().rstrip()
-        if content =="":
-            raise RuntimeErorr("Failed")
-        else:
-            print "Succed"+content
-
     ##FIME: Not sure why this none..
     num_chains = len(get_all_chains(pdb_file))
     if not len(get_all_chains(pdb_file)) == 1:
@@ -178,7 +167,7 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e1:
-        print "PDB2PQR failed: {}".format(e1)
+        RealtimeLogger.inof("PDB2PQR failed: {}".format(e1))
         #Might have failed to missing too many heavy atoms
         #Try again, but first add correct side chains
         try:
@@ -191,7 +180,6 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
                 #Run modeller to predict full atom model
                 try:
                     full_model_file = run_ca2model(pdb_file, chain, work_dir=work_dir, job=job)
-                    print "FULL MODEL FILE:", full_model_file
                     pqr_file = run_pdb2pqr(full_model_file, whitespace=False, ff="parse", parameters=pdb2pqr_parameters, work_dir=work_dir, job=job)
                 except (SystemExit, KeyboardInterrupt):
                     raise
@@ -209,12 +197,9 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
     except IOError:
         raise RuntimeError("Unable to protonate {} using pdb2pqr. Please check pdb2pqr error logs.  \
 Most likeley reason for failing is that the structure is missing too many heavy atoms.".format(pdb_file))
-    print "PQR FILE:", open(pqr_file).read()
-    #Minimize useing CNS
+
+    #Minimize using CNS
     minimized_file, _ = Minimize(pqr_file, work_dir=work_dir, job=job)
-    print minimized_file
-    print os.listdir(work_dir)
-    print "MIN FILE:", open(minimized_file).read()
     commands = [
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_stripheader.py"), minimized_file],
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-{}".format(chain)],
@@ -248,9 +233,9 @@ def process_domain(job, sdi, pdbFileStoreID, work_dir=None, preemptable=True):
             work_dir = job.fileStore.getLocalTempDir()
         else:
             work_dir = os.getcwd()
-    print "WORK DIR", work_dir
+
     pdb_info_file = copy_pdb_h5(job, pdbFileStoreID)
-    all_sdoms = pd.read_hdf(unicode(pdb_info_file), "merged") #, where="sdi == {}".format(sdi))
+    all_sdoms = pd.read_hdf(str(pdb_info_file), "merged") #, where="sdi == {}".format(sdi))
 
     sdom = all_sdoms[all_sdoms["sdi"]==float(sdi)]
     if sdom.shape[0] == 0:
@@ -329,7 +314,7 @@ def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.90, preemptable=True
 
     sdoms_file = copy_pdb_h5(job, pdbFileStoreID)
 
-    sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
+    sdoms = pd.read_hdf(str(sdoms_file), "merged")
     sdoms = sdoms[sdoms["sfam_id"]==sfam_id]
     sdoms = sdoms[["pdbId", "chnLett", "sdi", "domNo"]].drop_duplicates().dropna()
 
@@ -371,11 +356,11 @@ def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.90, preemptable=True
     #             f], stdout=fasta, stderr=subprocess.PIPE)
 
     #Order domains by resolution so the ones with the highest resolutions are centroids
-    resolutions = pd.read_hdf(unicode(sdoms_file), "resolu")
+    resolutions = pd.read_hdf(str(sdoms_file), "resolu")
 
     try:
-        pdbs, ids, sequences = zip(*[(s.id.split("_", 1)[0].upper(), s.id, str(s.seq)) \
-            for s in SeqIO.parse(domain_fasta, "fasta")])
+        pdbs, ids, sequences = list(zip(*[(s.id.split("_", 1)[0].upper(), s.id, str(s.seq)) \
+            for s in SeqIO.parse(domain_fasta, "fasta")]))
     except ValueError:
         RealtimeLogger.info("Unable to cluster {}. No PDBs passed the protonation/minization steps.".format(sfam_id))
         return
@@ -387,7 +372,7 @@ def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.90, preemptable=True
 
     with open(domain_fasta, "w") as f:
         for row in it.chain(xray.itertuples(index=False), nmr.itertuples(index=False)):
-            print >> f, ">{} [resolution={}]\n{}".format(row.domainId, row.resolution, row.sequence)
+            print(">{} [resolution={}]\n{}".format(row.domainId, row.resolution, row.sequence))
 
     sfam_key = "{0}/{0}.fasta".format(int(sfam_id))
     out_store.write_output_file(domain_fasta, sfam_key)
@@ -398,7 +383,7 @@ def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.90, preemptable=True
         "-uc", "{{o}}{}_clusters.uc".format(int(sfam_id))])
 
     #Convert uclust to h5
-    uclust = pd.read_table(unicode(uclust_file), comment="#", header=None, names=[
+    uclust = pd.read_table(str(uclust_file), comment="#", header=None, names=[
         "record_type",
         "cluster",
         "length",
@@ -414,7 +399,7 @@ def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.90, preemptable=True
     del uclust["unk2"]
     hdf_base = "{}_clusters.h5".format(int(sfam_id))
     hdf_file = os.path.join(work_dir, hdf_base)
-    uclust.to_hdf(unicode(hdf_file), "table", complevel=9, complib="bzip2")
+    uclust.to_hdf(str(hdf_file), "table", complevel=9, complib="bzip2")
     out_store.write_output_file(hdf_file, "{}/{}".format(int(sfam_id), hdf_base))
     os.remove(uclust_file)
 
@@ -488,8 +473,8 @@ def create_data_loader(job, sfam_id, preemptable=True):
 
 
     try:
-        pdb, chain, sdi, domain = zip(*[id_format.match(seq.id[:-2]).groups() \
-            for s in SeqIO.parse(clusters_file, "fasta")])
+        pdb, chain, sdi, domain = list(zip(*[id_format.match(seq.id[:-2]).groups() \
+            for s in SeqIO.parse(clusters_file, "fasta")]))
     except ValueError:
         RealtimeLogger.info("Unable to create data loading file for {}.".format(sfam_id))
         return
@@ -497,7 +482,7 @@ def create_data_loader(job, sfam_id, preemptable=True):
     domains = pd.DataFrame({"pdb":pdb, "chain":chain, "domNo":domain, "sdi":sdi})
 
     data_loader = os.path.join(pdb_path, "{}.h5".format(int(sfam_id)))
-    domains.to_hdf(unicode(data_loader), "table", complevel=9, complib="bzip2")
+    domains.to_hdf(str(data_loader), "table", complevel=9, complib="bzip2")
 
 def copy_pdb_h5(job, path_or_pdbFileStoreID):
     if os.path.isfile(path_or_pdbFileStoreID):
@@ -519,7 +504,7 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1):
 
     sdoms_file = copy_pdb_h5(job, pdbFileStoreID)
 
-    sdoms = pd.read_hdf(unicode(sdoms_file), "merged") #, where="sfam_id == {}".format(sfam_id))
+    sdoms = pd.read_hdf(str(sdoms_file), "merged") #, where="sfam_id == {}".format(sfam_id))
     # skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keep.csv")
     # if os.path.isfile(skip_file):
     #     skip = pd.read_csv(skip_file)
@@ -562,7 +547,7 @@ def start_toil(job, name="prep_protein"):
     pdbFileStoreID = job.fileStore.writeGlobalFile(sdoms_file)
 
     #Get all unique superfamilies
-    sdoms = pd.read_hdf(unicode(sdoms_file), "merged")
+    sdoms = pd.read_hdf(str(sdoms_file), "merged")
 
     # skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keep.csv")
     # if os.path.isfile(skip_file):

@@ -24,7 +24,7 @@ https://github.com/BD2KGenomics/toil-lib
 
 
 import sys, os, os.path, json, collections, logging, logging.handlers
-import SocketServer, struct, socket, threading, tarfile, shutil
+import socketserver, struct, socket, threading, tarfile, shutil
 import tempfile
 import functools
 import random
@@ -707,8 +707,8 @@ class S3IOStore(IOStore):
         if self.s3 is None:
             RealtimeLogger.debug("Connecting to bucket {} in region {}".format(
                 self.bucket_name, self.region))
-            print "Connecting to bucket {} in region {}".format(
-                self.bucket_name, self.region)
+            print("Connecting to bucket {} in region {}".format(
+                self.bucket_name, self.region))
 
             # Connect to the s3 bucket service where we keep everything
             self.s3 = boto3.client('s3', self.region, config=
@@ -760,25 +760,10 @@ class S3IOStore(IOStore):
         Gives relative file/directory names.
 
         """
-        #cmd = ["aws", "s3api", "list-objects", "--bucket", self.bucket_name]
-
-        #if input_path is not None:
-        #    cmd += ["--prefix", "'{}'".format(input_path)]
-
-        #print " ".join(cmd)
-
         if with_times:
             get_output = lambda f: (f.key, f.last_modified)
         else:
             get_output = lambda f: f.key
-
-        #output = subprocess.check_output(cmd)
-        #print output
-        #result = json.loads(output)
-        #for f in result:
-        #    yield get_output(f)
-
-        self.__connect()
 
         bucket = self.s3r.Bucket(self.bucket_name).objects.all() if input_path is None \
             else self.s3r.Bucket(self.bucket_name).objects.filter(Prefix=input_path)

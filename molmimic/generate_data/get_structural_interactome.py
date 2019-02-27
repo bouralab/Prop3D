@@ -18,6 +18,8 @@ from molmimic.generate_data.util import iter_unique_superfams, get_file, filter_
 from molmimic.generate_data.job_utils import map_job, map_job_rv, map_job_rv_list
 from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
 
+from toil.realtimeLogger import RealtimeLogger
+
 def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileStoreID):
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
@@ -30,36 +32,33 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
 
     try:
         #Read in face1 residues
-        face1 = filter_hdf(unicode(ibis_path), "MolResFace", "obs_int_id", int_id)
+        face1 = filter_hdf(str(ibis_path), "MolResFace", "obs_int_id", int_id)
         face1.columns = ["obs_int_id", "mol_res"]
-        print face1.shape
         #Keep entries from current CDD
         row = pd.merge(row, face1, how="left", on="obs_int_id")
         del face1
 
         #Read in face2 residues and convert gzipped asn1 into res numbers
-        face2 = filter_hdf(unicode(ibis_path), "IntResFace", "obs_int_id", int_id)
+        face2 = filter_hdf(str(ibis_path), "IntResFace", "obs_int_id", int_id)
         face2.columns = ["obs_int_id", "int_res"]
-        print face2.shape
 
         #Keep entries from current CDD
         row = pd.merge(row, face2, how="left", on="obs_int_id")
-        print row.shape
         del face2
 
         try:
-            st_domain_mol = filter_hdf(unicode(mmdb_path), "StructuralDomains", "sdi", row.iloc[0]['mol_sdi_id'])
+            st_domain_mol = filter_hdf(str(mmdb_path), "StructuralDomains", "sdi", row.iloc[0]['mol_sdi_id'])
             st_domain_mol.columns = ['mol_sdi_id', 'mol_domNo', 'mol_gi', 'mol_pdb', 'mol_chain', 'mol_sdi_from', 'mol_sdi_to']
             row = pd.merge(row, st_domain_mol, how="left", on="mol_sdi_id")
             del st_domain_mol
 
-            st_domain_int = filter_hdf(unicode(mmdb_path), "StructuralDomains", "sdi", row.iloc[0]['int_sdi_id'])
+            st_domain_int = filter_hdf(str(mmdb_path), "StructuralDomains", "sdi", row.iloc[0]['int_sdi_id'])
             st_domain_int.columns = ['int_sdi_id', 'int_domNo', 'int_gi', 'int_pdb', 'int_chain', 'int_sdi_from', 'int_sdi_to']
             row = pd.merge(row, st_domain_int, how="left", on="int_sdi_id")
             del st_domain_int
         except TypeError:
-            #SDI's don't exists, must be obsolete
-            print "Done row", int_id
+            #SDI's doesn't exists, must be obsolete
+            RealtimeLogger.info("Done row", int_id)
             return
 
         updated_resi = {"mol_res":[], "int_res": []}
@@ -84,7 +83,7 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
         path = "{}.h5".format(int_id)
         row.to_hdf(path, "table", table=True, format="table", complib="bzip2", complevel=9, min_itemsize=1024)
         out_store.write_output_file(path, "{}/_obsrows/{}".format(int(sfam_id), path))
-        print "Done row", int_id
+        RealtimeLogger.info("Done row", int_id)
         try:
             os.remove(fail_file)
         except OSError:
@@ -106,7 +105,6 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
             pass
 
 def merge_interactome_rows(job, sfam_id):
-    print "Start merge", sfam_id
     work_dir = job.fileStore.getLocalTempDir()
     prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     out_store = IOStore.get("{}:molmimic-interfaces".format(prefix))
@@ -130,7 +128,7 @@ def merge_interactome_rows(job, sfam_id):
 
         df = pd.read_hdf(row_file, "table")
         try:
-            df.to_hdf(unicode(resi_path), "table", table=True, format="table", append=True, mode="a",
+            df.to_hdf(str(resi_path), "table", table=True, format="table", append=True, mode="a",
                 data_columns=data_cols, complib="bzip2", complevel=9, min_itemsize=1024)
         except (SystemExit, KeyboardInterrupt):
             raise
@@ -154,10 +152,8 @@ def merge_interactome_rows(job, sfam_id):
 
         #Cleanup
         os.remove(resi_path)
-        print "End merge", sfam_id
     elif nrows is not None:
-        job.log("Failed merging: {}".format(resi_path))
-        print "Failed merging: {}".format(resi_path)
+        RealtimeLogger.info("Failed merging: {}".format(resi_path))
         fail_file = os.path.join(work_dir, "fail_file")
         with open(fail_file, "w") as f:
             f.write("No rows?")
@@ -180,19 +176,17 @@ def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFil
         df = filter_hdf(ibis_obs_path, "ObsInt", "mol_superfam_id", float(sfam_id), columns=["obs_int_id"])
         int_ids = df["obs_int_id"].drop_duplicates().dropna().astype(int)
         if len(int_ids) == 0:
-            job.log("EMPTY OBS SFAM {}".format(sfam_id))
-            print "EMPTY OBS SFAM {}".format(sfam_id)
+            RealtimeLogger.info("EMPTY OBS SFAM {}".format(sfam_id))
             return
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
-        job.log("FAILED OBS SFAM {} {}".format(sfam_id, e))
-        print "FAILED OBS SFAM {} {}".format(sfam_id, e)
+        RealtimeLogger.info("FAILED OBS SFAM {} {}".format(sfam_id, e))
         return
 
     current_rows = set(int(os.path.basename(key)[:-3]) for key in out_store.list_input_directory("{}/_obsrows".format(int(sfam_id))) if not key.endswith("failed"))
     int_ids = list(set(int_ids)-current_rows)
-    print "Will run {} ids: {}".format(len(int_ids), int_ids)
+    RealtimeLogger.info("Will run {} ids: {}".format(len(int_ids), int_ids))
 
     if len(int_ids) > 0:
         #Add jobs for each interaction
@@ -237,9 +231,9 @@ def start_toil(job, pdbFileStoreID=None):
     #Choose which superfamilies to run, skip those already present
     skip_sfam = set([float(f.split("/", 1)[0]) for f in out_store.list_input_directory() \
         if f.endswith(".observed_interactome")])
-    pdb = filter_hdf_chunks(unicode(ibis_obs_path), "ObsInt", columns=["mol_superfam_id"]).drop_duplicates()
+    pdb = filter_hdf_chunks(str(ibis_obs_path), "ObsInt", columns=["mol_superfam_id"]).drop_duplicates()
     sfams = pdb[~pdb["mol_superfam_id"].isin(skip_sfam)]["mol_superfam_id"].drop_duplicates().dropna().astype(int)
-    print "Will run a total of {} SFAMS".format(len(sfams))
+    pRealtimeLogger.info("Will run a total of {} SFAMS".format(len(sfams)))
 
     #Run all superfamilies
     map_job(job, get_observed_structural_interactome, sfams, pdbFileStoreID, ibisObsFileStoreID)

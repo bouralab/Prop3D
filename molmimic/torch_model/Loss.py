@@ -27,9 +27,9 @@ class DiceLoss(_Loss):
         return dice
 
     def dice_coef_samples(self, input, target, locations, weight=None):
-        print "dice samples"
+        print("dice samples")
         total_size = input.size(0)
-        print input.size()
+        print(input.size())
         samples = locations[:, 3]
         num_samples = samples[-1]+1
         previous_row = 0
@@ -37,7 +37,7 @@ class DiceLoss(_Loss):
         total = input.size(0)
 
         if weight is not None:
-            print weight
+            print(weight)
             use_sample_weights = weight.shape[0]>1
             if use_sample_weights:
                 assert use_sample_weights and weight.shape[0] == num_samples, "{} {}".format(weight.shape[0], num_samples)
@@ -48,7 +48,7 @@ class DiceLoss(_Loss):
         for i, sample in groupby(enumerate(samples), key=lambda x:x[1]):
             for voxel_end in sample: pass
 
-            print i, ":", previous_row, "to", voxel_end[0], "of", total_size
+            print(i, ":", previous_row, "to", voxel_end[0], "of", total_size)
             batch_predictions = input[previous_row:voxel_end[0]+1]
             target_values = target[previous_row:voxel_end[0]+1]
             previous_row = voxel_end[0]
@@ -58,7 +58,7 @@ class DiceLoss(_Loss):
             intersection = (iflat * tflat).sum()
 
             dice_val = ((2. * intersection + self.smooth) / ((iflat.sum() + tflat.sum() + self.smooth)))
-            print dice_val
+            print(dice_val)
 
             if use_sample_weights:
                 dice_val *= weight[i]
@@ -213,7 +213,7 @@ class WeightedDiceLossVNet(_Loss):
         self.gt = (self.gt > 0.5).astype(dtype=np.float32)
         self.result = self.result.astype(dtype=np.float32)
 
-        for i in xrange(0,n):
+        for i in range(0,n):
             # compute dice
             CurrResult = (self.result[i,:]).astype(dtype=np.float32)
             CurrGT = (self.gt[i,:]).astype(dtype=np.float32)
@@ -222,7 +222,7 @@ class WeightedDiceLossVNet(_Loss):
             self.intersection[i] = torch.sum(CurrResult * CurrGT)
 
             dice[i] = 2 * self.intersection[i] / (self.union[i]+0.00001)
-            print dice[i]
+            print(dice[i])
 
         top[0].data[0]=np.sum(dice)
 

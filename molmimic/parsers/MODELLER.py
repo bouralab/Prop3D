@@ -63,7 +63,7 @@ def run_modeller(pir, template, model, num_models=5, work_dir=None, docker=True,
                 pir = os.path.join("/data", os.path.basename(pir)),
                 template = os.path.basename(template).rsplit(".", 1)[0],
                 model=model, num_models=num_models, work_dir="/data"))
-        print open(python_file).read()
+
         parameters = [os.path.join("/data", os.path.basename(python_file))]
 
         try:
@@ -94,10 +94,10 @@ def run_modeller(pir, template, model, num_models=5, work_dir=None, docker=True,
             raise
             #raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
     outputs = json.loads(outputs)
-    best_pdb, best_dope = min(outputs.iteritems(), key=lambda x: x[1])
+    best_pdb, best_dope = min(iter(list(outputs.items())), key=lambda x: x[1])
     best_pdb = os.path.join(work_dir, best_pdb)
     assert os.path.isfile(best_pdb)
-    for f in outputs.keys():
+    for f in list(outputs.keys()):
 	path = os.path.join(work_dir, f)
         if path != best_pdb:
             try:
@@ -130,6 +130,6 @@ def run_ca2model(ca_only_model, chain, num_models=5, work_dir=None, docker=True,
     pir_file = os.path.join(work_dir, template_file_prefix+".pir")
     with open(pir_file, "w") as pir:
         pir.write(pir_text.format(template = template_file_prefix, target = model_file_prefix, chain=chain, seq=seq))
-    print open(pir_file).read()
+
     return run_modeller(pir_file, full_template_file, model_file_prefix, num_models=num_models,
         work_dir=work_dir, docker=docker, job=job)

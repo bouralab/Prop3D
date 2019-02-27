@@ -12,6 +12,8 @@ from molmimic.parsers.superpose import align
 from molmimic.parsers.zrank import run_zrank
 from molmimic.generate_data.util import read_pdb, replace_chains, extract_chains, rottrans, get_all_chains
 
+from toil.realtimeLogger import RealtimeLogger
+
 def rmsd(p1, p2):
     return np.sqrt(np.square(p1-p2).sum().mean())
 
@@ -22,10 +24,9 @@ def get_cm_5(pdb):
     coords = read_pdb(pdb)
     cm = get_cm(coords)
     points = np.tile(cm, (7,1))
-    for i in xrange(3):
+    for i in range(3):
         for k, j in enumerate((-1,1)):
             points[2*i+k] += j*5
-    print points, points.shape
     return points
 
 def get_coords(residues):
@@ -92,7 +93,7 @@ class Complex(Select):
         self.results[idx] = value
 
     def compare_to_reference(self, **references):
-        for ref_name, ref_complex in references.iteritems():
+        for ref_name, ref_complex in list(references.items()):
             rename = lambda l: "{}_{}".format(ref_name, l)
             #self.results = self.results.append(ref_complex.results.rename(rename))
             self.results = self.results.append(ref_complex.compare(self).rename(rename))
@@ -137,7 +138,7 @@ class Complex(Select):
             c2_asa = chain2.totalArea()
             complex_asa = full.totalArea()
             complex_bsa = c1_asa+c2_asa-complex_asa
-            for ppi_type, (low_cut, high_cut) in cutoffs.iteritems():
+            for ppi_type, (low_cut, high_cut) in list(cutoffs.items()):
                 if low_cut <= complex_bsa < high_cut:
                     break
             else:
@@ -146,7 +147,7 @@ class Complex(Select):
             sep_atoms = chain[0].nAtoms()
             parse_chain2 = False
             bsa = {}
-            for i in xrange(result.nAtoms()):
+            for i in range(result.nAtoms()):
                 at_id = (structure.chainLabel(i), structure.residueName(i),
                     structure.residueNumber(i), structure.atomName(i))
                 complex_asa = result.atomArea(i)
@@ -176,8 +177,8 @@ class Complex(Select):
         })
 
     def radius_of_gyration(self):
-        face1 = get_coords(self.neighbors[self.chain1].keys())
-        face2 = get_coords(self.neighbors[self.chain2].keys())
+        face1 = get_coords(list(self.neighbors[self.chain1].keys()))
+        face2 = get_coords(list(self.neighbors[self.chain2].keys()))
         r1 = radius_of_gyration(face1)
         r2 = radius_of_gyration(face2)
         rI = radius_of_gyration(np.concatenate((face1, face2), axis=0))
@@ -289,14 +290,14 @@ class Complex(Select):
         "Defined the fraction of native contacts between 2 interfaces"
 
         #Gets the number of contacts for the reference interface
-        total = sum(len(l) for l in self.neighbors_id.itervalues())
+        total = sum(len(l) for l in list(self.neighbors_id.values()))
 
         #Assume chain 1 and chain 2 match in both complexes, but they might have different IDs
         chain_map = {self.chain1:moving.chain1, self.chain2:moving.chain2}
 
-        print chain_map
-        print self.neighbors_id.keys()
-        print moving.neighbors_id.keys()
+        RealtimeLogger(chain_map)
+        RealtimeLogger(list(self.neighbors_id.keys()))
+        RealtimeLogger(list(moving.neighbors_id.keys()))
 
         #Finds each common pairs for the 2 interfaces
         common = sum(len(set([r for r in self.neighbors_id[res_id]]).intersection(\
@@ -314,17 +315,10 @@ class Complex(Select):
         c2_1f = extract_chains(moving.pdb, moving.chain1, rename="1")
         c2_2f = extract_chains(moving.pdb, moving.chain2, rename="2")
 
-        with open(c1_1f) as f:
-            print "C1_1", next(f)
         import shutil
         shutil.copy(c2_1f, os.path.join("/root", "c2_1.pdb"))
 
-        with open(c2_1f) as f:
-            print "C1_1", next(f)
         shutil.copy(c2_2f, os.path.join("/root", "c2_2.pdb"))
-
-        print(self.work_dir)
-        print(os.listdir(self.work_dir))
 
         #Superimpose A' to A and B' to B
         best2_1, _, _, matrix2_1 = align(
@@ -338,22 +332,9 @@ class Complex(Select):
             work_dir=self.work_dir,
             job=self.job)
 
-        print "Done superpose"
-
         #Rotate A' to A and B' to B using the rotaion matrixes above
         best2_1_2 = rottrans(c2_2f, matrix2_1)
         best2_2_1 = rottrans(c2_1f, matrix2_2)
-
-        # #Concat files
-        # best1 = tempfile.NamedTemporaryFile(suffix=".pdb", dir=self.work_dir, delete=False)
-        # best2 = tempfile.NamedTemporaryFile(suffix=".pdb", dir=self.work_dir, delete=False)
-        # for a, b, f in ((best2_1, best2_1_2, best1), (best2_2_1, best2_2, best1))
-        #     commands = [
-        #         ["cat", best2_1, best2_1_2],
-        #         [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
-        #     ]
-        #     SubprocessChain(commands, f)
-        #     f.close()
 
         #Center of Mass of ref
         cm_ref = np.vstack((get_cm_5(c1_1f), get_cm_5(c1_2f)))
@@ -375,7 +356,7 @@ class Complex(Select):
 
     def match_residues(self, other, r=5.5):
         from sklearn.metrics import jaccard_similarity_score
-        face1, face2 = zip(*calculate_ic(s, distance_cutoff=r))
+        face1, face2 = list(zip(*calculate_ic(s, distance_cutoff=r)))
         face1_pred = set([r.id[1] for r in face1])
         face2_pred = set([r.id[1] for r in face2])
         face1_score = jaccard_similarity_score(face1, face1_pred)

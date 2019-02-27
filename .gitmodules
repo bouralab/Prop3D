@@ -3,4 +3,4 @@
 	url = https://github.com/edraizen/pdb-tools.git
 [submodule "prodigy"]
 	path = prodigy
-	url = https://github.com/haddocking/prodigy.git
+	url = https://github.com/edraizen/prodigy.git

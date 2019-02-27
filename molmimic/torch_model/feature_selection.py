@@ -51,27 +51,27 @@ def feature_selection(ibis_data):
     }
 
     X = np.array((len(dataset), len(feature_names)))
-    for i in xrange(len(dataset)):
+    for i in range(len(dataset)):
         features = dataset[i]
         X[i] = np.nan_to_num(features["data"])
 
-    for name, (model, should_create) in models.iteritems():
+    for name, (model, should_create) in list(models.items()):
     	try:
         	model.fit(X)
         except ValueError as e:
-        	print name
-        	print e
-        	print X
-        	print
+        	print(name)
+        	print(e)
+        	print(X)
+        	print()
         	continue
         if should_create:
         	model = SelectFromModel(model, prefit=True)
         if name != "pca":
-            print name, "=", [feature_names[i] for i, s in enumerate(model.get_support()) if s]
+            print(name, "=", [feature_names[i] for i, s in enumerate(model.get_support()) if s])
 
     cumsum = np.cumsum(models["pca"][0].explained_variance_ratio_)
     d = np.argmax(cumsum > 0.95) + 1
-    print "pca, n-components: {}; explained variance: {}".format(d, models["pca"][0].explained_variance_ratio_)
+    print("pca, n-components: {}; explained variance: {}".format(d, models["pca"][0].explained_variance_ratio_))
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Load data and truth files to train the 3dCNN")

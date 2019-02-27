@@ -26,7 +26,7 @@ except:
 
 from molmimic.common.structure import InvalidPDB
 from molmimic.common.voxels import ProteinVoxelizer
-from itertools import product, izip
+from itertools import product
 
 def dense_collate(data, batch_size=1):
     batch = {"data":None, "truth":None, "scaling":1.0}
@@ -109,7 +109,6 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
 
     batch_weight /= float(num_data)
 
-    #print "Made batch"
     if create_tensor:
         batch["data"].precomputeMetadata(1)
 
@@ -154,7 +153,7 @@ class IBISDataset(Dataset):
 
         interfaces_path = os.path.join(get_structures_path(dataset_name), cdd, cdd)
 
-        self.X = pd.read_hdf(unicode(interfaces_path+".h5"), ppi_type)
+        self.X = pd.read_hdf(str(interfaces_path+".h5"), ppi_type)
 
     def __getitem__(self, index, verbose=True):
         datum = self.X.iloc[index]
@@ -169,15 +168,15 @@ class IBISDataset(Dataset):
             indices, data, truth = voxelizer.map_atoms_to_voxel_space(autoencoder=self.autoencoder)
         except (KeyboardInterrupt, SystemExit):
             raise
-        except InvalidPDB, RuntimeError:
+        except InvalidPDB as RuntimeError:
             trace = traceback.format_exc()
             with open("{}_{}_{}.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
-                print trace
-                print >> ef, trace
+                print(trace)
+                print(trace, file=ef)
 
             sample = {
                 "indices":      None,
-                "data":         None
+                "data":         None,
                 "truth":        None,
                 "pdb":          datum.pdb,
                 "chain":        datum.chain,
@@ -187,9 +186,9 @@ class IBISDataset(Dataset):
             }
         except:
             trace = traceback.format_exc()
-            print "Error:", trace
+            print("Error:", trace)
             with open("{}_{}_{}_ibis.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
-                print >> ef, trace
+                print(trace=ef)
             raise
 
         sample = {
@@ -227,7 +226,7 @@ class MMDBDataset(Dataset):
     def __init__(self, dataset_name, cdd):
         self.dataset_name = dataset_name
         self.cdd = cdd
-        self.X = pd.read_hdf(unicode(os.path.join(get_structures_path(dataset_name), cdd, "{}.h5".format(cdd))), "table")
+        self.X = pd.read_hdf(str(os.path.join(get_structures_path(dataset_name), cdd, "{}.h5".format(cdd))), "table")
 
     def __getitem__(self, index, verbose=True):
         datum = self.X.iloc[index]
@@ -236,7 +235,7 @@ class MMDBDataset(Dataset):
 
         try:
             indices, data, truth = Structure.features_from_string(
-                file                  = pdb_file
+                file                  = pdb_file,
                 pdb                   = datum.pdb,
                 chain                 = datum.chain,
                 sdi                   = datum.sdi,
@@ -246,15 +245,15 @@ class MMDBDataset(Dataset):
             )
         except (KeyboardInterrupt, SystemExit):
             raise
-        except InvalidPDB, RuntimeError:
+        except InvalidPDB as RuntimeError:
             trace = traceback.format_exc()
             with open("{}_{}_{}.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
-                print trace
-                print >> ef, trace
+                print(trace)
+                print(trace, file=ef)
 
             sample = {
                 "indices":      None,
-                "data":         None
+                "data":         None,
                 "truth":        None,
                 "pdb":          datum.pdb,
                 "chain":        datum.chain,
@@ -265,9 +264,9 @@ class MMDBDataset(Dataset):
             }
         except:
             trace = traceback.format_exc()
-            print "Error:", trace
+            print("Error:", trace)
             with open("{}_{}_{}_ibis.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
-                print >> ef, trace
+                print(trace, ef=file)
             raise
 
         sample = {
@@ -312,7 +311,7 @@ class IBISDataset2(Dataset):
 
             #Return blue (0,0,1) if nFeatures=3, else always 3rd feature is used or last feature if nFeature < 3
             if len(random_features) >= 3:
-                self.r_bs = np.array(map(int, random_features[2]))
+                self.r_bs = np.array(list(map(int, random_features[2])))
             else:
                 self.r_bs = self.rfeats[min(2, random_features[0])]
 
@@ -345,7 +344,6 @@ class IBISDataset2(Dataset):
             if cellular_organisms:
                 self.full_data = data.loc[(data["tax_glob_group"] == tax_glob_group) | (data["tax_glob_group"] == "cellular")]
                 self.full_data = self.full_data.loc[self.full_data["n"] >= num_representatives]
-                print "cellular_organisms"
             else:
                 self.full_data = data.loc[(data["tax_glob_group"] == tax_glob_group) & (data["n"] >= num_representatives)]
         except KeyError:
@@ -363,7 +361,8 @@ class IBISDataset2(Dataset):
                 multimers = [648375,660939,660938,668915,659919,513280,666570,535768,17338,654986,631439,656314,532931,665852,545875,513834,640379,511746,606239,509681,618577,527589,530024,630491,360637,511758,660132,660138,652064,651818,639149,630492,630493,634831,634826,647996,647997,643192,614273,614267,647151,617702,616098,516702,478916,461717,640385,661187,547577,541160,493657,493658,641974,541196,541453,447450,428933,514064,372904,372906,514011,514060,545252,401694,549817,299853,514062,514066,661242,635739,642241,614531,549815,549803,483520,483519,338893,174920,661197,554878,661250,622610,92851,563706,562371,632146,592870,658319,615442,542548,573967,123213,575823,621426,376703,576582,608295,579900,579888,533721,473097,504981,642845,647951,327972,642859,647950,267698,617700,627019,642808,642798,635782,227110,372997,284288,231335,231345,600901,231343,476220,476224,237050,243070,497904,453293,404236,404238,384495,395891]
                 skip_size += len(multimers)
                 self.full_data = self.full_data.loc[~self.full_data["unique_obs_int"].isin(multimers)]
-            print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", skip_size, osize, self.full_data.shape[0], osize)
+            print("{}: Skipping {} of {}, {} remaining of {}".format(
+                "Train" if train else "Validate", skip_size, osize, self.full_data.shape[0], osize))
         except IOError:
             pass
 
@@ -489,11 +488,11 @@ class IBISDataset2(Dataset):
                 undersample=self.undersample)
         except (KeyboardInterrupt, SystemExit):
             raise
-        except InvalidPDB, RuntimeError:
+        except InvalidPDB as RuntimeError:
             trace = traceback.format_exc()
             with open("{}_{}_{}_{}_{}.error".format(pdb_chain["pdb"], pdb_chain["chain"], gi, self.epoch, self.batch), "w") as ef:
-                print trace
-                print >> ef, trace
+                print(trace)
+                print(trace, file=ef)
 
             #return
             return {"indices": None,
@@ -503,9 +502,9 @@ class IBISDataset2(Dataset):
                     }
         except:
             trace = traceback.format_exc()
-            print "Error:", trace
+            print("Error:", trace)
             with open("{}_{}_{}_{}_{}.error".format(pdb_chain["pdb"], pdb_chain["chain"], gi, self.epoch, self.batch), "w") as ef:
-                print >> ef, trace
+                print(trace, file=ef)
             raise
 
         if self.random_features is not None:
@@ -581,7 +580,7 @@ class SphereDataset(Dataset):
         y = np.arange(0, self.shape[1])
         z = np.arange(0, self.shape[2])
         mx, my, mz = np.meshgrid(x, y, z)
-        self.voxel_tree = cKDTree(zip(mx.ravel(), my.ravel(), mz.ravel()))
+        self.voxel_tree = cKDTree(list(zip(mx.ravel(), my.ravel(), mz.ravel())))
 
         if allow_feature_combos:
             self.features = np.array(list(product([0,1], repeat=nFeatures)))
@@ -592,9 +591,9 @@ class SphereDataset(Dataset):
             if not isinstance(bs_features, (list,tuple)):
                 raise RuntimeError("Invalid bs_features")
 
-            bs_features = [[np.array(map(int, bs_feat)) for bs_feat in bs_feature.split(",")] for bs_feature in bs_features]
+            bs_features = [[np.array(list(map(int, bs_feat))) for bs_feat in bs_feature.split(",")] for bs_feature in bs_features]
             try:
-                self.bs_color, self.bs_color2 = zip(*bs_features)
+                self.bs_color, self.bs_color2 = list(zip(*bs_features))
             except ValueError:
                 self.bs_color = [f[0] for f in bs_features]
 
@@ -602,14 +601,14 @@ class SphereDataset(Dataset):
         else:
             #Return blue (0,0,1) if nFeatures=3, else always 3rd feature is used or last feature if nFeature < 3
             if isinstance(bs_feature, str):
-                self.bs_color = np.array(map(int, bs_feature))
+                self.bs_color = np.array(list(map(int, bs_feature)))
             elif isinstance(bs_feature, np.ndarray):
                 self.bs_color = bs_feature
             else:
                 self.bs_color = self.features[min(2, self.nFeatures-1)]
 
             if isinstance(bs_feature2, str):
-                self.bs_color2 = np.array(map(int, bs_feature2))
+                self.bs_color2 = np.array(list(map(int, bs_feature2)))
             elif isinstance(bs_feature2, np.ndarray):
                 self.bs_color2 = bs_feature2
             else:
@@ -618,7 +617,7 @@ class SphereDataset(Dataset):
             self.n_classes = 2
 
         if stripes:
-            print "Making stripes"
+            print("Making stripes")
             self.color_patch = make_stripes
         else:
             self.color_patch = alternate_colors
@@ -659,7 +658,7 @@ class SphereDataset(Dataset):
 
         used_points = None
         distances = None
-        for bs_id in xrange(cnt):
+        for bs_id in range(cnt):
             num_search = 0
             while True:
                 idx = np.random.randint(0, indices.shape[0])
@@ -718,7 +717,7 @@ def alternate_colors(patch, color1, color2):
         #Max distance should be sqrt(3) to account for voxels in one the 27 surrounding voxels,
         #but since it is circle like, there will only be 8 neighbors
         neighbors = tree.query(pnt, k=8, distance_upper_bound=1.42)
-        for d, n in izip(*neighbors):
+        for d, n in zip(*neighbors):
             if d == np.inf or tree.data[n].tolist() == tree.data[i].tolist(): continue
             if features[n].tolist() == features[i].tolist():
                 features[n] = color2
@@ -781,7 +780,7 @@ def create_spheres(num_spheres, shape=(96, 96, 96), border=10, min_r=5, max_r=15
             sphere.volume[_indices] = value
             sphere.labels[_indices] = truth
 
-    for i in xrange(num_spheres):
+    for i in range(num_spheres):
         #Define random center of sphere and radius
         center = [np.random.randint(border, edge-border) for edge in shape]
         r = np.random.randint(min_r, max_r)

@@ -1,5 +1,5 @@
 import os
-from cStringIO import StringIO
+from io import StringIO
 
 from sklearn.decomposition import PCA
 from Bio import PDB
@@ -167,7 +167,6 @@ class Structure(object):
                     try:
                         return self.structure[model][chain][res_seq]
                     except KeyError:
-                        print res_seq
                         return None
             else:
                 return None
@@ -266,7 +265,7 @@ class Structure(object):
 
 def flip_around_axis(coords, axis = (0.2, 0.2, 0.2)):
     'Flips coordinates randomly w.r.t. each axis with its associated probability'
-    for col in xrange(3):
+    for col in range(3):
         if np.random.binomial(1, axis[col]):
             coords[:,col] = np.negative(coords[:,col])
     return coords

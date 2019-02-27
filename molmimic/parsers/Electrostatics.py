@@ -211,7 +211,7 @@ def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
     result = {}
     with open(pqr_path) as pqr, open(atom_pot_file) as atom_pot:
         #Skip first 4 rows of atompot file
-        for _ in xrange(4):
+        for _ in range(4):
             next(atom_pot)
 
         for line in pqr:

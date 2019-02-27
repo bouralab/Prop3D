@@ -16,6 +16,6 @@ def get_gpu_memory_map():
         ])
     # Convert lines into a dictionary
     gpu_memory = [int(x) for x in result.strip().split('\n')]
-    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
+    gpu_memory_map = dict(list(zip(list(range(len(gpu_memory))), gpu_memory)))
     return gpu_memory_map
     #return {torch.cuda.getMemoryUsage(i) for i in xrange(torch.cuda.device_count())}

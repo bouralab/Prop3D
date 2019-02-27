@@ -180,8 +180,7 @@ def process_inferred_interaction(job, inf_int_id, nbr_sfam, table, tableInfStore
         except:
             import traceback
             tb = traceback.format_exc()
-            job.log("FAILED {}".format(tb))
-            print tb
+            RealtimeLogger.info("FAILED {}".format(tb))
             raise
             resi = inferred_interfaces["mol_resi"].copy()
 
@@ -207,7 +206,7 @@ def process_inferred_interaction(job, inf_int_id, nbr_sfam, table, tableInfStore
         elif len(mol_sfams) == 1:
             #Write to HDF file
             df_file = job.fileStore.getLocalTempFileName()
-            inferred_interfaces.to_hdf(unicode(df_file), "table", format="table",
+            inferred_interfaces.to_hdf(str(df_file), "table", format="table",
                 table=True, complevel=9, complib="bzip2", min_itemsize=1024,
                 data_coumns=["nbr_obs_int_id", "nbr_sdi_id", "mol_sdi_id", "int_sdi_id"])
             job.log("Wrote "+df_file)
@@ -225,7 +224,7 @@ def process_inferred_interaction(job, inf_int_id, nbr_sfam, table, tableInfStore
 
                 #Write to HDF file
                 df_file = job.fileStore.getLocalTempFileName()
-                inf_row.to_hdf(unicode(df_file), "table", format="table",
+                inf_row.to_hdf(str(df_file), "table", format="table",
                     table=True, complevel=9, complib="bzip2", min_itemsize=1024,
                     data_coumns=["nbr_obs_int_id", "nbr_sdi_id", "mol_sdi_id", "int_sdi_id"])
                 job.log("Wrote "+df_file)
@@ -282,8 +281,6 @@ def merge_table_sfam(job, sfam_id, table):
     in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
     out_store = IOStore.get("aws:us-east-1:molmimic-interfaces")
 
-    print "Start merge", sfam_id
-
     status = "inferred (table {}) {}".format(table, sfam_id)
     resi_prefix = "Intrac{}_{}.inf.h5".format(table, int(sfam_id))
     new_cols = ["mol_res"]
@@ -305,9 +302,9 @@ def merge_table_sfam(job, sfam_id, table):
         try:
             out_store.read_input_file(row_prefix, row_file)
             df = pd.read_hdf(row_file, "table")
-            for col, _ in df.dtypes[df.dtypes == 'int64'].iteritems():
+            for col, _ in list(df.dtypes[df.dtypes == 'int64'].items()):
                 df[col] = df[col].astype(float)
-            df.to_hdf(unicode(resi_path), "table", table=True, format="table", append=True, mode="a",
+            df.to_hdf(str(resi_path), "table", table=True, format="table", append=True, mode="a",
                 data_columns=data_cols, complib="bzip2", complevel=9, min_itemsize=1024)
 
         except (SystemExit, KeyboardInterrupt):
@@ -336,11 +333,9 @@ def merge_table_sfam(job, sfam_id, table):
         for key in to_delete:
             out_store.remove_file(key)
 
-        print "End merge", sfam_id, table
         return outprefix
     else:
-        job.log("Failed merging: {}".format(resi_path))
-        print "Failed merging: {}".format(resi_path)
+        RealtimeLogger.info("Failed merging: {}".format(resi_path))
         fail_file = os.path.join(work_dir, "fail_file")
         with open(fail_file, "w") as f:
             f.write("no rows?\n")
@@ -397,7 +392,6 @@ def get_table_sfams(job, mol_sfam_id, table, tableInfStoreID, pdbFileStoreID, ta
 
     #inf_int_ids = set([tuple(row) for row in inf_int_ids.itertuples()])
     #inf_int_ids -= skip_int
-    #print "Starting table sfam", mol_sfam_id, inf_int_ids
 
     #would this be better to just ran as a loop?
     #map_job(job, process_inferred_interaction, list(inf_int_ids), mol_sfam_id, table, tableInfStoreID, pdbFileStoreID, taxFileStoreID)
@@ -515,8 +509,8 @@ def merge_inferred_interactome_sfam(job, sfam_id):
                 RealtimeLogger.info("Merging failed for {} {}".format(sfam_id, table))
             table_file = os.path.join(work_dir, os.path.basename(table_sfam_prefix))
             iostore.read_input_file(table_sfam_prefix, table_file)
-            for df in pd.read_hdf(unicode(table_file), "table", chunksize=1000):
-                df.to_hdf(unicode(merged_file), "table", mode="a", append=True, format="table",
+            for df in pd.read_hdf(str(table_file), "table", chunksize=1000):
+                df.to_hdf(str(merged_file), "table", mode="a", append=True, format="table",
                     table=True, complevel=9, complib="bzip2", min_itemsize=1024)
             to_delete.append(table_sfam_prefix)
         except (IOError, ValueError) as e:
@@ -550,7 +544,7 @@ def merge_inferred_interactome_sfam(job, sfam_id):
     else:
         failed_file = os.path.join(work_dir, "failed_file")
         with open(failed_file, "w") as f:
-            print >>f, "No merged_file present"
+            print("No merged_file present", file=f)
         iostore.write_output_file(failed_file, sfam_file+".failed")
         try:
             os.remove(failed_file)
@@ -594,7 +588,6 @@ def merge_inferred_interactome(job, pdbFileStoreID):
     job.addFollowOnJobFn(cleanup, sfam_to_run)
 
 def start_toil(job):
-    print "Starting job"
     work_dir = job.fileStore.getLocalTempDir()
     in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
     int_store = IOStore.get("aws:us-east-1:molmimic-interfaces")
@@ -653,8 +646,6 @@ if __name__ == "__main__":
     options.logLevel = "DEBUG"
     options.clean = "always"
     options.targetTime = 1
-
-    print "Running"
 
     job = Job.wrapJobFn(start_toil)
     with Toil(options) as toil:

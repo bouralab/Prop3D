@@ -61,8 +61,6 @@ def run_haddock(dock_name, setup=False, work_dir=None, docker=True, toil=False, 
     if work_dir is None:
         work_dir = os.getcwd()
 
-    if job:
-        print str(os.listdir(work_dir))
     assert any(os.path.isfile(os.path.join(work_dir, f)) for f in ("new.html", "run.cns"))
 
     if toil:
@@ -174,7 +172,6 @@ def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, structures0=1000,
         work_dir = os.getcwd()
 
     #Write AIR TBL_FILE
-    print "TBL FILE", tbl_file
     if tbl_file is None:
         tbl_file = os.path.join(work_dir, "{}.tbl".format(int_id))
         with open(tbl_file, "w") as tbl:
@@ -242,7 +239,6 @@ def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, structures0=1000,
         with open(settings_file, "w") as settings:
             settings.write(start_file.format(**parameters))
 
-    print "Wrote settings file"
     with open(settings_file) as f:
         job.log(f.read())
 
@@ -320,15 +316,15 @@ def generate_air_restraints(chain1, binding_site1, chain2, binding_site2, out):
     for i, (molchain, molsites) in enumerate(sites):
         intchain, intsites = sites[1-i]
         for j, r1 in enumerate(molsites):
-            print >> out, "assign ( resid {0} and segid {1})".format(r1, molchain)
-            print >> out, "       ("
+            print("assign ( resid {0} and segid {1})".format(r1, molchain), file=out)
+            print("       (", file=out)
             for k, r2 in enumerate(intsites):
-                print >> out, "        ( resid {0} and segid {1})".format(r2, intchain)
+                print("        ( resid {0} and segid {1})".format(r2, intchain), file=out)
                 if k<len(intsites)-1:
-                    print >> out, "     or"
-            print >> out, "       )  2.0 2.0 0.0"
+                    print("     or", file=out)
+            print("       )  2.0 2.0 0.0", file=out)
             if j<len(molsites)-1:
-                print >> out, "!"
+                print("!", file=out)
 
 def score_complex(pdb_file, chain, iteration=None, work_dir=None, docker=True, job=None):
     if work_dir is None:

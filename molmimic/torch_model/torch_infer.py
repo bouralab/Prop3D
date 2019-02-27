@@ -11,7 +11,7 @@ import time
 import math
 import multiprocessing
 from datetime import datetime
-from itertools import izip
+
 
 import numpy as np
 import gc
@@ -125,7 +125,7 @@ def infer(model, data, input_shape=(256,256,256), use_gpu=True, course_grained=F
         else:
             raise RuntimeError("invalid datatype")
 
-        for sample, (indices, features, truth) in enumerate(izip(data["indices"], data["data"], data["truth"])):
+        for sample, (indices, features, truth) in enumerate(zip(data["indices"], data["data"], data["truth"])):
             inputs.addSample()
             if labels is not None:
                 labels.addSample()
@@ -136,7 +136,7 @@ def infer(model, data, input_shape=(256,256,256), use_gpu=True, course_grained=F
                 if labels is not None:
                     truth = float_tensor(truth)
             except RuntimeError as e:
-                print e
+                print(e)
                 continue
 
             inputs.setLocations(indices, features, 0) #Use 1 to remove duplicate coords?
@@ -158,7 +158,7 @@ def infer(model, data, input_shape=(256,256,256), use_gpu=True, course_grained=F
 
     elif isinstance(data["data"], torch.FloatTensor):
         #Input is dense
-        print "Input is Dense"
+        print("Input is Dense")
         sparse_input = False
         if use_gpu:
             inputs = inputs.cuda()
@@ -178,8 +178,7 @@ def infer(model, data, input_shape=(256,256,256), use_gpu=True, course_grained=F
     try:
         outputs = model(inputs)
     except AssertionError as e:
-        print e
-        #print nFeatures, inputs
+        print(e)
         raise
 
     if labels is None:

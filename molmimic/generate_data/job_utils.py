@@ -4,7 +4,7 @@
 import os
 import tarfile
 from contextlib import closing
-from iostore import IOStore
+from molmimic.generate_data.iostore import IOStore
 
 def partitions(l, partition_size):
     """
@@ -19,7 +19,7 @@ def partitions(l, partition_size):
     :param list l: List to be partitioned
     :param int partition_size: Size of partitions
     """
-    for i in xrange(0, len(l), partition_size):
+    for i in range(0, len(l), partition_size):
         yield l[i:i + partition_size]
 
 def cleanup_ids(job, ids_to_delete):
@@ -95,13 +95,13 @@ def consolidate_output(job, config, output):
     """
     # Collect all tarballs from fileStore
     tars = {}
-    for tool, filestore_id in output.iteritems():
+    for tool, filestore_id in list(output.items()):
         tars[os.path.join(config.uuid, tool)] = job.fileStore.readGlobalFile(filestore_id)
 
     # Consolidate tarballs into one output tar as streams (to avoid unnecessary decompression)
     out_tar = os.path.join(job.tempDir, config.uuid + '.tar.gz')
     with tarfile.open(out_tar, 'w:gz') as f_out:
-        for name, tar in tars.iteritems():
+        for name, tar in list(tars.items()):
             with tarfile.open(tar, 'r') as f_in:
                 for tarinfo in f_in:
                     with closing(f_in.extractfile(tarinfo)) as f_in_file:

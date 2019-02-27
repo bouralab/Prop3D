@@ -1,7 +1,7 @@
 import os, sys
 import shutil
 import string
-from itertools import izip, product
+from itertools import product
 
 import numpy as np
 import pandas as pd
@@ -33,7 +33,7 @@ def mmdb2pdb(job, mmdb_file=None, pdb_group=None, dask=True, cores=NUM_WORKERS, 
         mmdb_path = os.path.join(work_dir, "MMDB.h5")
         jobStore.read_input_file("MMDB.h5", mmdb_path)
 
-    sdoms = pd.read_hdf(unicode(mmdb_path), "StrucutralDomains")
+    sdoms = pd.read_hdf(str(mmdb_path), "StrucutralDomains")
 
     if pdb_group is not None:
         tmp_path = os.path.join(work_dir, "{}.h5".format(pdb_group))
@@ -61,7 +61,7 @@ def mmdb2pdb(job, mmdb_file=None, pdb_group=None, dask=True, cores=NUM_WORKERS, 
     sdoms = sdoms.dropna()
     sdoms["from"] = sdoms["from"].astype(int)
     sdoms["to"] = sdoms["to"].astype(int)
-    sdoms.to_hdf(unicode(tmp_path), "table", complevel=9, complib="bzip2", min_itemsize=756)
+    sdoms.to_hdf(str(tmp_path), "table", complevel=9, complib="bzip2", min_itemsize=756)
 
     return job.fileStore.writeGlobalFile(tmp_path)
 
@@ -78,27 +78,27 @@ def merge(job, jobStoreIDs, cores=4):
         pdb_group_path = job.fileStore.readGlobalFile(jobStoreID)
 
         try:
-            df = pd.read_hdf(unicode(pdb_group_path), "table")
+            df = pd.read_hdf(str(pdb_group_path), "table")
         except IOError:
             continue
 
         df[['from', 'to']] = df[['from', 'to']].astype(int)
-        df.to_hdf(unicode(output), "StructuralDomains", table=True, mode='a', append=True, complevel=9, complib="bzip2", min_itemsize=768)
+        df.to_hdf(str(output), "StructuralDomains", table=True, mode='a', append=True, complevel=9, complib="bzip2", min_itemsize=768)
         del df
 
         job.fileStore.deleteGlobalFile(jobStoreID)
 
-    sfams = pd.read_hdf(unicode(os.path.join(data_path_prefix, "MMDB.h5")), "Superfamilies")
+    sfams = pd.read_hdf(str(os.path.join(data_path_prefix, "MMDB.h5")), "Superfamilies")
     sfams = df[['sdsf_id', 'sdi', 'sfam_id', 'label', 'whole_chn', 'mmdb_id', 'mol_id', 'pssm']]
-    sfams.to_hdf(unicode(output), "Superfamilies", format="table", table=True, complevel=9, complib="bzip2", min_itemsize=768)
+    sfams.to_hdf(str(output), "Superfamilies", format="table", table=True, complevel=9, complib="bzip2", min_itemsize=768)
 
-    sdoms = pd.read_hdf(unicode(output+".tmp"), "StructuralDomains")
+    sdoms = pd.read_hdf(str(output+".tmp"), "StructuralDomains")
     merged = pd.merge(sdoms, sfams, how="left", on="sdi").dropna()
-    merged.to_hdf(unicode(output), "merged", format="table", table=True, complevel=9, complib="bzip2", min_itemsize=768)
+    merged.to_hdf(str(output), "merged", format="table", table=True, complevel=9, complib="bzip2", min_itemsize=768)
 
     resolu = pd.read_table("ftp://ftp.wwpdb.org/pub/pdb/derived_data/index/resolu.idx",
         header=None, names=["pdbId", "resolution"], skiprows=6, sep="\t;\t")
-    resolu.to_hdf(unicode(output+".tmp"), "resolu", format="table", table=True, complevel=9, complib="bzip2", min_itemsize=768)
+    resolu.to_hdf(str(output+".tmp"), "resolu", format="table", table=True, complevel=9, complib="bzip2", min_itemsize=768)
 
     jobStore.write_output_file(output, "PDB.h5")
 
@@ -139,8 +139,6 @@ if __name__ == "__main__":
     options = parser.parse_args()
     options.logLevel = "DEBUG"
     options.clean = "always"
-
-    print "Running"
 
     job = Job.wrapJobFn(start_toil)
     with Toil(options) as toil:

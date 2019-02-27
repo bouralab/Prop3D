@@ -2,8 +2,8 @@ import os
 import subprocess
 
 from toil.common import Toil
-from iostore import IOStore
-from job_utils import map_job
+from molmimic.generate_data.iostore import IOStore
+from molmimic.generate_data.job_utils import map_job
 
 #from molmimic.generate_data.iostore import IOStore
 
@@ -181,7 +181,7 @@ def download_mmdb(job, preemptable=True):
 
 def download_consurf(job):
     import shutil, requests, zipfile
-    from cStringIO import StringIO
+    from io import StringIO
     from molmimic.parsers.Consurf import download_consurf as download_consurf_all
 
     work_dir = job.fileStore.getLocalTempDir()

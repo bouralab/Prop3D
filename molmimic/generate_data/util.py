@@ -1,10 +1,10 @@
-from __future__ import print_function
+
 import os
 import sys
 import re
 import subprocess
 from contextlib import contextmanager
-from itertools import izip
+
 
 import pandas as pd
 import numpy as np
@@ -89,9 +89,9 @@ def filter_hdf(hdf_path, dataset, column=None, value=None, columns=None, **query
         else:
             raise RuntimeError("Cols and values must match")
     else:
-        where = ["{}={}".format(c,v) for c, v in query.iteritems()]
+        where = ["{}={}".format(c,v) for c, v in list(query.items())]
     try:
-        df = pd.read_hdf(unicode(hdf_path), dataset, where=where, columns=columns)
+        df = pd.read_hdf(str(hdf_path), dataset, where=where, columns=columns)
         if df.shape[0] == 0: raise KeyError
     except (KeyError, ValueError, SyntaxError):
         df = filter_hdf_chunks(hdf_path, dataset, column=column, value=value, columns=columns, **query)
@@ -99,13 +99,13 @@ def filter_hdf(hdf_path, dataset, column=None, value=None, columns=None, **query
 
 def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, chunksize=500, **query):
     df = None
-    for _df in pd.read_hdf(unicode(hdf_path), dataset, chunksize=chunksize):
+    for _df in pd.read_hdf(str(hdf_path), dataset, chunksize=chunksize):
         if len(query) > 0:
             try:
-                filtered_df = _df.query("("+") & (".join(["{}=={}".format(c, v) for c, v in query.iteritems()])+")")
+                filtered_df = _df.query("("+") & (".join(["{}=={}".format(c, v) for c, v in list(query.items())])+")")
             except SyntaxError:
                 expression = None
-                for c, v in query.iteritems():
+                for c, v in list(query.items()):
                     _exp = _df[c]==v
                     if expression is None:
                         expression = _exp
@@ -148,7 +148,7 @@ def iter_cdd(use_label=True, use_id=False, label=None, id=None, group_superfam=F
     elif not use_label and use_id:
         col = 2
 
-    CDD = pd.read_hdf(unicode(os.path.join(data_path_prefix, "MMDB.h5")), "Superfamilies")
+    CDD = pd.read_hdf(str(os.path.join(data_path_prefix, "MMDB.h5")), "Superfamilies")
     CDD = CDD[["label", "sfam_id"]].drop_duplicates().dropna()
 
     if label is not None:
@@ -184,7 +184,7 @@ def iter_cdd(use_label=True, use_id=False, label=None, id=None, group_superfam=F
                 yield cdd[col]
 
 def iter_unique_superfams():
-    CDD = pd.read_hdf(unicode(os.path.join(data_path_prefix, "MMDB.h5")), "Superfamilies")
+    CDD = pd.read_hdf(str(os.path.join(data_path_prefix, "MMDB.h5")), "Superfamilies")
     CDD = CDD["sfam_id"].drop_duplicates().dropna()
     for cdd in CDD:
         yield cdd
@@ -350,10 +350,10 @@ def izip_missing(iterA, iterB, **kwds):
 def make_h5_tables(files, iostore):
     for f in files:
         iostore.read_input_file(f, f)
-        store = pd.HDFStore(unicode(f))
-        for key in store.keys():
+        store = pd.HDFStore(str(f))
+        for key in list(store.keys()):
             df = store.get(key)
-            df.to_hdf(unicode(f+".new"), "table", format="table",
+            df.to_hdf(str(f+".new"), "table", format="table",
                 table=True, complevel=9, complib="bzip2", min_itemsize=1024)
         iostore.write_output_file(f+".new", f)
 
@@ -386,7 +386,7 @@ def extract_chains(pdb_file, chains, rename=None, new_file=None):
 
     if isinstance(rename, (str, list, tuple)):
         assert len(chains) == len(rename), "'{}', '{}'".format(chains, rename)
-        replace = dict(izip(chains, rename))
+        replace = dict(list(zip(chains, rename)))
         get_line = lambda l: line[:21] + replace[line[21]] + line[22:]
     else:
         get_line = lambda l: l
@@ -408,7 +408,7 @@ def update_xyz(old_pdb, new_pdb, updated_pdb=None, process_new_lines=None):
                 yield line[30:54]
 
     with open(updated_pdb, "w") as updated:
-        for old_line, new_line in izip(
+        for old_line, new_line in zip(
           get_atom_lines(old_pdb),
           process_new_lines(new_pdb)):
             updated.write(old_line[:30]+new_line+old_line[54:])

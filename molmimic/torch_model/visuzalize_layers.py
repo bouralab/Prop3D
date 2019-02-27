@@ -12,7 +12,7 @@ pgf_with_rc_fonts = {"pgf.texsystem": "pdflatex"}
 matplotlib.rcParams.update(pgf_with_rc_fonts)
 
 import argparse
-from itertools import product, izip
+from itertools import product
 
 import numpy as np
 import torch
@@ -40,7 +40,7 @@ class Sparse3DCNNLayerVisualization():
         # Generate a 3D random volume, fills entire volume, but uses sparse matrices
         dim = np.arange(0, 96)
         x, y, z = np.meshgrid(dim, dim, dim)
-        points = zip(x.ravel(), y.ravel(), z.ravel())
+        points = list(zip(x.ravel(), y.ravel(), z.ravel()))
         features = np.array(list(product([0,1], repeat=3)))
         features = features[np.random.choice(8, 96*96*96)]
 
@@ -101,7 +101,7 @@ class Sparse3DCNNLayerVisualization():
             # Loss function is the mean of the output of the selected layer/filter
             # We try to minimize the mean of the output of that specific filter
             loss = torch.mean(self.conv_output)
-            print "Iteration: {}, Loss: {:.2f}".format(i, loss.data.cpu()[0])
+            print("Iteration: {}, Loss: {:.2f}".format(i, loss.data.cpu()[0]))
 
             # Backward
             loss.backward()

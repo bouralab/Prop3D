@@ -10,11 +10,6 @@ warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
 
 from toil.realtimeLogger import RealtimeLogger
 
-try:
-    import pybel
-except ImportError:
-    pybel = None
-
 from molmimic.util import InvalidPDB, natural_keys, silence_stdout, silence_stderr
 from molmimic.parsers.FreeSASA import run_freesasa_biopython
 from molmimic.parsers.Electrostatics import run_pdb2pqr_APBS
@@ -207,7 +202,7 @@ class ProteinFeaturizer(Structure):
 
         charge = np.zeros(7)
         charge[0] = charge_value
-        #print "charge", charge_value, float(charge_value < 0)
+
         charge[1] = float(charge_value < 0)
         charge[2] = float(charge_value > 0)
         charge[3] = float(charge_value == 0)
@@ -245,7 +240,7 @@ class ProteinFeaturizer(Structure):
         return concavity
 
     def get_hydrophobicity(self, atom_or_residue, scale="kd"):
-        assert scale in hydrophobicity_scales.keys()
+        assert scale in list(hydrophobicity_scales.keys())
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             residue = atom_or_residue.get_parent()
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
@@ -517,62 +512,53 @@ class ProteinFeaturizer(Structure):
             #All altlocs have been removed so onlt one remains
             atom = atom.disordered_get_list()[0]
 
-        if preload and not self.force_feature_calculation and self.precalc_features is not None:
-            try:
-                features = self.precalc_features[atom.serial_number-1]
-                is_buried = bool(features[35]) #Residue asa #[self.precalc_features[a.serial_number-1][31] for a in atom.get_parent()]
-                # if asa > 0.0:
-                #     asa /= surface_areas.get(atom.element.title(), 1.0)
-                #     is_buried = asa <= 0.2
-                # else:
-                #     is_buried = False
+        try:
+            features = self.atom_features[atom.serial_number-1]
+            is_buried = bool(features[35])
 
-                if use_deepsite_features:
-                    feats = np.concatenate((
-                        features[64:70],
-                        features[20:22],
-                        features[72:]))
-                    if warn_if_buried:
-                        return feats, is_buried
-                    else:
-                        return feats
-                if only_atom:
-                    feats = features[13:18]
-                    if warn_if_buried:
-                        return feats, is_buried
-                    else:
-                        return feats
-                elif only_aa:
-                    feats = features[40:61]
-                    if warn_if_buried:
-                        return feats, is_buried
-                    else:
-                        return feats
-                elif non_geom_features:
-                    feats = np.concatenate((
-                        features[13:18],
-                        features[19:23],
-                        features[30:33], #1]))
-                        np.array([float(is_buried)])))
-                    if warn_if_buried:
-                        return feats, is_buried
-                    else:
-                        return feats
+            if use_deepsite_features:
+                feats = np.concatenate((
+                    features[64:70],
+                    features[20:22],
+                    features[72:]))
+                if warn_if_buried:
+                    return feats, is_buried
                 else:
-                    if warn_if_buried:
-                        return features, is_buried
-                    else:
-                        return features
-            except ValueError as e:
-                # print e
-                # pass
-                raise
+                    return feats
+            if only_atom:
+                feats = features[13:18]
+                if warn_if_buried:
+                    return feats, is_buried
+                else:
+                    return feats
+            elif only_aa:
+                feats = features[40:61]
+                if warn_if_buried:
+                    return feats, is_buried
+                else:
+                    return feats
+            elif non_geom_features:
+                feats = np.concatenate((
+                    features[13:18],
+                    features[19:23],
+                    features[30:33], #1]))
+                    np.array([float(is_buried)])))
+                if warn_if_buried:
+                    return feats, is_buried
+                else:
+                    return feats
+            else:
+                if warn_if_buried:
+                    return features, is_buried
+                else:
+                    return features
+        except ValueError as e:
+            return np.zeros(self.n_atom_features)
 
     def get_features_for_residue(self, residue, only_aa=False, non_geom_features=False, use_deepsite_features=False, preload=True):
         """Calculate FEATUREs"""
-        print("Using precalc features")
         try:
-            features = self.precalc_features[residue.get_id()[1]-1]
+            features = self.residue_features[residue.get_id()[1]-1]
             if non_geom_features:
                 return np.concatenate((
                     features[15:36],
@@ -582,7 +568,6 @@ class ProteinFeaturizer(Structure):
             elif only_aa:
                 return features[15:36]
             else:
-                return features[:self.nFeatures]
+                return features
         except ValueError:
-            pass
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
+            return np.zeros(self.n_residue_features)

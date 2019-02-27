@@ -28,7 +28,7 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
     kappa_combined = 0.0
     f1_combined = 0.0
 
-    for c in xrange(n_classes):
+    for c in range(n_classes):
         iflat = output[:,c].cpu().view(-1)
         tflat = target[:,c].cpu().view(-1)
         intersection = (iflat * tflat).sum()
@@ -115,7 +115,7 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
         del intersection
 
     with open("{}_epoch{}_stats.txt".format(phase, epoch), "a+") as statsfile:
-        print >> statsfile, format_meter(logger, phase)
+        print(format_meter(logger, phase), file=statsfile)
 
     return statsfile
 
@@ -147,7 +147,7 @@ def format_meter(logger, mode, iepoch=0, ibatch=1, totalbatch=1, meterlist=None,
     space = len(pstr)
 
     if meterlist is None:
-        meterlist = ["loss"]+[m for m in logger.meter.keys() if m != "loss"]
+        meterlist = ["loss"]+[m for m in list(logger.meter.keys()) if m != "loss"]
     for i, meter in enumerate(meterlist):
         if i > 0:
             pstr += " "*space
@@ -167,12 +167,12 @@ def format_meter(logger, mode, iepoch=0, ibatch=1, totalbatch=1, meterlist=None,
 
 def graph_logger(logger, phase, epoch, final=False, meterlist=None, graph=False):
     if meterlist is None:
-        meterlist = logger.meter.keys()
+        meterlist = list(logger.meter.keys())
 
     if not final:
         stats_fname = "Sparse3DUnet_statistics_{}.tsv".format(phase)
         with open(stats_fname, "a") as stats_file:
-            print >> stats_file, "epoch {} {}".format(epoch, format_meter(logger, phase))
+            print("epoch {} {}".format(epoch, format_meter(logger, phase)), file=statsfile)
     else:
         stats_fname = None
 
@@ -287,13 +287,11 @@ class ModelStats(object):
             #predicted_corrects_raw_sample = batch_predictions>=0.8
             predicted_corrects_sample = batch_predictions.cpu().float()
 
-            print "target", tflat.sum().data[0], "of", sample_size
-            print "output", iflat.sum().data[0], "of", sample_size
+            print("target", tflat.sum().data[0], "of", sample_size)
+            print("output", iflat.sum().data[0], "of", sample_size)
             predicted_corrects_num_sample = iflat.eq(tflat)
-            print "equal", predicted_corrects_num_sample.sum().data[0], "of", sample_size
-            #predicted_corrects_num_sample = predicted_corrects_num_sample
-            #print "sum", predicted_corrects_num_sample
-            #predicted_corrects_num_sample /= sample_size
+            print("equal", predicted_corrects_num_sample.sum().data[0], "of", sample_size)
+
             predicted_corrects_batch += predicted_corrects_num_sample.sum().data[0]
 
             prediction = (predicted_corrects_sample>0.7).int().cpu().data.numpy()
@@ -314,7 +312,7 @@ class ModelStats(object):
         dice_batch /= num_samples
         predicted_corrects_batch /= float(batchSize)
 
-        print """Epoch {} {}:
+        print("""Epoch {} {}:
     loss:      {:.4f}
     dice:      {:.4f}%    {:.4f}%
     accuracy:  {:.2f}%    {:.2f}%
@@ -332,7 +330,7 @@ class ModelStats(object):
             precision*100, precision_batch*100,
             kappa*100, kappa_batch*100,
             f1*100, f1_batch*100,
-            time.time() - since)
+            time.time() - since))
 
         # try:
         #     fpr, tpr, _ = metrics.roc_curve(_target.view(-1).numpy(), predicted_corrects.view(-1).numpy(), pos_label=1.)
@@ -352,11 +350,11 @@ class ModelStats(object):
         # self.kappa += kappa
         # self.f1 += f1
         # self.n += n
-        # print "Epoch {} {}: corrects:{}% dice:{}% mcc:{}% precision:{}% kappa:{}% f1:{}% time:{}s".format(
-        #     epoch, self.phase, accuracy*100, dice*100, mcc*100, precision*100, kappa*100, f1*100, time.time() - since)
+        # print("Epoch {} {}: corrects:{}% dice:{}% mcc:{}% precision:{}% kappa:{}% f1:{}% time:{}s".format(
+        #     epoch, self.phase, accuracy*100, dice*100, mcc*100, precision*100, kappa*100, f1*100, time.time() - since))
 
-        # print "Epoch {} {}: accuracy:{:.2f}% avg-acc:{:.2f}% dice:{:.4f}% mcc:{:.4f}% precision:{:.4f}% kappa:{:.4f}% f1:{:.4f}% time:{:.1f}s".format(
-        #     epoch, self.phase, accuracy*100, running_corrects_num*100, dice*100, mcc*100, precision*100, kappa*100, f1*100, time.time() - since)
+        # print("Epoch {} {}: accuracy:{:.2f}% avg-acc:{:.2f}% dice:{:.4f}% mcc:{:.4f}% precision:{:.4f}% kappa:{:.4f}% f1:{:.4f}% time:{:.1f}s".format(
+        #     epoch, self.phase, accuracy*100, running_corrects_num*100, dice*100, mcc*100, precision*100, kappa*100, f1*100, time.time() - since))
 
         #self.accuracies.append(predicted_corrects_num/float(batchSize))
         #self.losses.append(loss)

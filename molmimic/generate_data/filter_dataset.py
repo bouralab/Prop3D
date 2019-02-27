@@ -6,8 +6,8 @@ import numpy as np
 import pandas as pd
 import dask.dataframe as dd
 
-from util import get_interfaces_path, get_features_path, get_structures_path, natural_keys, iter_cdd
-from map_residues import comare_to_pdb
+from molmimic.generate_data.util import natural_keys, iter_cdd
+from molmimic.generate_data.map_residues import compare_to_pdb
 
 NUM_WORKERS = 20
 
@@ -21,7 +21,7 @@ def check_interface(pdb, chain, domNo, sdi, resi):
 
     if os.path.isfile(feature_path) and os.path.isfile(structure_path):
         #Remove residues not in structure
-        return ",".join(("".join(r).strip() for r in comare_to_pdb(structure_path, mol_resi)))
+        return ",".join(("".join(r).strip() for r in compare_to_pdb(structure_path, mol_resi)))
     else:
         return np.nan
 
@@ -72,12 +72,12 @@ def cluster_interactome(job, df, cdd, sfam_id=None, table="observed"):
     cdd = cdd.replace("/", "")
     if df is None and sfam_id is not None:
         int_path = os.path.join(get_interfaces_path(dataset_name), "{}.h5".format(cdd))
-        df = pd.read_hdf(unicode(int_path), table)
+        df = pd.read_hdf(str(int_path), table)
     df["pdb_id"] = df.apply(lambda row: "{p}_{c}_sdi{s}_d{d}_{c}".format(
         p=row["int_pdb"], c=row["int_chain"], s=row["int_sdi"], d=row["int_domNo"]), axis=1)
 
     pdb_path = os.path.join(data_path_prefix, "structures", cdd, "{}_clusters.h5".format(cdd))
-    pdb_clusters = pd.read_hdf(unicode(pdb_path), "table")
+    pdb_clusters = pd.read_hdf(str(pdb_path), "table")
 
     cluster_int = pd.merge(df, pdb_clusters, how="left", left_on="pdb_id", right_on="label_query")
     cluster_int = cluster_int.groupby("label_target").apply(process_cluster)
@@ -120,7 +120,7 @@ def combine(df):
 
 def filter_interfaces(job, interface, status, ppi_type):
     try:
-        df = pd.read_hdf(unicode("{}_bsa.h5".format(interface)), status)
+        df = pd.read_hdf(str("{}_bsa.h5".format(interface)), status)
     except (IOError, KeyError):
         return
 
@@ -138,9 +138,9 @@ def filter_interfaces(job, interface, status, ppi_type):
     filtered_interfaces = filtered_interfaces.dropna()
     filtered_interfaces["resi"] = filtered_interfaces["resi"].astype(str)
 
-    filtered_interfaces.to_hdf(unicode(interface+"{}.{}.h5".format(interface, status)), ppi_type, complevel=9, complib="bzip2")
+    filtered_interfaces.to_hdf(str(interface+"{}.{}.h5".format(interface, status)), ppi_type, complevel=9, complib="bzip2")
     clust_int = cluster_interactome(filtered_interfaces, cdd)
-    clust_int.to_hdf(unicode(interface+".{}.clustered.h5".format(status)), ppi_type, complevel=9, complib="bzip2")
+    clust_int.to_hdf(str(interface+".{}.clustered.h5".format(status)), ppi_type, complevel=9, complib="bzip2")
     del filtered_interfaces
     del clust_int
     del ddf
@@ -149,16 +149,16 @@ def filter_interfaces(job, interface, status, ppi_type):
 
 def filter_mixed_interfaces(job, interface, ppi_type):
     try:
-        obs = dd.read_hdf(unicode(interface+".observed.h5"), ppi_type)
-        inf = dd.read_hdf(unicode(interface+".inferred.h5"), ppi_type)
+        obs = dd.read_hdf(str(interface+".observed.h5"), ppi_type)
+        inf = dd.read_hdf(str(interface+".inferred.h5"), ppi_type)
     except (IOError, KeyError):
         return
 
     mixed = obs.append(inf).groupby("sdi", as_index=False).apply(combine, meta=meta).\
         compute(scheduler="multiprocessing", num_workers=NUM_WORKERS)
-    mixed.to_hdf(unicode(interface+".mixed.h5"), ppi_type, complevel=9, complib="bzip2")
+    mixed.to_hdf(str(interface+".mixed.h5"), ppi_type, complevel=9, complib="bzip2")
     clust_int = cluster_interactome(mixed, cdd)
-    clust_int.to_hdf(unicode(interface+".mixed.clustered.h5"), ppi_type, complevel=9, complib="bzip2")
+    clust_int.to_hdf(str(interface+".mixed.clustered.h5"), ppi_type, complevel=9, complib="bzip2")
     del mixed
     del obs
 

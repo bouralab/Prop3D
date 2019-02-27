@@ -71,7 +71,7 @@ def align(fixed_file, fixed_chain, moving_file, moving_chain, method="tmalign", 
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:
-            print dir(e)
+            print(dir(e))
             raise Exception(str(e).decode('utf-8').encode("ascii", "ignore"))
 
     else:
@@ -148,9 +148,6 @@ def align(fixed_file, fixed_chain, moving_file, moving_chain, method="tmalign", 
         assert os.path.isfile(_outf+".matrix.txt")
         shutil.move(_outf+".matrix.txt", matrix_file)
         assert os.path.isfile(matrix_file)
-        with open(matrix_file) as f:
-            print "MATRIX"
-            print f.read()
     else:
         matrix_file = force_alignment
 

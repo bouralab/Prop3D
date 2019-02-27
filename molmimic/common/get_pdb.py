@@ -94,7 +94,7 @@ def get_pdb(pdb, chain=None, sdi=None, domain=None, prepare=True, updating=True,
                     try:
                         path, pdb, chain, (sdi, domain) = x
                     except ValueError:
-                        print "XXX", x
+                        print("XXX", x)
                         raise
                     break
                 else:
@@ -102,14 +102,12 @@ def get_pdb(pdb, chain=None, sdi=None, domain=None, prepare=True, updating=True,
 
             return path, pdb.lower(), chain, (sdi, domain), input_format
     else:
-        "Not found"
         path = pdb
 
         if input_format not in ["pdb", "pqr", "mmcif", "mmtf"]:
             input_format = "pdb"
 
         if prepare:
-            print "must prep"
             if chain is None:
                 path, pdb, chain, (sdi, domain) = next(prepare_protein.run_protein(path))
             else:

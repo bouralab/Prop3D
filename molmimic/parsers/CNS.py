@@ -43,7 +43,7 @@ def CNS(input_file, prefix, work_dir=None, docker=True, job=None, template=True,
             inp = input_file
         else:
             updated_templates = {}
-            for k, v in template_kwds.iteritems():
+            for k, v in list(template_kwds.items()):
                 if os.path.isfile(v) and not os.path.abspath(os.path.dirname(v)) == os.path.abspath(work_dir):
                     shutil.copy(v, work_dir)
                 updated_templates[k] = os.path.join("/data", os.path.basename(v))
@@ -162,7 +162,7 @@ def generate_input(template_file, prefix, work_dir, **kwds):
 
     with open(template_file) as temp, open(input_file, "w") as inp:
         for line in temp:
-            for key, val in kwds.iteritems():
+            for key, val in list(kwds.items()):
                 line = re.sub(key, val, line)
             inp.write(line)
 

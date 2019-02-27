@@ -1,6 +1,6 @@
 import os, sys
 import gzip
-from cStringIO import StringIO
+from io import StringIO
 from contextlib import contextmanager
 from xml.etree.cElementTree import fromstring, parse, ParseError, tostring
 import numpy as np
@@ -11,6 +11,8 @@ from pyasn1.codec.ber import decoder
 
 from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.util import natural_keys, get_pdb_residues, izip_missing
+
+from toil.realtimeLogger import RealtimeLogger
 
 
 class InvalidSIFTS(RuntimeError):
@@ -61,7 +63,7 @@ def mmdb_to_pdb_resi(pdb_name, chain, resi, replace_nulls=False, job=None):
     del xml
     del root
 
-    sorted_map = sorted(residue_mapping.iteritems(), key=lambda x:natural_keys(x[0]))
+    sorted_map = sorted(iter(list(residue_mapping.items())), key=lambda x:natural_keys(x[0]))
 
     if len(sorted_map) == 0:
         raise InvalidSIFTS("No mapping for {}.{}".format(pdb_name, chain))
@@ -70,10 +72,6 @@ def mmdb_to_pdb_resi(pdb_name, chain, resi, replace_nulls=False, job=None):
         try:
             pdb_resnum = residue_mapping[tuple(r)]
         except KeyError:
-            try:
-                sorted_map[-1]
-            except IndexError:
-                print pdb_name, chain, r, sorted_map
             if r[1] > sorted_map[-1][0][1]:
                 last = sorted_map[-1][1]
                 i=1
@@ -186,16 +184,16 @@ def decode_residues(job, pdb, chain, res, row=None):
         else:
             return np.NaN
 
-    for i in xrange(len(code)):
+    for i in range(len(code)):
         c = code[i]
         range_from, range_to, gi = tuple([c[j] for j in range(len(c))])
-        for x in xrange(range_from, range_to + 1):
+        for x in range(range_from, range_to + 1):
             residues.append(x)
 
     try:
         return ",".join(map(str, mmdb_to_pdb_resi(pdb, chain, residues, job=job)))
     except Exception as error:
-        print "Error mapping mmdb for", pdb, chain, error, row
+        RealtimeLogger.info("Error mapping mmdb for", pdb, chain, error, row)
         raise InvalidSIFTS
         residues.insert(0, "mmdb")
         return ",".join(map(str,residues))

@@ -8,12 +8,11 @@ try:
     from toil.lib.docker import apiDockerCall
 except ImportError:
     apiDockerCall = None
-	import subprocess
+    import subprocess
 
 memory = Memory(verbose=0)
 
-def run_minimize(pdb_file, min_type="lbfgs_armijo_nonmonotone", min_tolerance=0.001,
-  ignore_zero_occupancy=False, parameters=None, work_dir=None):
+def run_minimize(pdb_file, min_type="lbfgs_armijo_nonmonotone", min_tolerance=0.001, ignore_zero_occupancy=False, parameters=None, work_dir=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
@@ -32,7 +31,7 @@ def run_minimize(pdb_file, min_type="lbfgs_armijo_nonmonotone", min_tolerance=0.
         score_file = os.path.join("/data", "{}.sc".format(prefix))
         pdb_file_in = os.path.join("/data", "{}.pdb".format(prefix))
 
-		parameters += [
+        parameters += [
             "-s", pdb_file_in,
             "-out:file:scorefile", score_file,
             "-out:path:pdb", "/data",
@@ -49,13 +48,12 @@ def run_minimize(pdb_file, min_type="lbfgs_armijo_nonmonotone", min_tolerance=0.
             return run(pdb_file, min_type=min_type, min_tolerance=min_tolerance,
               ignore_zero_occupancy=ignore_zero_occupancy, parameters=parameters,
               work_dir=work_dir)
-
-	else:
+    else:
         work_dir = os.path.dirname(os.path.abspath(pdb_file))
-        minimized_file = os.path.join(workdir, "{}.pdb_0001.pdb".format(prefix))
+        minimized_file = os.path.join(work_dir, "{}.pdb_0001.pdb".format(prefix))
         score_file = os.path.join(work_dir, "{}.sc".format(prefix))
 
-		parameters += [
+    parameters += [
             "-out:file:scorefile", score_file,
             "-out:path:pdb", work_dir,
             "-out:path:score", work_dir]

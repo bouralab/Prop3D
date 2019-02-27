@@ -10,7 +10,7 @@ import time
 import math
 import multiprocessing
 from datetime import datetime
-from itertools import izip
+
 
 import numpy as np
 import gc
@@ -53,7 +53,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
     since = time.time()
 
     if ibis_data == "spheres":
-        from torch_loader import SphereDataset
+        from molmimic.torch_model.torch_loader import SphereDataset
         nFeatures = nFeatures or 3
         datasets = SphereDataset.get_training_and_validation(input_shape, cnt=1, n_samples=1000, nFeatures=nFeatures, allow_feature_combos=allow_feature_combos, bs_feature=bs_feature, bs_feature2=bs_feature2, bs_features=bs_features, stripes=stripes, data_split=0.99)
         validation_batch_size = 1
@@ -63,14 +63,14 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
             nClasses = 2
     elif os.path.isfile(ibis_data):
         dataset = IBISDataset
-        print allow_feature_combos, nFeatures
+        print(allow_feature_combos, nFeatures)
         if allow_feature_combos and nFeatures is not None:
             random_features = (nFeatures, allow_feature_combos, bs_feature, bs_feature2)
         elif not allow_feature_combos and nFeatures is not None:
             random_features = (nFeatures, False, bs_feature, bs_feature2)
         elif allow_feature_combos and nFeatures is None:
             random_features = None
-            print "ignoring --allow-feature-combos"
+            print("ignoring --allow-feature-combos")
         else:
             random_features = None
 
@@ -103,7 +103,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
         batch_size if dataset.train else validation_batch_size,
         shuffle,
         num_workers) \
-        for name, dataset in datasets.iteritems()}
+        for name, dataset in list(datasets.items())}
 
     dtype = 'torch.cuda.FloatTensor' if torch.cuda.is_available() else 'torch.FloatTensor'
 
@@ -129,7 +129,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
     check_point_epoch_file = "{}_checkpoint_epoch.pth".format(model_prefix)
     if check_point and os.path.isfile(check_point_model_file) and os.path.isfile(check_point_epoch_file):
         start_epoch = torch.load(check_point_epoch_file)
-        print "Restarting at epoch {} from {}".format(start_epoch+1, check_point_model_file)
+        print("Restarting at epoch {} from {}".format(start_epoch+1, check_point_model_file))
         model.load_state_dict(torch.load(check_point_model_file))
     else:
         start_epoch = 0
@@ -144,16 +144,15 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
     for obj in gc.get_objects():
         try:
             if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-                #print type(obj), obj.size()
                 del obj
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:
             pass
 
-    for epoch in xrange(start_epoch, num_epochs):
-        print "Epoch {}/{}".format(epoch, num_epochs - 1)
-        print "-" * 10
+    for epoch in range(start_epoch, num_epochs):
+        print("Epoch {}/{}".format(epoch, num_epochs - 1))
+        print("-" * 10)
 
         mlog.timer.reset()
         for phase in ['train', 'val']:
@@ -209,7 +208,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     else:
                         raise RuntimeError("invalid datatype")
 
-                    for sample, (indices, features, truth, id) in enumerate(izip(data["indices"], data["data"], data["truth"], data["id"])):
+                    for sample, (indices, features, truth, id) in enumerate(zip(data["indices"], data["data"], data["truth"], data["id"])):
                         inputs.addSample()
                         labels.addSample()
 
@@ -218,16 +217,16 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                             features = float_tensor(features)
                             truth = float_tensor(truth)
                         except RuntimeError as e:
-                            print e
+                            print(e)
                             continue
 
                         try:
                             inputs.setLocations(indices, features, 0) #Use 1 to remove duplicate coords?
                             labels.setLocations(indices, truth, 0)
                         except AssertionError:
-                            print "Error with PDB:", id
+                            print("Error with PDB:", id)
                             with open("bad_pdbs.txt", "a") as f:
-                                print >> f, id
+                                print(id, file=f)
 
                     del data
                     del indices
@@ -244,7 +243,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
                 elif isinstance(data["data"], torch.FloatTensor):
                     #Input is dense
-                    print "Input is Dense"
+                    print("Input is Dense")
                     sparse_input = False
                     if use_gpu:
                         inputs = inputs.cuda()
@@ -267,7 +266,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                 try:
                     outputs = model(inputs)
                 except AssertionError:
-                    print nFeatures, inputs
+                    print(nFeatures, inputs)
                     raise
 
                 if sparse_input:
@@ -300,7 +299,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     loss.backward()
                     optimizer.step()
                     b = list(model.parameters())[0].clone().data
-                    if torch.equal(a, b): print "NOT UPDATED"
+                    if torch.equal(a, b): print("NOT UPDATED")
                     del a
                     del b
 
@@ -324,7 +323,6 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                 for obj in gc.get_objects():
                     try:
                         if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-                            #print type(obj), obj.size()
                             del obj
                     except (SystemExit, KeyboardInterrupt):
                         raise
@@ -348,7 +346,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
     statsfile, graphs = graph_logger(mlog, "Train" if phase=="train" else "Test", epoch, final=True)
 
     time_elapsed = time.time() - since
-    print 'Training complete in {:.0f}m {:.0f}s'.format(time_elapsed/60, time_elapsed % 60)
+    print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed/60, time_elapsed % 60))
 
     torch.save(model.state_dict(), "{}.pth".format(model_prefix))
 
@@ -520,7 +518,7 @@ def parse_args():
         default=None,
         required=False,
         type=int,
-        choices=range(3,8),
+        choices=list(range(3,8)),
         metavar="[3-7]",
         help="Number of features to use -- only works in spherical mode"
     )

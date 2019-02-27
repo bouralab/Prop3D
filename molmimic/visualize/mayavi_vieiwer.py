@@ -265,7 +265,7 @@ def create_figure(n_samples, size=(96,96,96), walls=True, elev=20, azim=135, no_
         fig = plt.figure(figsize=(12,12))
     axes = []
     n_plots = n_samples if no_prediction else 2*n_samples
-    for iax in xrange(n_plots):
+    for iax in range(n_plots):
         ax = fig.add_subplot(1 if no_prediction else 2, n_samples, iax+1, projection='3d')
         ax.set_aspect('equal')
 
@@ -356,9 +356,9 @@ def plot_matrix(ax, matrix, truth=False, colors=False):
             use_raw_color = False
 
         half_k = matrix.shape[2]/2.
-        for i in xrange(matrix.shape[0]):
-            for j in xrange(matrix.shape[1]):
-                for k in xrange(matrix.shape[2]):
+        for i in range(matrix.shape[0]):
+            for j in range(matrix.shape[1]):
+                for k in range(matrix.shape[2]):
                     #if matrix[i,j,k] == 1:
                     #print "Plotting voxel at", i, j, k
                     if truth:

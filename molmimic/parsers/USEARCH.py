@@ -4,15 +4,13 @@ try:
     from toil.lib.docker import apiDockerCall
 except ImportError:
     apiDockerCall = None
-	import subprocess
+    import subprocess
 
 def run_usearch(parameters, work_dir=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
-    parameters = [p.format("/data/") for p in parameters if]
-    for p in parameters:
-        p
+    parameters = [p.format("/data/") for p in parameters]
 
     if apiDockerCall is not None:
         _parameters = []
@@ -40,20 +38,19 @@ def run_usearch(parameters, work_dir=None):
         except (SystemExit, KeyboardInterrupt):
             raise
         except:
-            return run(parameters, work_dir=work_dir)
-
+            raise
 	else:
-        _parameters = []
+        new_parameters = []
         outfiles = []
         for i, p in enumerate(parameters):
             if p.startswith("{i}"):
-                _parameters.append(p[3:])
+                new_parameters.append(p[3:])
             elif p.startswith("{o}"):
-                _parameters.append(p[3:])
+                new_parameters.append(p[3:])
                 outfiles.append(p[3:])
             else:
-                _parameters.append(p)
-        command = ["usearch"]+parameters
+                new_parameters.append(p)
+        command = ["usearch"]+new_parameters
 
         try:
             subprocess.check_output(command, stderr=subprocess.PIPE)

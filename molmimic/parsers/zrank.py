@@ -8,6 +8,8 @@ except ImportError:
     import subprocess
     zrank_path = subprocess.check_output(["which", "zrank"])
 
+from toil.realtimeLogger import RealtimeLogger
+
 def run_zrank(complex_path, refinement=False, work_dir=None, docker=True, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
@@ -19,11 +21,8 @@ def run_zrank(complex_path, refinement=False, work_dir=None, docker=True, job=No
 
     listfile = tempfile.NamedTemporaryFile(dir=work_dir, prefix="listfile", suffix=".txt", delete=False)
     for pdb in complex_path:
-        print >> listfile, os.path.basename(pdb)
+        print(os.path.basename(pdb), file=listfile)
     listfile.close()
-
-    with open(listfile.name) as f:
-        print f.read()
 
     if docker and apiDockerCall is not None and job is not None:
         parameters = _parameters + [os.path.basename(listfile.name)]
@@ -33,11 +32,11 @@ def run_zrank(complex_path, refinement=False, work_dir=None, docker=True, job=No
                           working_dir="/data",
                           volumes={work_dir:{"bind":"/data", "mode":"rw"}},
                           parameters=parameters)
-            print out
+            RealtimeLogger.info(out)
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:
-            print "Error running docker for {} becuase {}".format(complex_path, e)
+            RealtimeLogger.info("Error running docker for {} becuase {}".format(complex_path, e))
             raise
             return run_zrank(complex_path, refinement=refinement, work_dir=work_dir, docker=False)
     else:
@@ -55,7 +54,7 @@ def run_zrank(complex_path, refinement=False, work_dir=None, docker=True, job=No
         scores = dict(line.rstrip().split() for line in f)
 
     if len(complex_path) == 1:
-        scores = scores.values()[0]
+        scores = list(scores.values())[0]
 
     for f in (listfile.name, listfile.name+".zr.out"):
         try:

@@ -31,14 +31,14 @@ def run_maxcluster(*args, **kwds):
     file_kwds = ["log", "e", "p", "l", "R", "Rl", "Ru", "F", "M"]
     in_file_kwds = ["e", "p", "l", "F", "M"]
     parameters = ["-"+a for a in args]
-    for k, v in kwds.iteritems():
+    for k, v in list(kwds.items()):
         if k not in file_kwds:
             parameters += ["-{}".format(k), str(v)]
     job.log("ORIG PARAMS: {}".format(parameters))
-    file_parameters = {k:v for k, v in kwds.iteritems() if k in file_kwds}
+    file_parameters = {k:v for k, v in list(kwds.items()) if k in file_kwds}
 
     if docker and apiDockerCall is not None and job is not None:
-        for k,f in file_parameters.iteritems():
+        for k,f in list(file_parameters.items()):
             if k in in_file_kwds and not os.path.abspath(os.path.dirname(f)) == os.path.abspath(work_dir):
                 shutil.copy(f, work_dir)
             job.log("BASENAMING: {}".format(os.path.basename(f)))
@@ -64,7 +64,7 @@ def run_maxcluster(*args, **kwds):
         os.chdir(oldcwd)
     else:
         file_args = []
-        for k,f in file_parameters.iteritems():
+        for k,f in list(file_parameters.items()):
             parameters += ["-{}".format(k), f]
         args = [maxcluster_path]+file_args+parameters
         try:
@@ -123,7 +123,7 @@ def get_hierarchical_tree(log_file):
                 nx_tree.add_node(node)
 
                 fields = [f.strip() for f in info.split()]
-                item2, item2 = map(int, fields[:2])
+                item2, item2 = list(map(int, fields[:2]))
                 distance = float(fields[2])
 
                 if item1>0 and item2>0:

@@ -29,7 +29,6 @@ def prep(*pdbs, **kwds):
             ["{}_{}".format(os.path.splitext(os.path.basename(f))[0], c) for f, c in pdbs])))
         with open(newf+".temp", "w") as new:
             for i, (f, c) in enumerate(pdbs):
-                print f, c
                 subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-{}".format(c), f], stdout=new)
         with open(newf, "w") as new:
             subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), newf+".temp"], stdout=new)
@@ -90,8 +89,8 @@ def process_interface(job, row, int_type, work_dir=None):
 
     #Set chain names as M=mol, I=int
     mol_file, int_file = list(prep((mol_file, "M"), (int_file, "I"), work_dir=work_dir))
-    mol_resi = map(int, row["mol_res"].split(","))
-    int_resi = map(int, row["int_res"].split(","))
+    mol_resi = list(map(int, row["mol_res"].split(",")))
+    int_resi = list(map(int, row["int_res"].split(",")))
 
     if int_type == "inferred":
         try:
@@ -413,7 +412,7 @@ def cluster(job, mol_sfam, int_sfam, pdb_complexes, work_dir=None):
 #     merge(job, (adv_results, simple_results, merged1, merged2))
 
 def process_sfam(job, sfam_id, int_sfams=None, observed=True, min_cluster=0, cores=2):
-    from itertools import izip
+    
     int_type = "observed" if observed else "inferred"
     work_dir = job.fileStore.getLocalTempDir()
     ddi_store = IOStore.get("aws:us-east-1:molmimic-ddi")
@@ -468,7 +467,7 @@ def process_sfam(job, sfam_id, int_sfams=None, observed=True, min_cluster=0, cor
             else:
                 centroid_index, centroid = cluster(job, mol_sfam, int_sfam, files, work_dir=work_dir)
 
-            for i, ((sdi_key, row), file) in enumerate(izip(sdi_group, files)):
+            for i, ((sdi_key, row), file) in enumerate(zip(sdi_group, files)):
                 if i == centroid_index:
                     mol_file, mol_resi, int_file, int_resi = process_interface(job, row.iloc[0], int_type, work_dir=work_dir)
                     orig_file = next(prep((mol_file, "M"), (int_file, "I"), merge=True, work_dir=work_dir))
@@ -529,7 +528,7 @@ def process_sfams(job, max_sfams=300, memory="1G"):
     num_ddi = 0
     for i, ((mol_sfam, int_sfam), count) in enumerate(counts):
         RealtimeLogger.info("{}: {}-{}".format(i, mol_sfam, int_sfam))
-        if -1 in map(int, (mol_sfam, int_sfam)):
+        if -1 in list(map(int, (mol_sfam, int_sfam))):
             RealtimeLogger.info("SKIPPED")
             continue
 
@@ -563,7 +562,7 @@ def process_sfams(job, max_sfams=300, memory="1G"):
     #int_sfams = sfams[mol_sfam]
     #job.addChildJobFn(process_sfam, mol_sfam, int_sfams)
 
-    for mol_sfam, int_sfams in sfams.iteritems():
+    for mol_sfam, int_sfams in list(sfams.items()):
         job.addChildJobFn(process_sfam, mol_sfam, int_sfams)
 
 def best_sfams(job, all_counts, max_sfams=300):
@@ -585,7 +584,7 @@ def best_sfams(job, all_counts, max_sfams=300):
                 continue
             ddi_counts[ddi] = row.count
 
-    sfams = sorted(ddi_counts.iteritems(), key=lambda x: x[1], reverse=True)
+    sfams = sorted(iter(list(ddi_counts.items())), key=lambda x: x[1], reverse=True)
     RealtimeLogger.info("sfams is {}".format(sfams))
     sfam_file = os.path.join(work_dir, "sorted_sfams.json")
     with open(sfam_file, "w") as f:
@@ -646,5 +645,4 @@ if __name__ == "__main__":
     logging.getLogger().addHandler(detector)
 
     with Toil(options) as workflow:
-        print "STARTING"
         workflow.start(Job.wrapJobFn(start_toil))

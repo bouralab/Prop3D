@@ -15,17 +15,13 @@ def run_cx(pdb_path, work_dir=None, job=None):
         if not os.path.abspath(os.path.dirname(pdb_path)) == os.path.abspath(work_dir):
             shutil.copy(pdb_path, work_dir)
         parameters = [os.path.basename(pdb_path)]
-        print "BEFORE", os.listdir(work_dir)
-        with open(pdb_path) as f:
-            print "IT EXISTS", next(f)
+
         cx_f = apiDockerCall(job,
                              image='edraizen/cx:latest',
                              working_dir="/data",
                              volumes={work_dir:{"bind":"/data", "mode":"rw"}},
                              parameters=parameters)
-        print "DONE RUNINGF CX", cx_f
-        # cx_f = open(os.path.join(work_dir, os.path.basename(pdb_path)+".cx"))
-        # delCx = os.path.join(work_dir, os.path.basename(pdb_path)+".cx")
+
     else:
         with open(pdb_path) as f:
             cx_f = subprocess.check_output("cx", stdin=f)

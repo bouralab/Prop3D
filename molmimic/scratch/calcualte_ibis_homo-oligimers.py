@@ -5,9 +5,9 @@ cdds = ['ABC_CysA_sulfate_importer','secoisolariciresinol-DH_like_SDR_c','Cygb',
 def get_homololigimers(cluster_size=500):
 	tbl1 = pd.read_table("/data/draizene/molmimic/molmimic/data/unique_molresface_resi_resn_NR_all.tab.txt")
 	tbl2 = pd.read_table("/data/draizene/molmimic/molmimic/data/unique_obs_bs-8.tab.txt")
-	tbl2.columns = [u'unique_obs_int', u'sample_sdi', u'n', u'n_mmdbs', u'n_nr_mmdbs',
-            u'cdds', u'sfs_ids', u'cdds_B', u'sfs_ids_B', u'single', u'self_lca',
-            u'lca_level', u'lca_tax', u'lca_name', u'lca_depth']
+	tbl2.columns = ['unique_obs_int', 'sample_sdi', 'n', 'n_mmdbs', 'n_nr_mmdbs',
+            'cdds', 'sfs_ids', 'cdds_B', 'sfs_ids_B', 'single', 'self_lca',
+            'lca_level', 'lca_tax', 'lca_name', 'lca_depth']
 
 	ibis_luca = pd.merge(tbl1, tbl2, on="unique_obs_int")
 	large_families = ibis_luca[ibis_luca["n"]>cluster_size]
