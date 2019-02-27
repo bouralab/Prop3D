@@ -17,7 +17,7 @@ from joblib import Parallel, delayed
 from Bio import SeqIO
 
 from toil.job import JobFunctionWrappingJob
-#from toil.realtimeLogger import RealtimeLogger
+from toil.realtimeLogger import RealtimeLogger
 
 from molmimic.parsers.Electrostatics import run_pdb2pqr
 from molmimic.parsers.SCWRL import run_scwrl

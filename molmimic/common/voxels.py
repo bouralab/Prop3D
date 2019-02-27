@@ -12,9 +12,9 @@ from molmimic.common import Structure
 from molmimic.ProteinTables import vdw_radii, vdw_aa_radii, surface_areas
 
 class ProteinVoxelizer(Structure):
-    def __init__(self, path, pdb, chain, sdi, domain, input_format="pdb"
+    def __init__(self, path, pdb, chain, sdi, domNo, input_format="pdb"
       volume=264, voxel_size=1.0, rotate=True):
-        super(self, ProteinVoxelizer).__init__(path, pdb, chain, sdi, domain,
+        Structure.__init__(self, path, pdb, chain, sdi, domNo,
             input_format=input_format, feature_mode="r")
 
         self.mean_coord = np.zeros(3)

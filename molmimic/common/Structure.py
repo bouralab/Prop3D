@@ -10,8 +10,60 @@ warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
 
 from molmimic.util import InvalidPDB, natural_keys
 
+def number_of_features(only_aa=False, only_atom=False, non_geom_features=False,
+  use_deepsite_features=False, course_grained=False):
+    if course_grained:
+        if non_geom_features:
+            return 35
+        elif only_aa:
+            return 21
+        else:
+            return 45
+    else:
+        if non_geom_features:
+            return 13
+        elif only_atom:
+            return 5
+        elif only_aa:
+            return 21
+        elif use_deepsite_features:
+            return 9
+        else:
+            return 73
+
+def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=False, course_grained=False):
+    if only_atom:
+        return ["C", "N", "O", "S", "Unk_element"]
+    if only_aa:
+        return PDB.Polypeptide.aa3
+    feature_names = [
+        "C", "CT", "CA", "N", "N2", "N3", "NA", "O", "O2", "OH", "S", "SH", "Unk_atom",
+        "C", "N", "O", "S", "Unk_element",
+        "vdw_volume", "charge", "neg_charge", "pos_charge", "neutral_charge",
+        "electrostatic_potential", "is_electropositive", "is_electronegative"
+        "cx", "is_concave", "is_convex", "is_concave_and_convex",
+        "hydrophobicity", "is_hydrophbic", "is_hydrophilic", "hydrophobicity_is_0"
+        "atom_asa", "atom_is_buried", "atom_exposed",
+        "residue_asa", "residue_buried", "residue_exposed"]
+    feature_names += PDB.Polypeptide.aa3
+    feature_names += ["Unk_residue", "is_helix", "is_sheet", "Unk_SS"]
+    feature_names += [ #DeepSite features
+        "hydrophobic_atom",
+        "aromatic_atom",
+        "hbond_acceptor",
+        "hbond_donor",
+        "metal",
+        "is_hydrogen",
+    ]
+    fearues_names += [
+        "conservation_normalized",
+        "conservation_scale",
+        "is_conserved"
+    ]
+    return feature_names
+
 class Structure(object):
-    def __init__(self, path, pdb, chain, sdi, domain, input_format="pdb", feature_mode="r"):
+    def __init__(self, path, pdb, chain, sdi, domNo, input_format="pdb", feature_mode="r"):
         self.path = path
         if not os.path.isfile(self.path):
             raise InvalidPDB("Cannot find file {}".format(self.path))
@@ -50,8 +102,8 @@ class Structure(object):
 
         self.id = "{}_{}_sdi{}_d{}".format(self.pdb, self.chain, self.sdi, self.domNo)
 
-        self.n_residue_features = Structure.number_of_features(course_grained=True)
-        self.n_atom_features = Structure.number_of_features(course_grained=False)
+        self.n_residue_features = number_of_features(course_grained=True)
+        self.n_atom_features = number_of_features(course_grained=False)
 
         try:
             features_path = os.environ["MOLMIMIC_FEATURES"]

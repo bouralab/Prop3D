@@ -13,15 +13,14 @@ from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
 from toil.realtimeLogger import RealtimeLogger
 
 def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domNo=None, work_dir=None):
-    from molmimic.common.features import ProteinFeaturizer
+    from molmimic.common.featurizer import ProteinFeaturizer
 
-    if work_dir is None:
+    if work_dir is None and job is not None:
         work_dir = job.fileStore.getLocalTempDir()
 
-    if not os.path.isdir(work_dir):
+    if work_dir is None or not os.path.isdir(work_dir):
         work_dir = os.getcwd()
 
-    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
     out_store = IOStore.get("aws:us-east-1:molmimic-structure-features")
 
@@ -63,6 +62,7 @@ def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domN
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
+        raise
         fail_key = "{}_error.fail".format(key)
         fail_file = os.path.join(work_dir, os.path.basename(key))
         with open(fail_file, "w") as f:
