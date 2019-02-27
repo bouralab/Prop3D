@@ -102,3 +102,42 @@ def get_centroid(log_file, work_dir=None, docker=True, job=None):
                     best_centroid_file = pdb_file
 
     return best_centroid_file
+
+def get_hierarchical_tree(log_file):
+    import networkx as nx
+    nx_tree = nx.DiGraph()
+    parse_tree = False
+
+    with open(log_file) as log:
+        for line in log:
+            job.log("LINE: {}".format(line.rstrip()))
+            if not parse_tree and line.startswith("INFO  : Hierarchical Tree"):
+                parse_tree = True
+                next(log)
+                next(log)
+            elif parse_tree and line.startswith("INFO  : ="):
+                break
+            elif parse_tree:
+                _, node, info = line.rstrip().split(":")
+                node = int(node.strip())
+                nx_tree.add_node(node)
+
+                fields = [f.strip() for f in info.split()]
+                item2, item2 = map(int, fields[:2])
+                distance = float(fields[2])
+
+                if item1>0 and item2>0:
+                    pdb1, pdb2 = fields[3:5]
+                    nx_tree.add_node(item1, pdb=pdb1)
+                    nx_tree.add_node(item2, pdb=pdb2)
+                elif item1>0 and item2<0:
+                    #Node 2 already in graph
+                    pdb1 = fields[3]
+                    nx_tree.add_node(item1, pdb=pdb1)
+                elif item1<0 and item2>0:
+                    #Node 1 already in graph
+                    pdb2 = fields[3]
+                    nx_tree.add_node(item2, pdb=pdb2)
+
+                nx_tree.add_edge(node, item1)
+                nx_tree.add_edge(node, item2)

@@ -10,27 +10,28 @@ except ImportError:
 memory = Memory(verbose=0)
 
 @memory.cache
-def run_dssp(struct, modified=None):
-    full_pdb_path = struct.path
-    pdb_path = os.path.basename(full_pdb_path)
-    work_dir = os.path.dirname(full_pdb_path)
+def run_dssp(biopdb, pdb_path, work_dir=None, job=None):
+    work_dir = work_dir or os.getcwd()
 
-    if apiDockerCall is not None and struct.job is not None:
-        work_dir = job.fileStore.getLocalTempDir()
-        parameters = ['-i', os.path.join("/data", pdb_path), '-o', os.path.join("/data", pdb_path+".dssp")]
-        apiDockerCall(struct.job,
+    if apiDockerCall is not None and job is not None:
+        if not os.path.abspath(os.path.dirname(pdb_path)) == os.path.abspath(work_dir):
+            shutil.copy(pdb_file, work_dir)
+        parameters = ['-i', os.path.join("/data", os.path.basename(pdb_path)),
+            '-o', os.path.join("/data", os.path.basename(pdb_path)+".dssp")]
+        apiDockerCall(job,
                       image='edraizen/dssp:latest',
                       working_dir=work_dir,
                       parameters=parameters)
-        dssp = DSSP(struct.structure[0], os.path.join(work_dir, pdb_path+".dssp"), dssp='dssp')
+        dssp = DSSP(biopdb[0], os.path.join(work_dir,
+            os.path.basename(pdb_path)+".dssp"), file_type='DSSP')
     else:
         try:
-            dssp = DSSP(struct.structure[0], full_pdb_path, dssp='dssp')
+            dssp = DSSP(biopdb, pdb_path, dssp='dssp')
         except KeyboardInterrupt:
             raise
         except NameError:
             dssp = None
         except Exception as e:
-            raise InvalidPDB("Cannot run dssp for {}".format(self.id))
+            raise InvalidPDB("Cannot run dssp for {}".format(pdb_path))
 
     return dssp

@@ -24,7 +24,8 @@ except:
     #Allow module to load without scn to read data
     scn = None
 
-from molmimic.biopdbtools import Structure, InvalidPDB
+from molmimic.common.structure import InvalidPDB
+from molmimic.common.voxels import ProteinVoxelizer
 from itertools import product, izip
 
 def dense_collate(data, batch_size=1):
@@ -135,40 +136,37 @@ class IBISDataset(Dataset):
     cdd : str
         Name of CDD Protein Family
     """
-    def __init__(self, dataset_name, cdd, ppi_status="mixed", ppi_type="permanent", clustered=True):
+    def __init__(self, data, data_directory, sfam_id=None, ppi_status="mixed", ppi_type="permanent",
+      autoencoder=False,):
         assert ppi_status in ["mixed", "observed", "inferred"]
-        assert ppi_type in ["all", "strong", "weak_transient", "transient"]
-        self.dataset_name = dataset_name
-        self.cdd = cdd.replace("/", "")
+        assert ppi_type in ["all", "permanent", "weak_transient", "transient"]
+        self.data_directory = data_directory
+        self.sfam_id = sfam_id
         self.ppi_status = ppi_status
         self.ppi_type = ppi_type
+        self.autoencoder = autoencoder
+
+        self.truth_key = "features" if autoencoder else "truth"
+
+        self.structure_path = os.path.join(data_directory, "structures")
+        self.features_path = os.path.join(data_directory, "features")
+        self.truth_path = os.path.join(data_directory, "truth")
 
         interfaces_path = os.path.join(get_structures_path(dataset_name), cdd, cdd)
-
-        if ppi_status == "mixed":
-            interfaces_path += ".mixed"
-
-        if clustered:
-            interfaces_path += ".clustered"
 
         self.X = pd.read_hdf(unicode(interfaces_path+".h5"), ppi_type)
 
     def __getitem__(self, index, verbose=True):
         datum = self.X.iloc[index]
-        pdb_file = "{}_{}_sdi{}_d{}.pdb".format(datum.pdb, datum.chain, datum.sdi, data.domNo)
-        pdb_file = os.path.join(get_structures_path(self.dataset_name), self.cdd, "clustered", pdb_file)
+
+        pdb_file = os.path.join(self.data_directory, datum["structure"])
+        feature_file = os.path.join(self.data_directory, datum["features"])
+        truth_file = os.path.join(self.data_directory, datum[truth_key])
 
         try:
-            indices, data, truth = Structure.features_from_string(
-                file                  = pdb_file,
-                pdb                   = datum.pdb,
-                chain                 = datum.chain,
-                sdi                   = datum.sdi,
-                domain                = datum.domNo,
-                resi                  = datum.resi,
-                rotate                = True,
-                use_deepsite_features = True
-            )
+            voxelizer = ProteinVoxelizer(pdb_file, datum.pdb, datum.chain,
+                datum.sdi, datum.domNo)
+            indices, data, truth = voxelizer.map_atoms_to_voxel_space(autoencoder=self.autoencoder)
         except (KeyboardInterrupt, SystemExit):
             raise
         except InvalidPDB, RuntimeError:
@@ -185,8 +183,7 @@ class IBISDataset(Dataset):
                 "chain":        datum.chain,
                 "sdi":          datum.sdi,
                 "domain":       datum.domNo,
-                "dataset_name": self.dataset_name,
-                "cdd":          self.cdd
+                "cdd":          self.sfam_id
             }
         except:
             trace = traceback.format_exc()
@@ -203,10 +200,8 @@ class IBISDataset(Dataset):
             "chain":        datum.chain,
             "sdi":          datum.sdi,
             "domain":       datum.domNo,
-            "dataset_name": self.dataset_name,
-            "cdd":          self.cdd
+            "cdd":          self.sfam_id
         }
-
 
         return sample
 

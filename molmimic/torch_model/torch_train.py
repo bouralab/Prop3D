@@ -34,7 +34,16 @@ from torchviz import dot
 import subprocess
 subprocess.call("python -c 'import visdom.server as vs; vs.main()' &", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=True, save_final=True, only_aa=False, only_atom=False, non_geom_features=False, use_deepsite_features=False, expand_atom=False, num_workers=None, num_epochs=30, batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001, learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8, course_grained=False, no_batch_norm=False, use_resnet_unet=False, unclustered=False, undersample=False, oversample=False, nFeatures=None, allow_feature_combos=False, bs_feature=None, bs_feature2=None, bs_features=None, stripes=False, data_parallel=False, dropout_depth=False, dropout_width=False, dropout_p=0.5, wide_model=False, cellular_organisms=False):
+def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=True,
+  save_final=True, only_aa=False, only_atom=False, non_geom_features=False,
+  use_deepsite_features=False, expand_atom=False, num_workers=None, num_epochs=30,
+  batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001,
+  learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8,
+  course_grained=False, no_batch_norm=False, use_resnet_unet=False, unclustered=False,
+  undersample=False, oversample=False, nFeatures=None, allow_feature_combos=False,
+  bs_feature=None, bs_feature2=None, bs_features=None, stripes=False, data_parallel=False,
+  dropout_depth=False, dropout_width=False, dropout_p=0.5, wide_model=False,
+  cellular_organisms=False, autoencoder=False, checkpoint_callback=None):
     if model_prefix is None:
         model_prefix = "./molmimic_model_{}".format(datetime.now().strftime('%Y-%m-%d_%H:%M:%S'))
 
@@ -79,7 +88,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
             cellular_organisms=cellular_organisms,
             random_features=random_features)
         nFeatures = datasets["train"].get_number_of_features()
-        nClasses = 2
+        nClasses = 2 if not autoencoder else nFeatures
 
         validation_batch_size = batch_size
     else:
@@ -322,22 +331,30 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     except Exception as e:
                         pass
 
-            graph_logger(mlog, "Train" if phase=="train" else "Test", epoch)
+            statsfile, graphs = graph_logger(mlog, "Train" if phase=="train" else "Test", epoch)
             mlog.reset_meter(epoch, "Train" if phase=="train" else "Test")
 
             if check_point:
                 torch.save(epoch, check_point_epoch_file)
                 torch.save(model.state_dict(), check_point_model_file)
+                if callable(checkpoint_callback):
+                    checkpoint_callback(epoch, statsfile, graphs, check_point_epoch_file,
+                        check_point_model_file)
+            elif callable(checkpoint_callback):
+                checkpoint_callback(epoch, statsfile, graphs, None, None)
 
     #stats.plot_final()
 
-    graph_logger(mlog, "Train" if phase=="train" else "Test", epoch, final=True)
+    statsfile, graphs = graph_logger(mlog, "Train" if phase=="train" else "Test", epoch, final=True)
 
     time_elapsed = time.time() - since
     print 'Training complete in {:.0f}m {:.0f}s'.format(time_elapsed/60, time_elapsed % 60)
 
-    if save_final:
-        torch.save(model.state_dict(), "{}.pth".format(model_prefix))
+    torch.save(model.state_dict(), "{}.pth".format(model_prefix))
+
+    if callable(checkpoint_callback):
+        checkpoint_callback(epoch, statsfile, graphs, check_point_epoch_file,
+            check_point_model_file)
 
     return model
 
@@ -475,6 +492,12 @@ def parse_args():
         "--unclustered",
         default=False,
         action="store_true",
+    )
+    parser.add_argument(
+        "--autoencoder",
+        default=False,
+        action="store_true",
+        help="Train an Autoencoder"
     )
     parser.add_argument(
         "--oversample",

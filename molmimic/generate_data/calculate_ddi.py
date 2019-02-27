@@ -417,7 +417,9 @@ def process_sfam(job, sfam_id, int_sfams=None, observed=True, min_cluster=0, cor
     int_type = "observed" if observed else "inferred"
     work_dir = job.fileStore.getLocalTempDir()
     ddi_store = IOStore.get("aws:us-east-1:molmimic-ddi")
-    interface_store = IOStore.get("aws:us-east-1:molmimic-interfaces")
+    interface_store = IOStore.get("aws:us-east-1:molmimic-interfaces-1")
+
+
 
     interfaces_key = "{s}/{s}.{o}_interactome".format(
         s=sfam_id, o="observed" if observed else "inferred")
@@ -431,6 +433,10 @@ def process_sfam(job, sfam_id, int_sfams=None, observed=True, min_cluster=0, cor
         igroups = interfaces.fillna(-1.).groupby(["mol_superfam_id", "int_superfam_id"])
 
         for (mol_sfam, int_sfam), group in igroups:
+            ddi_base = "{}_{}".format(int(mol_sfam), int(int_sfam))
+            if any([k for k in ddi_store.list_input_directory(ddi_base) if k.endswith("results.csv")]):
+                continue
+
             if group.shape[0] < min_cluster:
                 #Only keep groups with more than threshold
                 continue
@@ -462,8 +468,6 @@ def process_sfam(job, sfam_id, int_sfams=None, observed=True, min_cluster=0, cor
             else:
                 centroid_index, centroid = cluster(job, mol_sfam, int_sfam, files, work_dir=work_dir)
 
-            ddi_base = "{}_{}".format(int(mol_sfam), int(int_sfam))
-
             for i, ((sdi_key, row), file) in enumerate(izip(sdi_group, files)):
                 if i == centroid_index:
                     mol_file, mol_resi, int_file, int_resi = process_interface(job, row.iloc[0], int_type, work_dir=work_dir)
@@ -485,7 +489,7 @@ def process_sfam(job, sfam_id, int_sfams=None, observed=True, min_cluster=0, cor
                     all_results = pd.concat([
                         original_complex.set_prefix(),
                         simple_complex.set_prefix(),
-                        advanced_complex.set_prefix()], ignore_index=True).to_frame().T
+                        advanced_complex.set_prefix()]).to_frame().T
                     all_results_path = os.path.join(work_dir, "{}.csv".format(row.iloc[0]["obs_int_id"]))
                     all_results.to_csv(all_results_path)
 
@@ -555,12 +559,12 @@ def process_sfams(job, max_sfams=300, memory="1G"):
             #break
 
     RealtimeLogger.info("{} starting domains".format(len(sfams)))
-    mol_sfam = list(sfams.keys())[pd.np.random.randint(len(sfams))]
-    int_sfams = [next(iter(sfams[mol_sfam]))]
-    job.addChildJobFn(process_sfam, mol_sfam, int_sfams)
+    #mol_sfam = list(sfams.keys())[pd.np.random.randint(len(sfams))]
+    #int_sfams = sfams[mol_sfam]
+    #job.addChildJobFn(process_sfam, mol_sfam, int_sfams)
 
-    # for mol_sfam, int_sfams in sfams.iteritems():
-    #     job.addChildJobFn(process_sfam, mol_sfam, int_sfams)
+    for mol_sfam, int_sfams in sfams.iteritems():
+        job.addChildJobFn(process_sfam, mol_sfam, int_sfams)
 
 def best_sfams(job, all_counts, max_sfams=300):
     import json

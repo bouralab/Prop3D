@@ -59,11 +59,11 @@ def SubprocessChain(commands, output):
         raise RuntimeError
     return final_proc.communicate()
 
-def get_file(job, prefix, path_or_fileStoreID):
+def get_file(job, prefix, path_or_fileStoreID, work_dir=None):
     if isinstance(path_or_fileStoreID, str) and os.path.isfile(path_or_fileStoreID):
-        return path_or_pdbFileStoreID
+        return path_or_fileStoreID
     else:
-        work_dir = job.fileStore.getLocalTempDir()
+        work_dir = work_dir or job.fileStore.getLocalTempDir()
         new_file = os.path.join(work_dir, prefix)
 
         if isinstance(path_or_fileStoreID, (toil.fileStore.FileID, str)):

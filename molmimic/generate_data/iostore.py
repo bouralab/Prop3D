@@ -42,8 +42,8 @@ try:
     import boto3
     import botocore
     have_s3 = True
-    os.environ["AWS_SECRET_KEY"] = "AKIAJCI3AJKBTBRO6RJA"
-    os.environ["AWS_SECURITY_TOKEN"] = "XB81NeUZsPRHLhMkViFSB4BRAnB0vd1J2U2doXte"
+    # os.environ["AWS_SECRET_KEY"] = "AKIAJCI3AJKBTBRO6RJA"
+    # os.environ["AWS_SECURITY_TOKEN"] = "XB81NeUZsPRHLhMkViFSB4BRAnB0vd1J2U2doXte"
 except ImportError:
     have_s3 = False
     pass
@@ -728,7 +728,7 @@ class S3IOStore(IOStore):
                         CreateBucketConfiguration={'LocationConstraint': self.region},
                     )
 
-    @backoff
+    #@backoff
     def read_input_file(self, input_path, local_path):
         """
         Get input from S3.

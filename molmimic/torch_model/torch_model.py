@@ -393,3 +393,41 @@ class Dropout(nn.Module):
         return output
     def input_spatial_size(self, out_size):
         return out_size
+
+class SuperfamilyAutoEncoder(nn.Module):
+    def __init__(self, size, nFeaturesTotal):
+        self.dimension = 3
+        self.reps = 1 #Conv block repetition factor
+        self.m = 32 #Unet number of features
+        self.nPlanes = [m, 2*m, 3*m, 4*m, 5*m] #UNet number of features per level
+        nn.Module.__init__(self)
+        self.sparseModel = scn.Sequential().add(
+           scn.InputLayer(self.dimension, torch.LongTensor([size]*3), mode=3)).add(
+           scn.SubmanifoldConvolution(self.dimension, 1, self.m, 3, False)).add(
+           scn.UNet(self.dimension, self.reps, self.nPlanes, residual_blocks=False, downsample=[2,2])).add(
+           scn.BatchNormReLU(self.m)).add(
+           scn.OutputLayer(self.dimension))
+        self.linear = nn.Linear(m, nFeaturesTotal)
+    def forward(self,x):
+        x=self.sparseModel(x)
+        x=self.linear(x)
+        return x
+
+class SuperfamilySegmenter(nn.Module):
+    def __init__(self, size):
+        self.dimension = 3
+        self.reps = 1 #Conv block repetition factor
+        self.m = 32 #Unet number of features
+        self.nPlanes = [m, 2*m, 3*m, 4*m, 5*m] #UNet number of features per level
+        nn.Module.__init__(self)
+        self.sparseModel = scn.Sequential().add(
+           scn.InputLayer(self.dimension, torch.LongTensor([size]*3), mode=3)).add(
+           scn.SubmanifoldConvolution(self.dimension, 1, self.m, 3, False)).add(
+           scn.UNet(self.dimension, self.reps, self.nPlanes, residual_blocks=False, downsample=[2,2])).add(
+           scn.BatchNormReLU(self.m)).add(
+           scn.OutputLayer(self.dimension))
+        self.linear = nn.Linear(m, 2)
+    def forward(self,x):
+        x=self.sparseModel(x)
+        x=self.linear(x)
+        return x

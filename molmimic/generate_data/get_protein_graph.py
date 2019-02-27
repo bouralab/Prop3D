@@ -30,8 +30,7 @@ def angle_between(v1, v2):
     v2_u = unit_vector(v2)
     return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
 
-
-def calculate_neighbors(struct, d_cutoff=21.0, level="R"):
+def calculate_neighbors(struct, d_cutoff=100.0, level="R"):
     """
     Calculates intermolecular contacts in a parsed struct object.
     Modified from haddocking/prodigy
@@ -67,8 +66,6 @@ def get_node_features(r):
     except (KeyError, IndexError):
         return [0]*20
 
-    #Can add charge, surface area soon
-
 def get_edge_features(r1, r2):
     r1_pos = np.array([a.get_coords() for a in r1]).mean()
     r2_pos = np.array([a.get_coords() for a in r2]).mean()
@@ -89,7 +86,7 @@ def get_edge_features(r1, r2):
         "chirality":chirality
     }
 
-def get_protein_graph(sfam_id, pdb, chain, sdi, domNo, d_cuttoff=21.0):
+def get_protein_graph(sfam_id, pdb, chain, sdi, domNo, d_cuttoff=100.0):
     """Get a protein graph using IBIS information. All domains have been spit out
     from their full chain structures and can be accessed using sfam_id, pdb,
     chain, sdi, and domNo.

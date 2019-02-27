@@ -17,12 +17,14 @@ except ImportError:
 
 memory = Memory(verbose=0)
 
-def make_apbs_input(pqr_file):
+def make_apbs_input(pqr_file, output_prefix=None):
     ps = Psize()
     ps.runPsize(pqr_file)
     cglen = "{:.2f} {:.2f} {:.2f}".format(*ps.getCoarseGridDims())
     fglen = "{:.2f} {:.2f} {:.2f}".format(*ps.getFineGridDims())
     dime = "{:d} {:d} {:d}".format(*ps.getFineGridPoints())
+
+    output_prefix = output_prefix or pqr_file+"_apbs_output"
 
     return """read
     mol pqr {pqr}
@@ -51,14 +53,13 @@ elec
 end
 quit
 """.format(
-    pqr=pqr_file,
+    pqr=os.path.basename(pqr_file),
     dime=dime,
     cglen=cglen,
     fglen=fglen,
     out=output_prefix
     )
 
-@memory.cache
 def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=True, job=None):
     """Run APBS. Calculates correct size using Psize and defualt from Chimera
     """
@@ -68,10 +69,11 @@ def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=
     full_pqr_path = pqr_file
     pqr_path = os.path.basename(full_pqr_path)
     file_prefix = os.path.splitext(pqr_path)[0]
+    output_prefix = os.path.join(work_dir, "{}.apbs_output".format(file_prefix))
     if input_file is not None and os.path.isfile(input_file):
         keep_input = True
     else:
-        input_file_contents = make_apbs_input(full_pqb_path)
+        input_file_contents = make_apbs_input(full_pqr_path, "{}.apbs_output".format(file_prefix))
 
 
     if docker and apiDockerCall is not None and job is not None:
@@ -79,17 +81,25 @@ def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=
         input_file_short = "{}.apbs_input".format(file_prefix)
         output_prefix = "{}.apbs_output".format(file_prefix)
 
-        if input_file is not None and not os.path.abspath(os.path.dirname(input_file)) == os.path.abspath(work_dir):
-            shutil.copy(input_file, work_dir)
+        if input_file is not None:
+            if not os.path.abspath(os.path.dirname(input_file)) == os.path.abspath(work_dir):
+                shutil.copy(input_file, os.path.join(work_dir, input_file_short))
+            else:
+                input_file_short = os.path.basename(input_file)
         else:
-    		with open(input_file_name, "w") as f:
-    			f.write(input_file_contents)
+            input_file = input_file_name
+            with open(input_file, "w") as f:
+                f.write(input_file_contents)
+
+        if not os.path.abspath(os.path.dirname(pqr_file)) == os.path.abspath(work_dir):
+            shutil.copy(pqr_file, work_dir)
 
         try:
             parameters = ["/data/{}".format(input_file_short)]
             apiDockerCall(job,
                           image='edraizen/apbs:latest',
-                          working_dir=work_dir,
+                          working_dir="/data",
+                          volumes={work_dir:{"bind":"/data", "mode":"rw"}},
                           parameters=parameters)
             output_prefix = os.path.join(work_dir, output_prefix)
         except (SystemExit, KeyboardInterrupt):
@@ -112,11 +122,11 @@ def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=
         except Exception as e:
             raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
 
-    if not keep_input:
+    if not keep_input and input_file is not None and os.path.isfile(input_file):
         os.remove(input_file)
 
     out_file = output_prefix+".txt"
-    assert os.path.isfile(out_file)
+    assert os.path.isfile(out_file), "Outfile not found: {}".format(os.listdir(work_dir))
     return out_file
 
 def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir=None, docker=True, job=None):
@@ -130,19 +140,16 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
     _parameters = list(parameters) if isinstance(parameters, (list, tuple)) else []
     _parameters.append("--ff={}".format(ff))
     if whitespace:
-        _parameters.add("--whitespace")
+        _parameters.append("--whitespace")
 
     if docker and apiDockerCall is not None and job is not None:
         #Docker can only read from work_dir
         if not os.path.abspath(os.path.dirname(pdb_file)) == os.path.abspath(work_dir):
-            print "NOT IN WORK_DIR! MOVING {} TO {}".format(pdb_file, work_dir)
             shutil.copy(pdb_file, work_dir)
-        else:
-            print "PDB in WORK_DIR"
-        print "Running docker in", work_dir
+
         _parameters += ["/data/{}".format(pdb_path), "/data/{}.pqr".format(pdb_path)]
         try:
-            print apiDockerCall(job,
+            output = apiDockerCall(job,
                           image='edraizen/pdb2pqr:latest',
                           working_dir=work_dir,
                           parameters=_parameters)
@@ -150,17 +157,11 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
         except (SystemExit, KeyboardInterrupt):
             raise
         except:
-            print "LS of /data", apiDockerCall(job,
-                          image='edraizen/pdb2pqr:latest',
-                          working_dir=work_dir,
-                          entrypoint="ls",
-                          parameters=["-la", "/data"])
             raise
             #return run_pdb2pqr(pdb_file, whitespace=whitespace, ff=ff,
             #    parameters=parameters, work_dir=work_dir, docker=False)
 
     else:
-        print "HERE"
         pqr_file = os.path.join(work_dir, pqr_file)
         command = ["/usr/share/pdb2pqr/pdb2pqr.py"]+parameters
         command += [full_pdb_path, pqr_file]
@@ -179,7 +180,8 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
 
 @memory.cache
 def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
-  pdb2pqr_parameters=None, apbs_input_file=None, apbs_keep_input=False, work_dir=None, docker=True, job=None, clean=True):
+  pdb2pqr_parameters=None, apbs_input_file=None, apbs_keep_input=False,
+  work_dir=None, docker=True, job=None, clean=True):
     """Run PDB2PQR and APBS to get charge and electrostatics for each atom
 
     Parameters
@@ -197,8 +199,12 @@ def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
     charge, and
     electrostatic potential
     """
-    pqr_path = run_pdb2pqr(pdb_path, whitespace=pdb2pdb2pqr_whitespace,
-        ff=pdb2pqr_ff, parameters=pdb2pqr_parameters, work_dir=work_dir, docker=docker, job=job)
+    pqr_path = run_pdb2pqr(pdb_path, whitespace=pdb2pqr_whitespace,
+        ff=pdb2pqr_ff, parameters=pdb2pqr_parameters, work_dir=work_dir,
+        docker=docker, job=job)
+
+    assert os.path.isfile(pqr_path)
+
     atom_pot_file = run_apbs(pqr_path, input_file=apbs_input_file,
         keep_input=apbs_keep_input, work_dir=work_dir, docker=docker, job=job)
 
@@ -208,40 +214,40 @@ def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
         for _ in xrange(4):
             next(atom_pot)
 
-            for line in pqr:
-                if not line.startswith("ATOM  ") or line.startswith("HETATM"): continue
+        for line in pqr:
+            if not line.startswith("ATOM  ") or line.startswith("HETATM"): continue
 
-                electrostatic_potential = float(next(atompot))
+            electrostatic_potential = float(next(atom_pot))
 
-                fields = line.rstrip().split()
-                if len(fields) == 11:
-                    recordName, serial, atomName, residueName, chainID, residueNumber, X, Y, Z, charge, radius = fields
-                elif len(fields) == 10:
-                    recordName, serial, atomName, residueName, residueNumber, X, Y, Z, charge, radius = fields
+            fields = line.rstrip().split()
+            if len(fields) == 11:
+                recordName, serial, atomName, residueName, chainID, residueNumber, X, Y, Z, charge, radius = fields
+            elif len(fields) == 10:
+                recordName, serial, atomName, residueName, residueNumber, X, Y, Z, charge, radius = fields
+            else:
+                raise RuntimeError("Invalid PQR File")
+
+            try:
+                resseq = int("".join([i for i in residueNumber if i.isdigit()]))
+            except ValueError:
+                continue
+
+            icode = "".join([i for i in residueNumber if not i.isdigit()])
+            if icode == "":
+                icode = " "
+
+            if recordName == "HETATM":  # hetero atom flag
+                if residueName in ["HOH", "WAT"]:
+                    hetero_flag = "W"
                 else:
-                    raise RuntimeError("Invalid PQR File")
+                    hetero_flag = "H_{}".format(residueName)
+            else:
+                hetero_flag = " "
 
-                try:
-                    resseq = int("".join([i for i in residueNumber if i.isdigit()]))
-                except ValueError:
-                    continue
+            residue_id = (hetero_flag, resseq, icode)
 
-                icode = "".join([i for i in residueNumber if not i.isdigit()])
-                if icode == "":
-                    icode = " "
-
-                if recordName == "HETATM":  # hetero atom flag
-                    if residueName in ["HOH", "WAT"]:
-                        hetero_flag = "W"
-                    else:
-                        hetero_flag = "H_{}".format(residueName)
-                else:
-                    hetero_flag = " "
-
-                residue_id = (hetero_flag, resseq, icode)
-
-                key = (residue_id, (atomName.strip(), ' '))
-                result[key] = (float(charge), electrostatic_potential)
+            key = (residue_id, (atomName.strip(), ' '))
+            result[key] = (float(charge), electrostatic_potential)
 
     if clean:
         os.remove(pqr_path)

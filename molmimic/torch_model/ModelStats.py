@@ -117,6 +117,8 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
     with open("{}_epoch{}_stats.txt".format(phase, epoch), "a+") as statsfile:
         print >> statsfile, format_meter(logger, phase)
 
+    return statsfile
+
     # global values
     # for meter_name, value in logger.meter.iteritems():
     #     val = value.value()
@@ -171,12 +173,16 @@ def graph_logger(logger, phase, epoch, final=False, meterlist=None, graph=False)
         stats_fname = "Sparse3DUnet_statistics_{}.tsv".format(phase)
         with open(stats_fname, "a") as stats_file:
             print >> stats_file, "epoch {} {}".format(epoch, format_meter(logger, phase))
+    else:
+        stats_fname = None
 
+    pdfs = []
     if graph:
         for meter_name in meterlist:
             if meter_name in ['confusion', 'histogram', 'image']:
                 continue
-            pp = PdfPages('{}_epoch{}_{}.pdf'.format(phase if not final else "final", epoch, meter_name))
+            pdf_file = '{}_epoch{}_{}.pdf'.format(phase if not final else "final", epoch, meter_name)
+            pp = PdfPages(pdf_file)
             f, ax = fig, ax = plt.subplots(figsize=(8.5,11))
             if final:
                 f.suptitle("Sparse 3D Unet {} Final - {}".format(phase.title(), meter_name), fontsize=14)
@@ -193,10 +199,13 @@ def graph_logger(logger, phase, epoch, final=False, meterlist=None, graph=False)
             plt.cla()
             del f
             del ax
+            pdfs.append(pdf)
 
     global values
     del values
     values = {}
+
+    return stats_fname, pdfs
 
 class ModelStats(object):
     all_dice = {"train":[], "val":[]}
