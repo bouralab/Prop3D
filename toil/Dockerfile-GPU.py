@@ -138,11 +138,6 @@ print(heredoc('''
 
     RUN pip install toil[all]
 
-    # This component changes most frequently and keeping it last maximizes Docker cache hits.
-    COPY {sdistName} .
-    RUN pip install {sdistName}[all]
-    RUN rm {sdistName}
-
     # We intentionally inherit the default ENTRYPOINT and CMD from the base image, to the effect
     # that the running appliance just gives you a shell. To start the Mesos master or slave
     # daemons, the user # should override the entrypoint via --entrypoint.

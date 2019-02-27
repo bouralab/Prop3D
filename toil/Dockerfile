@@ -62,11 +62,6 @@ ENV TOIL_WORKDIR /var/lib/toil
 
 RUN pip install toil[all]
 
-# This component changes most frequently and keeping it last maximizes Docker cache hits.
-COPY /Users/ed4bu/Dropbox/Research/Bourne/molmimic-dev/molmimic/toil .
-RUN pip install /Users/ed4bu/Dropbox/Research/Bourne/molmimic-dev/molmimic/toil[all]
-RUN rm /Users/ed4bu/Dropbox/Research/Bourne/molmimic-dev/molmimic/toil
-
 # We intentionally inherit the default ENTRYPOINT and CMD from the base image, to the effect
 # that the running appliance just gives you a shell. To start the Mesos master or slave
 # daemons, the user # should override the entrypoint via --entrypoint.
@@ -94,4 +89,3 @@ RUN sed -i "s%torch.cuda.is_available()%True%g" setup.py
 RUN bash build.sh
 
 WORKDIR /
-
