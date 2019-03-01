@@ -151,7 +151,7 @@ class Complex(Select):
                     structure.residueNumber(i), structure.atomName(i))
                 complex_asa = result.atomArea(i)
                 monomer_asa = chain1.atomArea(i if i<sep_atoms else i-sep_atoms+1)
-                at_bsa = monomer_asa-complex_asa
+                at_bsa = complex_asa-monomer_asa
                 bsa[at_id] = at_bsa
             ppi_type = None
 

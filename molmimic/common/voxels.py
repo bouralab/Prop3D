@@ -393,22 +393,107 @@ class ProteinVoxelizer(Structure):
 
         return self.atom_tree.search(grid, radius, level=level)
 
-def voxels_to_unknown_structure(coords, data, bucket_size=10):
+def voxels_to_unknown_structure(coords, data, bucket_size=10, work_dir=None, job=None):
     from Bio.PDB.kdtrees import KDTree
+    from sklearn.metrics.pairwise import euclidean_distances
+    from molmimic.parsers.MODELLER import run_ca2model
+
     assert bucket_size > 1
     assert self.coords.shape[1] == 3
+
+    if work_dir is None:
+        work_dir = os.getcwd()
+
+     _a = "{:6s}{:5d} {:<4s}{:1s}{:3s} {:1s}{:4d}{:1s}   {:8.3f}{:8.3f}{:8.3f}"
+    _a += "{:6.2f}{:6.2f}      {:<4s}{:<2s}{:2s}"
+
+    #Initalize KD-Tree
     kdt = KDTree(coords, bucket_size)
-    neighbors = kdt.neighbor_search(2.75)
+
+    #Find all voxels within 2.75 Angstroms from eachother
+    #and save all CA that are nearby
+    neighbors = kdt.neighbor_search(1) #2.75
+    ca_atoms = []
+    residue_types = []
+    _charges = []
+
+    all_atoms = []
+
     for neighbor in neighbors:
         i1 = neighbor.index1
         i2 = neighbor.index2
         voxel_1 = data[i1]
         voxel_2 = data[i2]
 
-        atomtype_1 = voxel_1[13:18]
-        atomtype_2 = voxel_2[13:18]
+        atomtype_1 = voxel_1[:13]
+        atomtype_2 = voxel_2[:13]
+        restype_1 = voxel_1[40:61]
+        restype_2 = voxel_2[40:61]
+        charge_1 = voxels_1[19]
+        charge_2 = voxels_2[19]
 
-    #Refold using rosetta CA-CA??
+        isbond_1 = sum(atomtype_1)>1
+        isbond_2 = sum(atomtype_2)>1
+
+        if atomtype_1[2] == atomtype_2[2]:
+            #From same reidue
+
+        if atomtype_1[2] == 1 and atomtype_2[2] == 1:
+            #Both CA
+            for i, ca_atom in enumerate(ca_atoms):
+                restype_i = residue_types[i]
+                if i1 in ca_atom:
+                    assert restype_2 == restype_i
+                    ca_atom.append(i2)
+                    break
+                elif i2 in ca_atom:
+                    assert restype_1 == restype_i
+                    ca_atom.append(i1)
+                    break
+            else:
+                #Neither in an existing ca_atom
+                ca_atoms.append([i1, i2])
+                assert restype_1==restype_2
+                residue_types.append(restype_1)
+                _charges.append(charge_1)
+
+    #Find all CA centers
+    ca_centers = [np.mean(coords) for coords in ca_atoms]
+    ca_distances = euclidean_distances(ca_centers)
+
+    #Organize CA by distance and sort by backbine order
+    backbone = np.sort(ca_distances)
+    backbone_idx = np.argsort(ca_distances)
+
+    #Sort residue types by backbone order
+    residue_types = np.array(residue_types)
+    residues = residue_types[backbone_idx]
+
+    #Sort charges by backbone order
+    _charges = np.array(_charges)
+    charges = _charges[backbone_idx]
+
+    #Write out CA model
+    ca_model_file = os.path.join(work_dir, "temp.pdb")
+    with open(ca_model_file, "w") as ca_pdb:
+        for i, (residue_type, charge, (x, y, z)) in enumerate(zip(residues, charges, backbone)):
+            atom_line = _a.format("ATOM", i, "CA", "", residue_type, "A", i, "",
+                x, y, z, 1.0, 20.0, "", "C", charge)
+            print(atom_line, file=ca_pdb)
+        print("TER", file=ca_pdb)
+
+    #Build full model using MODELLER
+    try:
+        full_model_file = run_ca2model(ca_model_file, "A", work_dir=work_dir, job=job)
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as e2:
+        raise
+
+    #Turn coords into density map
+
+    #Fit into density
+
 
 if __name__ == "__main__":
   import sys
