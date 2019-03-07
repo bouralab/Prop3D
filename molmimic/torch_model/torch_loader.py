@@ -174,6 +174,9 @@ class IBISDataset(Dataset):
         self.X = X
 
         self.truth_key = "features" if autoencoder else "truth"
+        
+        one_hot = ((0,18), (20,23), (24, 26), (27, 30), (31, 34), (35,37), (38,70), (72,73))
+        self.one_hot = [n for start, stop in one_hot for n in range(start, stop)]
 
         self.epoch = 0
         self.batch = 0
@@ -228,7 +231,7 @@ class IBISDataset(Dataset):
         sample = {
             "indices":      indices,
             "data":         np.nan_to_num(data),
-            "truth":        truth,
+            "truth":        np.nan_to_num(truth),
             "id":      "{}/{}/{}_{}_sdi{}_d{}".format(self.sfam_id, \
                 datum.pdb[1:3].lower(), datum.pdb, datum.chain, datum.sdi, \
                 datum.domNo),
@@ -238,7 +241,11 @@ class IBISDataset(Dataset):
             "domain":       datum.domNo,
             "cdd":          self.sfam_id
         }
-
+        
+        if self.autoencoder:
+            sample["data"] = sample["data"][:, self.one_hot]
+            sample["truth"] = sample["truth"][:, self.one_hot]
+        
         return sample
 
     def __len__(self):
@@ -309,7 +316,7 @@ class MMDBDataset(Dataset):
         sample = {
             "indices":      indices,
             "data":         np.nan_to_num(data),
-            "truth":        truth,
+            "truth":        np.nan_to_num(truth),
             "pdb":          datum.pdb,
             "chain":        datum.chain,
             "sdi":          datum.sdi,
@@ -317,6 +324,7 @@ class MMDBDataset(Dataset):
             "dataset_name": self.dataset_name,
             "cdd":          self.cdd
         }
+        assert not np.isnan(sample["truth"]).any()
 
         return sample
 
@@ -482,13 +490,14 @@ class IBISDataset2(Dataset):
     def get_number_of_features(self):
         if self.random_features is not None:
             return self.random_features[0]
-        return Structure.number_of_features(
-            only_aa=self.only_aa,
-            only_atom=self.only_atom,
-            non_geom_features=self.non_geom_features,
-            use_deepsite_features=self.use_deepsite_features,
-            course_grained=self.course_grained
-            )
+        return 64
+#         return Structure.number_of_features(
+#             only_aa=self.only_aa,
+#             only_atom=self.only_atom,
+#             non_geom_features=self.non_geom_features,
+#             use_deepsite_features=self.use_deepsite_features,
+#             course_grained=self.course_grained
+#             )
 
     def __getitem__(self, index, verbose=True):
         pdb_chain = self.data.iloc[index]

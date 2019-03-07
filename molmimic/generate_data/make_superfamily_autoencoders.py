@@ -63,7 +63,7 @@ def start_sae(job, sfam_id, work_dir=None):
     # pdb_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
     # feature_store = IOStore.get("aws:us-east-1:molmimic-structure-features")
     sae_store = IOStore.get("aws:us-east-1:molmimic-structure-features")
-
+    
     # extensions = set(["atom.npy", "residue.npy", "edges.gz"])
     # done_files = lambda k: set([f.rsplit("_", 1)[1] for f in \
     #     feature_store.list_input_directory(k)])
@@ -78,6 +78,7 @@ def start_sae(job, sfam_id, work_dir=None):
     sfam_id = str(int(sfam_id))
     #for feature_key in feature_store.list_input_directory(sfam_id):
         #if feature_key.endswith("atom.npy"):
+    
     for feature_file in glob.glob(os.path.join(work_dir, "features", sfam_id, "*", "*_atom.npy")):
         if True:
             #data_key = feature_key[:-8]
@@ -94,7 +95,7 @@ def start_sae(job, sfam_id, work_dir=None):
             # if not os.path.isdir(os.path.dirname(pdb_file)):
             #     os.makedirs(os.path.dirname(pdb_file))
             # feature_store.read_input_file(pdb_key, pdb_file)
-            print(feature_file,feature_file[:-9])
+            #print(feature_file,feature_file[:-9])
             pdb, chain, sdi, domNo = os.path.basename(feature_file[:-9]).split("_")
             sdi, domNo = sdi[3:], domNo[1:]
 
@@ -119,12 +120,13 @@ def start_sae(job, sfam_id, work_dir=None):
     del data
 
     def callback(epoch, statsfile, graphs, model_file, epoch_file):
-        key = os.path.join(sfam_id, epoch)
-        sae_store.write_output_file(statsfile, os.path.join(key, statsfile))
-        sae_store.write_output_file(model_file, os.path.join(key, model_file))
-        sae_store.write_output_file(epoch_file, os.path.join(key, epoch_file))
-        for graph in graphs:
-            sae_store.write_output_file(graph, os.path.join(key, graph))
+        pass
+#         key = os.path.join(sfam_id, epoch)
+#         sae_store.write_output_file(statsfile, os.path.join(key, statsfile))
+#         sae_store.write_output_file(model_file, os.path.join(key, model_file))
+#         sae_store.write_output_file(epoch_file, os.path.join(key, epoch_file))
+#         for graph in graphs:
+#             sae_store.write_output_file(graph, os.path.join(key, graph))
 
 
     train(data_file, model_prefix="{}_sae".format(sfam_id), num_epochs=100,

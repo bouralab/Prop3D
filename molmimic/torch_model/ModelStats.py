@@ -33,55 +33,55 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
         tflat = target[:,c].cpu().view(-1)
         intersection = (iflat * tflat).sum()
 
-        dice = ((2. * intersection + smooth) / ((iflat.sum() + tflat.sum() + smooth))).data[0]
+        dice = ((2. * intersection + smooth) / ((iflat.sum() + tflat.sum() + smooth))).item()
         weighted_dice = weight[c]*dice
 
         iflat = (iflat > .7).long()
         tflat = tflat.long()
         mcc = metrics.matthews_corrcoef(tflat.data.numpy(), iflat.data.numpy())
-        precision = metrics.precision_score(tflat.data.numpy(), iflat.data.numpy())
+        #precision = metrics.precision_score(tflat.data.numpy(), iflat.data.numpy())#, average="samples")
         kappa = metrics.cohen_kappa_score(tflat.data.numpy(), iflat.data.numpy())
-        f1 =  metrics.f1_score(tflat.data.numpy(), iflat.data.numpy())
+        #f1 =  metrics.f1_score(tflat.data.numpy(), iflat.data.numpy())
 
-        logger.update_loss(np.array([dice]),          meter='dice_class{}'.format(c))
-        logger.update_loss(np.array([weighted_dice]), meter='weighted_dice_class{}'.format(c))
-        logger.update_loss(np.array([mcc]),           meter='mcc_class{}'.format(c))
-        logger.update_loss(np.array([precision]),     meter='precision_class{}'.format(c))
-        logger.update_loss(np.array([kappa]),         meter='kappa_class{}'.format(c))
-        logger.update_loss(np.array([f1]),            meter='f1_class{}'.format(c))
+        logger.update_loss(np.array([dice], dtype="float"),          meter='dice_class{}'.format(c))
+        logger.update_loss(np.array([weighted_dice], dtype="float"), meter='weighted_dice_class{}'.format(c))
+        logger.update_loss(np.array([mcc], dtype="float"),           meter='mcc_class{}'.format(c))
+        #logger.update_loss(np.array([precision], dtype="float"),     meter='precision_class{}'.format(c))
+        logger.update_loss(np.array([kappa], dtype="float"),         meter='kappa_class{}'.format(c))
+        #logger.update_loss(np.array([f1], dtype="float"),            meter='f1_class{}'.format(c))
 
         dice_combined += dice
         weighted_dice_combined += weighted_dice
         mcc_combined += mcc
-        precision_combined += precision
+        #precision_combined += precision
         kappa_combined += kappa
-        f1_combined += f1
+        #f1_combined += f1
 
         del iflat
         del tflat
         del intersection
         del mcc
-        del precision
+        #del precision
         del kappa
-        del f1
+        #del f1
 
-    logger.update_loss(np.array([dice_combined]),          meter='dice_sum')
-    logger.update_loss(np.array([weighted_dice_combined]), meter='weighted_dice_sum')
+    logger.update_loss(np.array([dice_combined], dtype="float"),          meter='dice_sum')
+    logger.update_loss(np.array([weighted_dice_combined], dtype="float"), meter='weighted_dice_sum')
 
     weighted_dice_combined /= weight_sum
-    logger.update_loss(np.array([weighted_dice_combined]), meter='weighted_dice_wavg')
+    logger.update_loss(np.array([weighted_dice_combined], dtype="float"), meter='weighted_dice_wavg')
 
     dice_combined /= float(n_classes)
     mcc_combined /= float(n_classes)
-    precision_combined /= float(n_classes)
+    #precision_combined /= float(n_classes)
     kappa_combined /= float(n_classes)
-    f1_combined /= float(n_classes)
+    #f1_combined /= float(n_classes)
 
-    logger.update_loss(np.array([dice_combined]),      meter='dice_avg')
-    logger.update_loss(np.array([mcc_combined]),       meter='mcc_avg')
-    logger.update_loss(np.array([precision_combined]), meter='precision_avg')
-    logger.update_loss(np.array([kappa_combined]),     meter='kappa_avg')
-    logger.update_loss(np.array([f1_combined]),        meter='f1_avg')
+    logger.update_loss(np.array([dice_combined], dtype="float"),      meter='dice_avg')
+    logger.update_loss(np.array([mcc_combined], dtype="float"),       meter='mcc_avg')
+    #logger.update_loss(np.array([precision_combined]), meter='precision_avg')
+    logger.update_loss(np.array([kappa_combined], dtype="float"),     meter='kappa_avg')
+    #logger.update_loss(np.array([f1_combined]),        meter='f1_avg')
 
     if n_classes == 2:
         result = (output>0.7).cpu().float()
@@ -95,16 +95,16 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
         dice = ((2. * intersection + smooth) / ((iflat.sum() + tflat.sum() + smooth))).data[0]
         weighted_dice = weight_sum*dice
         mcc = metrics.matthews_corrcoef(tflat.data.numpy(), iflat.data.numpy())
-        precision = metrics.precision_score(tflat.data.numpy(), iflat.data.numpy())
+        #precision = metrics.precision_score(tflat.data.numpy(), iflat.data.numpy())
         kappa = metrics.cohen_kappa_score(tflat.data.numpy(), iflat.data.numpy())
-        f1 = metrics.f1_score(tflat.data.numpy(), iflat.data.numpy())
+        #f1 = metrics.f1_score(tflat.data.numpy(), iflat.data.numpy())
 
-        logger.update_loss(np.array([dice]),          meter='dice_flat')
-        logger.update_loss(np.array([weighted_dice]), meter='weighted_dice_flat')
-        logger.update_loss(np.array([mcc]),           meter='mcc_flat')
-        logger.update_loss(np.array([precision]),     meter='precision_flat')
-        logger.update_loss(np.array([kappa]),         meter='kappa_flat')
-        logger.update_loss(np.array([f1]),            meter='f1_flat')
+        logger.update_loss(np.array([dice], dtype="float"),          meter='dice_flat')
+        logger.update_loss(np.array([weighted_dice], dtype="float"), meter='weighted_dice_flat')
+        logger.update_loss(np.array([mcc], dtype="float"),           meter='mcc_flat')
+        #logger.update_loss(np.array([precision]),     meter='precision_flat')
+        logger.update_loss(np.array([kappa], dtype="float"),         meter='kappa_flat')
+        #logger.update_loss(np.array([f1]),            meter='f1_flat')
 
         del result
         del results_flat

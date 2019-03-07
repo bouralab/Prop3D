@@ -37,7 +37,7 @@ subprocess.call("python -c 'import visdom.server as vs; vs.main()' &", shell=Tru
 def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=True,
   save_final=True, only_aa=False, only_atom=False, non_geom_features=False,
   use_deepsite_features=False, expand_atom=False, num_workers=None, num_epochs=30,
-  batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001,
+  batch_size=5, shuffle=True, use_gpu=True, initial_learning_rate=0.0001,
   learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8,
   course_grained=False, no_batch_norm=False, use_resnet_unet=False, unclustered=False,
   undersample=False, oversample=False, nFeatures=None, allow_feature_combos=False,
@@ -49,6 +49,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
     if num_workers is None:
         num_workers = multiprocessing.cpu_count()-1
+    print("Using {} cores".format(num_workers))
 
     since = time.time()
 
@@ -89,17 +90,17 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
             # cellular_organisms=cellular_organisms,
             # random_features=random_features
             )
-        nFeatures = 73 #datasets["train"].get_number_of_features()
+        nFeatures = 64 #73 #datasets["train"].get_number_of_features()
         nClasses = 2 if not autoencoder else nFeatures
 
         validation_batch_size = batch_size
     else:
         raise RuntimeError("Invalid training data")
 
-    if num_workers%2 == 0:
-        num_workers -= 1
-    num_workers /= 2
-    num_workers = 6
+#     if num_workers%2 == 0:
+#         num_workers -= 1
+#     num_workers /= 2
+#     num_workers = 6
 
     dataloaders = {name:dataset.get_data_loader(
         batch_size if dataset.train else validation_batch_size,
@@ -275,9 +276,12 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     use_size_average = False
                     weight = sample_weights if use_size_average else batch_weight
 
-                    loss_fn = torch.nn.CrossEntropyLoss(weight=weight)
-
-                    loss = loss_fn(outputs, torch.max(labels.features, 1)[1])
+                    if not autoencoder:
+                        loss_fn = torch.nn.CrossEntropyLoss(weight=weight)
+                        loss = loss_fn(outputs, torch.max(labels.features, 1)[1])
+                    else:
+                        loss_fn = torch.nn.BCELoss(weight=weight)
+                        loss = loss_fn(outputs, labels.features)
 
                     if draw_graph:
                         var_dot = dot.make_dot(loss)
@@ -291,7 +295,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     loss = criterion(outputs.cpu(), labels.cpu()) #, inputs.getSpatialLocations(), scaling)
                     stats.update(outputs.data.cpu().view(-1), labels.data.cpu().view(-1), loss.data[0])
 
-                mlog.update_loss(loss, meter='loss')
+                mlog.update_loss(np.array([loss.data.item()], dtype="float"), meter='loss')
                 mlog.update_meter(outputs, torch.max(labels.features, 1)[1], meters={'accuracy', 'map'})
                 add_to_logger(mlog,  "Train" if phase=="train" else "Test", epoch, outputs, labels.features, batch_weight, n_classes=nClasses)
 
