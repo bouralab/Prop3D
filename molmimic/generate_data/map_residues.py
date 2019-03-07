@@ -133,7 +133,7 @@ def get_sifts(pdb, job=None):
             raise InvalidSIFTS("Cannot open {}".format(pdb))
 
         with open(sifts_path) as f:
-	    yield f
+            yield f
 
         os.remove(sifts_path)
     else:

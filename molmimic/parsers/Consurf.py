@@ -1,3 +1,4 @@
+from __future__ import print_function
 import os
 from tempfile import mkdtemp
 import zipfile
@@ -36,7 +37,7 @@ def download_consurf_scores(pdb, chain, n_tries=3, consurf_path=None):
     if not os.path.exists(os.path.dirname(consurf_db_file)):
         os.makedirs(os.path.dirname(consurf_db_file))
     with open(consurf_db_file, "w") as f:
-        print >> f, r.content
+        print(r.content, file=f)
     return consurf_db_file
 
 def parse_consurf_line(line, pdb_id=None, consurf_path=None, download_all=False, done_consurf=None):

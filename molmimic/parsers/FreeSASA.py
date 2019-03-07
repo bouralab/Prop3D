@@ -11,7 +11,7 @@ except ImportError:
 	apiDockerCall = None
 
 	try:
-		from . import freesasa
+		import freesasa
 	except ImportError:
 		freesasa = None
 		if not subprocess.check_output(["which", "freesasa"]):
@@ -29,7 +29,7 @@ def run_freesasa_biopython(pdb_path):
 	global freesasa
 	if freesasa is None:
 		try:
-			from . import freesasa
+			import freesasa
 		except ImportError:
 			raise RuntimeError("Cannot use this method. Please save the pdb file and rerun with docker")
 

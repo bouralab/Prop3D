@@ -1,3 +1,4 @@
+from __future__ import print_function
 import sys
 import os
 import argparse
@@ -22,7 +23,7 @@ def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domN
         work_dir = os.getcwd()
 
     in_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
-    out_store = IOStore.get("aws:us-east-1:molmimic-structure-features")
+    out_store = IOStore.get("aws:us-east-1:molmimic-features")
 
     if [sfam_id, chain, sdi, domNo].count(None) == 0:
         #pdb_or_key is pdb
@@ -40,8 +41,7 @@ def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domN
         pdb_path = os.path.join(work_dir, os.path.basename(key)+".pdb")
         in_store.read_input_file(key+".pdb", pdb_path)
 
-        s = ProteinFeaturizer(pdb_path, pdb, chain, sdi=sdi, domNo=domNo,
-            work_dir=work_dir, job=job)
+        s = ProteinFeaturizer(pdb_path, pdb, chain, sdi, domNo, job, work_dir)
 
         _, atom_features = s.calculate_flat_features()
         RealtimeLogger.info("Finished atom features")
@@ -71,10 +71,10 @@ def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domN
         os.remove(fail_file)
 
 
-def calculate_features_for_sfam(job, sfam_id, further_parallelize=False):
+def calculate_features_for_sfam(job, sfam_id, further_parallelize=True):
     work_dir = job.fileStore.getLocalTempDir()
     pdb_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
-    out_store = IOStore.get("aws:us-east-1:molmimic-structure-features")
+    out_store = IOStore.get("aws:us-east-1:molmimic-features")
 
     extensions = set(["atom.npy", "residue.npy", "edges.gz"])
     done_files = lambda k: set([f.rsplit("_", 1)[1] for f in \
@@ -99,21 +99,21 @@ def calculate_features_for_sfam(job, sfam_id, further_parallelize=False):
 
 
 def start_toil(job):
-    import pandas as pd
-    work_dir = job.fileStore.getLocalTempDir()
-    in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
+    # import pandas as pd
+    # work_dir = job.fileStore.getLocalTempDir()
+    # in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
+    #
+    # pdb_file = os.path.join(work_dir, "PDB.h5")
+    # in_store.read_input_file("PDB.h5", pdb_file)
+    #
+    # sfams = pd.read_hdf(pdb_file, "Superfamilies", columns=
+    #     ["sfam_id"]).drop_duplicates().dropna()["sfam_id"].sort_values()
 
-    pdb_file = os.path.join(work_dir, "PDB.h5")
-    in_store.read_input_file("PDB.h5", pdb_file)
-
-    sfams = pd.read_hdf(pdb_file, "Superfamilies", columns=
-        ["sfam_id"]).drop_duplicates().dropna()["sfam_id"].sort_values()
-
-    #sfams = [299845.0]
+    sfams = [299845.0]
 
     map_job(job, calculate_features_for_sfam, sfams)
 
-    os.remove(pdb_file)
+    #os.remove(pdb_file)
 
     #job.addChildJobFn(calculate_features, "301320/yc/1YCS_A_sdi225433_d0.pdb")
 

@@ -166,6 +166,7 @@ def format_meter(logger, mode, iepoch=0, ibatch=1, totalbatch=1, meterlist=None,
     return pstr
 
 def graph_logger(logger, phase, epoch, final=False, meterlist=None, graph=False):
+    global values
     if meterlist is None:
         meterlist = list(logger.meter.keys())
 
@@ -201,7 +202,6 @@ def graph_logger(logger, phase, epoch, final=False, meterlist=None, graph=False)
             del ax
             pdfs.append(pdf)
 
-    global values
     del values
     values = {}
 

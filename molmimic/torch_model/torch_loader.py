@@ -7,7 +7,7 @@ from itertools import groupby
 
 try:
     import torch
-    from torch.utils.data.dataset import Dataset
+    from torch.utils.data.dataset import Dataset as _Dataset
     from torch.utils.data import DataLoader
 except ImportError:
     torch = None
@@ -17,6 +17,7 @@ except ImportError:
 import pandas as pd
 import numpy as np
 from scipy.spatial import cKDTree, distance
+from sklearn.model_selection import train_test_split
 
 try:
     import sparseconvnet as scn
@@ -24,7 +25,7 @@ except:
     #Allow module to load without scn to read data
     scn = None
 
-from molmimic.common.structure import InvalidPDB
+from molmimic.common.Structure import InvalidPDB
 from molmimic.common.voxels import ProteinVoxelizer
 from itertools import product
 
@@ -120,6 +121,32 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
         batch["weight"] = batch_weight
     return batch
 
+class Dataset(_Dataset):
+    @classmethod
+    def get_training_and_validation(cls, *args, **kwds):
+        split = kwds.get("split", 0.25)
+        if "split" in kwds:
+            del kwds["split"]
+
+        X = pd.read_csv(str(args[0]))
+
+        train, test = train_test_split(X)
+        train_args = [train]+list(args[1:])
+        kwds["train"] = True
+        test_args = [test]+list(args[1:])
+        kwds["train"] = False
+        return {"train":cls(*train_args, **kwds), "test":cls(*test_args, **kwds)}
+
+    @classmethod
+    def from_hdf(cls, *args, **kwds):
+        X = pd.read_hdf(str(args[0]), "table")
+        args = [X]+list(args[1:])
+        return cls(*args, **kwds)
+
+    def get_data_loader(self, batch_size, shuffle, num_workers):
+        return DataLoader(self, batch_size=batch_size, \
+            shuffle=shuffle, num_workers=num_workers, collate_fn=sparse_collate)
+
 class IBISDataset(Dataset):
     """IBIS Dataset used to train 3D-CNN (Unet) to predict binding site residues.
     Protein domains are split from protein structures in MMDB using their
@@ -135,36 +162,40 @@ class IBISDataset(Dataset):
     cdd : str
         Name of CDD Protein Family
     """
-    def __init__(self, data, data_directory, sfam_id=None, ppi_status="mixed", ppi_type="permanent",
-      autoencoder=False,):
+    def __init__(self, X, sfam_id=None, ppi_status="mixed", ppi_type="permanent",
+      autoencoder=False, train=True):
         assert ppi_status in ["mixed", "observed", "inferred"]
         assert ppi_type in ["all", "permanent", "weak_transient", "transient"]
-        self.data_directory = data_directory
         self.sfam_id = sfam_id
         self.ppi_status = ppi_status
         self.ppi_type = ppi_type
         self.autoencoder = autoencoder
+        self.train = train
+        self.X = X
 
         self.truth_key = "features" if autoencoder else "truth"
 
-        self.structure_path = os.path.join(data_directory, "structures")
-        self.features_path = os.path.join(data_directory, "features")
-        self.truth_path = os.path.join(data_directory, "truth")
+        self.epoch = 0
+        self.batch = 0
 
-        interfaces_path = os.path.join(get_structures_path(dataset_name), cdd, cdd)
-
-        self.X = pd.read_hdf(str(interfaces_path+".h5"), ppi_type)
+        # self.structure_path = os.path.join(data_directory, "structures")
+        # self.features_path = os.path.join(data_directory, "features")
+        # self.truth_path = os.path.join(data_directory, "truth")
 
     def __getitem__(self, index, verbose=True):
         datum = self.X.iloc[index]
 
-        pdb_file = os.path.join(self.data_directory, datum["structure"])
-        feature_file = os.path.join(self.data_directory, datum["features"])
-        truth_file = os.path.join(self.data_directory, datum[truth_key])
+        pdb_file = datum["structure"] #os.path.join(self.data_directory, datum["structure"])
+        features_file = datum["features"] #os.path.join(self.data_directory, datum["features"])
+        truth_file =  datum[self.truth_key] #os.path.join(self.data_directory, datum[truth_key])
+
+        features_path = os.path.dirname(features_file)
+        if len(os.path.basename(features_path)) == 2:
+            features_path = os.path.dirname(features_path)
 
         try:
             voxelizer = ProteinVoxelizer(pdb_file, datum.pdb, datum.chain,
-                datum.sdi, datum.domNo)
+                datum.sdi, datum.domNo, features_path=features_path)
             indices, data, truth = voxelizer.map_atoms_to_voxel_space(autoencoder=self.autoencoder)
         except (KeyboardInterrupt, SystemExit):
             raise
@@ -175,26 +206,32 @@ class IBISDataset(Dataset):
                 print(trace, file=ef)
 
             sample = {
-                "indices":      None,
-                "data":         None,
-                "truth":        None,
-                "pdb":          datum.pdb,
-                "chain":        datum.chain,
-                "sdi":          datum.sdi,
-                "domain":       datum.domNo,
-                "cdd":          self.sfam_id
+                "indices": None,
+                "data":    None,
+                "truth":   None,
+                "id":      "{}/{}/{}_{}_sdi{}_d{}".format(self.sfam_id, \
+                    datum.pdb[1:3].lower(), datum.pdb, datum.chain, datum.sdi, \
+                    datum.domNo),
+                "pdb":     datum.pdb,
+                "chain":   datum.chain,
+                "sdi":     datum.sdi,
+                "domain":  datum.domNo,
+                "sfam_id": self.sfam_id
             }
         except:
             trace = traceback.format_exc()
             print("Error:", trace)
             with open("{}_{}_{}_ibis.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
-                print(trace=ef)
+                print(trace, file=ef)
             raise
 
         sample = {
             "indices":      indices,
             "data":         np.nan_to_num(data),
             "truth":        truth,
+            "id":      "{}/{}/{}_{}_sdi{}_d{}".format(self.sfam_id, \
+                datum.pdb[1:3].lower(), datum.pdb, datum.chain, datum.sdi, \
+                datum.domNo),
             "pdb":          datum.pdb,
             "chain":        datum.chain,
             "sdi":          datum.sdi,

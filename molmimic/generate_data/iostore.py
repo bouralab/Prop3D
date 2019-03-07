@@ -760,6 +760,8 @@ class S3IOStore(IOStore):
         Gives relative file/directory names.
 
         """
+        self.__connect()
+        
         if with_times:
             get_output = lambda f: (f.key, f.last_modified)
         else:

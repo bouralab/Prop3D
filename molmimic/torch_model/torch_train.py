@@ -76,18 +76,20 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
         datasets = dataset.get_training_and_validation(
             ibis_data,
-            input_shape=input_shape,
-            only_aa=only_aa,
-            only_atom=only_atom,
-            non_geom_features=non_geom_features,
-            use_deepsite_features=use_deepsite_features,
-            data_split=data_split,
-            course_grained=course_grained,
-            oversample=oversample,
-            undersample=undersample,
-            cellular_organisms=cellular_organisms,
-            random_features=random_features)
-        nFeatures = datasets["train"].get_number_of_features()
+            # input_shape=input_shape,
+            # only_aa=only_aa,
+            # only_atom=only_atom,
+            # non_geom_features=non_geom_features,
+            # use_deepsite_features=use_deepsite_features,
+            split=data_split,
+            autoencoder=autoencoder
+            # course_grained=course_grained,
+            # oversample=oversample,
+            # undersample=undersample,
+            # cellular_organisms=cellular_organisms,
+            # random_features=random_features
+            )
+        nFeatures = 73 #datasets["train"].get_number_of_features()
         nClasses = 2 if not autoencoder else nFeatures
 
         validation_batch_size = batch_size
