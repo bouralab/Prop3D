@@ -20,14 +20,16 @@ from molmimic.parsers.PDBQT import get_autodock_features
 
 from molmimic.common.Structure import Structure, number_of_features, \
     get_feature_names, angle_between, get_dihedral
-from molmimic.common.ProteinTables import vdw_radii, vdw_aa_radii, surface_areas, \
-    hydrophobicity_scales
+from molmimic.common.ProteinTables import surface_areas, hydrophobicity_scales
 
 class ProteinFeaturizer(Structure):
     def __init__(self, path, pdb, chain, sdi, domNo, job, work_dir,
       input_format="pdb", force_feature_calculation=False):
-        Structure.__init__(self, path, pdb, chain, sdi, domNo,
-            input_format=input_format, feature_mode="w+" if force_feature_calculation else "r")
+        super(ProteinFeaturizer, self).__init__(path, pdb, chain, sdi, domNo,
+            input_format=input_format, feature_mode="w+" if force_feature_calculation else "r",
+            features_path=work_dir)
+        self.job = job
+        self.work_dir = work_dir
 
     def calculate_flat_features(self, course_grained=False, only_aa=False, only_atom=False,
       non_geom_features=False, use_deepsite_features=False):
@@ -36,12 +38,16 @@ class ProteinFeaturizer(Structure):
                 non_geom_features=non_geom_features,
                 use_deepsite_features=use_deepsite_features) \
                 for r in self.structure.get_residues()]
+            if self.residue_feature_mode == "w+":
+                self.residue_features.flush()
             return features, self.residue_features_file
         else:
             features = [self.calculate_features_for_atom(atom, only_aa=only_aa,
                 only_atom=only_atom, non_geom_features=non_geom_features,
                 use_deepsite_features=use_deepsite_features) \
                 for atom in self.structure.get_atoms()]
+            if self.atom_feature_mode == "w+":
+                self.atom_features.flush()
             return features, self.atom_features_file
 
     def get_features_per_atom(residue_list):
@@ -91,9 +97,14 @@ class ProteinFeaturizer(Structure):
 
             is_buried = bool(features[35])
 
-        RealtimeLogger.info("Finished atom {}".format(atom))
+        RealtimeLogger.info("Finished atom {} {}".format(atom, atom.serial_number))
+        RealtimeLogger.info("Feats {}".format(features))
+        RealtimeLogger.info("Feats shape {}".format(features.shape))
+        RealtimeLogger.info("atom_features shape {}".format(self.atom_features.shape))
 
-        self.atom_features[atom.serial_number-1] = features
+        self.atom_features[atom.serial_number-1,:] = features
+
+        RealtimeLogger.info("atom_features is {}".format(self.atom_features))
 
         if warn_if_buried:
             return features, is_buried
@@ -121,7 +132,7 @@ class ProteinFeaturizer(Structure):
                 self.get_ss(residue),
                 self.get_evolutionary_conservation_score(residue)), axis=None)
 
-        self.residue_features[residue.get_id()[1]-1] = features
+        self.residue_features[residue.get_id()[1]-1,:] = features
 
     def get_atom_type(self, atom):
         """
@@ -163,9 +174,6 @@ class ProteinFeaturizer(Structure):
             elem_type[4] = 1.
         return elem_type
 
-    def get_vdw(self, atom):
-        return np.array([vdw_radii.get(atom.element.title(), 2.0)])
-
     def get_charge_and_electrostatics(self, atom_or_residue):
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             atom = atom_or_residue
@@ -187,7 +195,7 @@ class ProteinFeaturizer(Structure):
             raise RuntimeError("Input must be Atom or Residue: {}".format(type(atom_or_residue)))
 
         if not hasattr(self, "_pqr"):
-            self._pqr = run_pdb2pqr_APBS(self.pdb_path, pdb2pqr_whitespace=True,
+            self._pqr = run_pdb2pqr_APBS(self.path, pdb2pqr_whitespace=True,
                 work_dir=self.work_dir, job=self.job)
         atom_id = atom.get_full_id()[3:5]
 
@@ -228,7 +236,7 @@ class ProteinFeaturizer(Structure):
             raise RuntimeErorr("Input must be Atom or Residue")
 
         if not hasattr(self, "_cx"):
-            self._cx = run_cx(self.pdb_path, work_dir=self.work_dir, job=self.job)
+            self._cx = run_cx(self.path, work_dir=self.work_dir, job=self.job)
 
         concavity_value = self._cx.get(atom.serial_number, np.NaN)
         #concave, convex, or both
@@ -284,7 +292,7 @@ class ProteinFeaturizer(Structure):
             raise RuntimeErorr("Input must be Atom or Residue")
 
         if not hasattr(self, "_sasa"):
-            self._sasa = run_freesasa_biopython(self.pdb_path)
+            self._sasa = run_freesasa_biopython(self.path)
 
         sasa, sasa_struct = self._sasa
 
@@ -302,7 +310,7 @@ class ProteinFeaturizer(Structure):
                 fraction = np.NaN
 
         if not hasattr(self, "_dssp"):
-            self._dssp = run_dssp(self.structure, self.pdb_path,
+            self._dssp = run_dssp(self.structure, self.path,
                 work_dir=self.work_dir, job=self.job)
 
         try:
@@ -363,7 +371,7 @@ class ProteinFeaturizer(Structure):
             raise RuntimeErorr("Input must be Atom or Residue")
 
         if not hasattr(self, "_dssp"):
-            self._dssp = run_dssp(self.structure, self.pdb_path,
+            self._dssp = run_dssp(self.structure, self.path,
                 work_dir=self.work_dir, job=self.job)
 
         try:
@@ -385,7 +393,7 @@ class ProteinFeaturizer(Structure):
         """Use DeepSites rules for autodock atom types
         """
         if not hasattr(self, "_autodock"):
-            self._autodock = get_autodock_features(self.pdb_path, work_dir=self.work_dir, job=self.job)
+            self._autodock = get_autodock_features(self.path, work_dir=self.work_dir, job=self.job)
 
         try:
             element = self._autodock[atom.serial_number]
@@ -460,7 +468,7 @@ class ProteinFeaturizer(Structure):
     def calculate_graph(self, d_cutoff=100.):
         import networkx as nx
         structure_graph = nx.Graph()
-        for r1, r2 in calculate_neighbors(self.structure, d_cutoff=d_cutoff):
+        for r1, r2 in self.calculate_neighbors(d_cutoff=d_cutoff):
             r1_id, r2_id = r1.get_id()[1], r2.get_id()[1]
             # if r1_id not in structure_graph:
             #     structure_graph.add_node(r1_id)
@@ -493,81 +501,12 @@ class ProteinFeaturizer(Structure):
 
         theta = get_dihedral(c_a, mid_a, mid_b, c_b)
 
-        chirality = int(theta > 0)
+        #chirality = int(theta > 0)
 
         return {
             "distance":distance,
             "angle":angle,
             "omega":omega,
             "theta":theta,
-            "chirality":chirality
+            #"chirality":chirality
         }
-
-    ### Preload features will remove
-
-    def get_features_for_atom(self, atom, only_aa=False, only_atom=False,
-      non_geom_features=False, use_deepsite_features=False, warn_if_buried=False, preload=True):
-        """Calculate FEATUREs"""
-        if isinstance(atom, PDB.Atom.DisorderedAtom):
-            #All altlocs have been removed so onlt one remains
-            atom = atom.disordered_get_list()[0]
-
-        try:
-            features = self.atom_features[atom.serial_number-1]
-            is_buried = bool(features[35])
-
-            if use_deepsite_features:
-                feats = np.concatenate((
-                    features[64:70],
-                    features[20:22],
-                    features[72:]))
-                if warn_if_buried:
-                    return feats, is_buried
-                else:
-                    return feats
-            if only_atom:
-                feats = features[13:18]
-                if warn_if_buried:
-                    return feats, is_buried
-                else:
-                    return feats
-            elif only_aa:
-                feats = features[40:61]
-                if warn_if_buried:
-                    return feats, is_buried
-                else:
-                    return feats
-            elif non_geom_features:
-                feats = np.concatenate((
-                    features[13:18],
-                    features[19:23],
-                    features[30:33], #1]))
-                    np.array([float(is_buried)])))
-                if warn_if_buried:
-                    return feats, is_buried
-                else:
-                    return feats
-            else:
-                if warn_if_buried:
-                    return features, is_buried
-                else:
-                    return features
-        except ValueError as e:
-            return np.zeros(self.n_atom_features)
-
-    def get_features_for_residue(self, residue, only_aa=False, non_geom_features=False, use_deepsite_features=False, preload=True):
-        """Calculate FEATUREs"""
-        try:
-            features = self.residue_features[residue.get_id()[1]-1]
-            if non_geom_features:
-                return np.concatenate((
-                    features[15:36],
-                    features[0:4],
-                    features[8:12],
-                    ))
-            elif only_aa:
-                return features[15:36]
-            else:
-                return features
-        except ValueError:
-            return np.zeros(self.n_residue_features)

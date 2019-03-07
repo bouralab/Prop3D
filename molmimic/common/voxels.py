@@ -8,13 +8,14 @@ from scipy import spatial
 from Bio import PDB
 from Bio.PDB.NeighborSearch import NeighborSearch
 
-from molmimic.common import Structure
-from molmimic.ProteinTables import vdw_radii, vdw_aa_radii, surface_areas
+from molmimic.common.Structure import Structure, number_of_features
+from molmimic.common.ProteinTables import vdw_radii, vdw_aa_radii, surface_areas
 
 class ProteinVoxelizer(Structure):
-    def __init__(self, path, pdb, chain, sdi, domNo, input_format="pdb", volume=264, voxel_size=1.0, rotate=True):
-        Structure.__init__(self, path, pdb, chain, sdi, domNo,
-            input_format=input_format, feature_mode="r")
+    def __init__(self, path, pdb, chain, sdi, domNo, input_format="pdb",
+      volume=264, voxel_size=1.0, rotate=True, features_path=None):
+        super().__init__(path, pdb, chain, sdi, domNo,
+            input_format=input_format, feature_mode="r", features_path=features_path)
 
         self.mean_coord = np.zeros(3)
         self.mean_coord_updated = False
@@ -68,9 +69,10 @@ class ProteinVoxelizer(Structure):
             non_geom_features=non_geom_features,
             undersample=undersample)
 
-    def map_atoms_to_voxel_space(self, expand_atom=False, binding_site_residues=None,
-      include_full_protein=False, only_aa=False, only_atom=False, use_deepsite_features=False,
-      non_geom_features=False, undersample=False, only_surface=True, autoencoder=False):
+    def map_atoms_to_voxel_space(self, binding_site_residues=None,
+      include_full_protein=False, only_aa=False, only_atom=False,
+      use_deepsite_features=False, non_geom_features=False, undersample=False,
+      only_surface=True, autoencoder=False):
         """Map atoms to sparse voxel space.
 
         Parameters
@@ -92,7 +94,9 @@ class ProteinVoxelizer(Structure):
         indices : np.array((nVoxels,3))
         data : np.array((nVoxels,nFeatures))
         """
-        if binding_site_residues is not None or autoencoder:
+        assert [isinstance(binding_site_residues, (list, tuple)), autoencoder].count(True) == 1, \
+            "Only binding_site_residues or autoencoder can be set"
+        if binding_site_residues is not None:
             if not include_full_protein:
                 atoms = sorted((a for r in binding_site_residues for a in r), key=lambda a: a.get_serial_number())
                 atoms = list(self.filter_atoms(atoms))
@@ -146,7 +150,7 @@ class ProteinVoxelizer(Structure):
             non_binding_site_atoms = []
 
 
-        nFeatures = Structure.number_of_features(
+        nFeatures = number_of_features(
             only_aa=only_aa,
             only_atom=only_atom,
             non_geom_features=non_geom_features,
@@ -190,7 +194,7 @@ class ProteinVoxelizer(Structure):
                 truth_voxels[atom_grid] = truth_value
 
         try:
-            if binding_site_residues is None and not autencoder:
+            if binding_site_residues is None and not autoencoder:
                 return np.array(list(data_voxels)), np.array(list(data_voxels.values()))
             else:
                 data = np.array(list(data_voxels.values()))
@@ -290,13 +294,8 @@ class ProteinVoxelizer(Structure):
             atom = atom.disordered_get_list()[0]
 
         try:
-            features = self.precalc_features[atom.serial_number-1]
-            is_buried = bool(features[35]) #Residue asa #[self.precalc_features[a.serial_number-1][31] for a in atom.get_parent()]
-            # if asa > 0.0:
-            #     asa /= surface_areas.get(atom.element.title(), 1.0)
-            #     is_buried = asa <= 0.2
-            # else:
-            #     is_buried = False
+            features = self.atom_features[atom.serial_number-1]
+            is_buried = bool(features[35])
 
             if use_deepsite_features:
                 feats = np.concatenate((
@@ -343,7 +342,7 @@ class ProteinVoxelizer(Structure):
       use_deepsite_features=False):
         """Calculate FEATUREs"""
         try:
-            features = self.precalc_features[residue.get_id()[1]-1]
+            features = self.residue_features[residue.get_id()[1]-1]
             if non_geom_features:
                 return np.concatenate((
                     features[15:36],
@@ -353,7 +352,7 @@ class ProteinVoxelizer(Structure):
             elif only_aa:
                 return features[15:36]
             else:
-                return features[:self.nFeatures]
+                return features
         except ValueError:
             pass
 
@@ -369,11 +368,14 @@ class ProteinVoxelizer(Structure):
         neighbors = self.voxel_tree.query_ball_point(center, r=dist)
         return [self.voxel_tree.data[idx] for idx in neighbors]
 
+    def rotate(self, num=1):
+        for r, theta, phi, z in super().rotate(num=num):
+            self.set_voxel_size(self.voxel_size)
+            yield r, theta, phi, z
+
+
     def set_voxel_size(self, voxel_size=None):
-        if not self.course_grained:
-            self.voxel_size = voxel_size or 1.0
-        else:
-            self.voxel_size = 10.0
+        self.voxel_size = voxel_size or 1.0
 
         coords = self.get_coords()
         min_coord = np.floor(np.min(coords, axis=0))-5

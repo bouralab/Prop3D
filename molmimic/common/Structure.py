@@ -1,6 +1,7 @@
 import os
 from io import StringIO
 
+import numpy as np
 from sklearn.decomposition import PCA
 from Bio import PDB
 from Bio.PDB.NeighborSearch import NeighborSearch
@@ -9,6 +10,7 @@ import warnings
 warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
 
 from molmimic.util import InvalidPDB, natural_keys
+from molmimic.common.ProteinTables import vdw_radii
 
 def number_of_features(only_aa=False, only_atom=False, non_geom_features=False,
   use_deepsite_features=False, course_grained=False):
@@ -63,7 +65,8 @@ def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=Fals
     return feature_names
 
 class Structure(object):
-    def __init__(self, path, pdb, chain, sdi, domNo, input_format="pdb", feature_mode="r"):
+    def __init__(self, path, pdb, chain, sdi, domNo, input_format="pdb",
+      feature_mode="r", features_path=None):
         self.path = path
         if not os.path.isfile(self.path):
             raise InvalidPDB("Cannot find file {}".format(self.path))
@@ -102,24 +105,36 @@ class Structure(object):
 
         self.id = "{}_{}_sdi{}_d{}".format(self.pdb, self.chain, self.sdi, self.domNo)
 
+        self.n_residues = max(r.get_id()[1] for r in self.structure.get_residues())
+        self.n_atoms = max(a.serial_number for a in self.structure.get_atoms())
         self.n_residue_features = number_of_features(course_grained=True)
         self.n_atom_features = number_of_features(course_grained=False)
 
-        try:
-            features_path = os.environ["MOLMIMIC_FEATURES"]
-        except KeyError:
-            features_path = work_dir
+        self.features_path = os.environ.get("MOLMIMIC_FEATURES", features_path)
 
         self.residue_features_file = os.path.join(features_path,
-            "{}_residue.npy".format(self.id))
+            self.pdb.lower()[1:3], "{}_residue.npy".format(self.id))
 
         self.atom_features_file = os.path.join(features_path,
-            "{}_atom.npy".format(self.id))
+            self.pdb.lower()[1:3], "{}_atom.npy".format(self.id))
+
+        if not os.path.isdir(os.path.dirname(self.atom_features_file)):
+            os.makedirs(os.path.dirname(self.atom_features_file))
+
+        if feature_mode == "r" and not os.path.isfile(self.atom_features_file):
+            self.atom_feature_mode = "w+"
+        else:
+            self.atom_feature_mode = feature_mode
+
+        if feature_mode == "r" and not os.path.isfile(self.residue_features_file):
+            self.residue_feature_mode = "w+"
+        else:
+            self.residue_feature_mode = feature_mode
 
         self.residue_features = np.memmap(self.residue_features_file,
-            dtype=np.float, mode=feature_mode, shape=(self.course_grained_shape, self.n_residue_features))
+            dtype=np.float, mode=self.residue_feature_mode, shape=(self.n_residues, self.n_residue_features))
         self.atom_features = np.memmap(self.atom_features_file,
-            dtype=np.float, mode=feature_mode, shape=(self.atom_shape, self.n_atom_features))
+            dtype=np.float, mode=self.atom_feature_mode, shape=(self.n_atoms, self.n_atom_features))
 
     def get_atoms(self, include_hetatms=False, exclude_atoms=None):
         for a in self.filter_atoms(self.structure.get_atoms(), include_hetatms=include_hetatms, exclude_atoms=exclude_atoms):
@@ -229,7 +244,6 @@ class Structure(object):
             coords = np.dot(self.get_coords(), M)
             self.update_coords(coords)
             self.shift_coords_to_volume_center()
-            self.set_voxel_size(self.voxel_size)
             yield r, theta, phi, z
 
     def update_coords(self, coords):
@@ -263,6 +277,9 @@ class Structure(object):
 
         return all_list
 
+    def get_vdw(self, atom):
+        return np.array([vdw_radii.get(atom.element.title(), 2.0)])
+
 def flip_around_axis(coords, axis = (0.2, 0.2, 0.2)):
     'Flips coordinates randomly w.r.t. each axis with its associated probability'
     for col in range(3):
@@ -292,6 +309,8 @@ def rotation_matrix(random = False, theta = 0, phi = 0, z = 0):
 
     # Construct the rotation matrix  ( V Transpose(V) - I ) R.
     M = (np.outer(V, V) - np.eye(3)).dot(R)
+
+    return M, theta, phi, z
 
 def unit_vector(vector):
     """ Returns the unit vector of the vector.  """
