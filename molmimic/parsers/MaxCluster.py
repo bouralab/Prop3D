@@ -103,6 +103,24 @@ def get_centroid(log_file, work_dir=None, docker=True, job=None):
 
     return best_centroid_file
 
+def get_clusters(log_file):
+    clusters = []
+    parse_clusters = False
+    with open(log_file) as log:
+        for line in log:
+            if not parse_clusters and "Clusters @ Threshold" in line:
+                parse_clusters = True
+                next(log)
+                next(log)
+            elif parse_clusters and line.startswith("INFO  : ="):
+                break
+            elif parse_centroids:
+                fields = line.rstrip().split()
+                cluster, pdb_file = fields[-2], fields[-1]
+                clusters.append((pdb_file, int(cluster)))
+    clusters = pd.DataFrame(clusters, names=["pdb_file", "structure_clusters"])
+    return clusters
+
 def get_hierarchical_tree(log_file):
     import networkx as nx
     nx_tree = nx.DiGraph()

@@ -4,6 +4,8 @@ import sparseconvnet as scn
 import torch.nn.functional as F
 from torch.autograd.variable import Variable
 
+from molmimic.torch_model.UNetDropout import UNetDropout
+
 class UNet3D(nn.Module):
     """Sparse 3D Unet for voxel level prediction.
 
@@ -430,4 +432,27 @@ class SuperfamilySegmenter(nn.Module):
     def forward(self,x):
         x=self.sparseModel(x)
         x=self.linear(x)
+        return x
+    
+
+class SCN3DUnet(nn.Module):
+    dimension = 3
+    reps = 1 #Conv block repetition factor
+    m = 32 #Unet number of features
+    nPlanes = [m, 2*m, 3*m, 4*m, 5*m] #UNet number of features per level
+    def __init__(self, nFeatures, nClasses=2, spatialSize=256):
+        nn.Module.__init__(self)
+        spatialSize = torch.LongTensor([spatialSize]*3)
+        self.sparseModel = scn.Sequential().add(
+           scn.InputLayer(SCN3DUnet.dimension, spatialSize, mode=3)).add(
+           scn.SubmanifoldConvolution(SCN3DUnet.dimension, nFeatures, SCN3DUnet.m, 3, False)).add(
+           UNetDropout(SCN3DUnet.dimension, SCN3DUnet.reps, SCN3DUnet.nPlanes, residual_blocks=False, dropout_p=0.5, downsample=[2,2])).add(
+           scn.BatchNormReLU(SCN3DUnet.m)).add(
+           scn.OutputLayer(SCN3DUnet.dimension))
+        self.linear = nn.Linear(SCN3DUnet.m, nClasses)
+        self.activation = nn.Softmax(dim=1)
+    def forward(self,x):
+        x=self.sparseModel(x)
+        x=self.linear(x)
+        x=self.activation(x)
         return x

@@ -18,7 +18,7 @@ import torch
 
 values = {}
 epoch_values = {}
-def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, n_classes=2, smooth=1.0):
+def add_to_logger(logger, phase, epoch, batch, total_batches, output, target, weight, locations=None, n_classes=2, smooth=1.0, autoencoder=False):
     weight_sum = weight.sum()
 
     dice_combined = 0.0
@@ -115,7 +115,7 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
         del intersection
 
     with open("{}_epoch{}_stats.txt".format(phase, epoch), "a+") as statsfile:
-        print(format_meter(logger, phase), file=statsfile)
+        print(format_meter(logger, phase, epoch, batch, total_batches), file=statsfile)
 
     return statsfile
 
@@ -165,7 +165,7 @@ def format_meter(logger, mode, iepoch=0, ibatch=1, totalbatch=1, meterlist=None,
     #pstr += "{} {:.2f} s/its".format(" "*space, logger.timer.value())
     return pstr
 
-def graph_logger(logger, phase, epoch, final=False, meterlist=None, graph=False):
+def graph_logger(logger, phase, epoch, batch, num_batches, final=False, meterlist=None, graph=False):
     global values
     if meterlist is None:
         meterlist = list(logger.meter.keys())
@@ -173,7 +173,7 @@ def graph_logger(logger, phase, epoch, final=False, meterlist=None, graph=False)
     if not final:
         stats_fname = "Sparse3DUnet_statistics_{}.tsv".format(phase)
         with open(stats_fname, "a") as stats_file:
-            print("epoch {} {}".format(epoch, format_meter(logger, phase)), file=statsfile)
+            print("epoch {} {}".format(epoch, format_meter(logger, phase, batch, num_batches)), file=stats_file)
     else:
         stats_fname = None
 

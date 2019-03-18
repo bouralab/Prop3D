@@ -54,7 +54,146 @@ def normalize(job, features, work_dir=None):
         features[:, raw] = minmax_scaled
         np.save(base+".minmaxscaled.npy", features)
         del features
+        
+def cluster_by_structure(job, sfam, structures, work_dir=None):
+    from molmimic.parsers.MaxCluster import run_maxcluster, get_centroid
+    from molmimic.generate_data.util import PDB_TOOLS, SubprocessChain
 
+    cluster_store = IOStore.get("aws:us-east-1:molmimic-clusters")
+
+    if work_dir is None:
+        work_dir = os.getcwd()
+
+    cluster_dir = os.path.join(work_dir, "{}_cluster".format(int(sfam)))
+    if not os.path.exists(cluster_dir):
+        os.makedirs(cluster_dir)
+
+    file_list = os.path.join(cluster_dir, "{}_file_list.txt".format(int(sfam)))
+
+    with open(file_list, "w") as f:
+        for pdb_file in structures:
+            if not pdb_file: continue
+            cmds = [
+                [sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-A", pdb_file],
+                [sys.executable, os.path.join(PDB_TOOLS, "pdb_reres.py")],
+                [sys.executable, os.path.join(PDB_TOOLS, "pdb_reatom.py")],
+                [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
+            ]
+
+            pdb_to_cluster = os.path.join(cluster_dir, os.path.basename(pdb_file))
+            with open(pdb_to_cluster, "w") as pdb:
+                SubprocessChain(cmds, pdb)
+
+            print >> f, os.path.basename(pdb_to_cluster)
+
+    log_file = os.path.join(cluster_dir, "{}.max_cluster_logs".format(int(sfam)))
+    distance_file = os.path.join(cluster_dir, "{}_distances.txt".format(int(sfam)))
+
+    key_base = "{}/structures".format(int(mol_sfam), int(sfam))
+
+    logs = run_maxcluster("rmsd", file_list=file_list, log=True, R=distance_file,
+        work_dir=cluster_dir, C=1, P=10, job=job)
+
+    RealtimeLogger.info("CLUSTER_DIR: {}".format(os.listdir(cluster_dir)))
+    RealtimeLogger.info("LOG FILE: {}".format(logs))
+
+    with open(logs) as f:
+        RealtimeLogger.info("LOG IS {}".format(next(f)))
+
+    cluster_store.write_output_file(file_list, "{}/{}".format(key_base, os.path.basename(file_list)))
+    cluster_store.write_output_file(logs, "{}/{}".format(key_base, os.path.basename(log_file)))
+    cluster_store.write_output_file(distance_file, "{}/{}".format(key_base, os.path.basename(distance_file)))
+
+    return get_clusters(logs)
+
+def cluster_by_sequence(job, sfam, structure_data, work_dir=None, id=0.90, preemptable=True):
+    if work_dir is None:
+        work_dir = job.fileStore.getLocalTempDir() if job is not None else os.getcwd()
+    out_store = IOStore.get("aws:us-east-1:molmimic-clusters")
+
+    sdoms_file = copy_pdb_h5(job, pdbFileStoreID)
+
+    sdoms = pd.read_hdf(str(sdoms_file), "merged")
+    sdoms = sdoms[sdoms["sfam_id"]==sfam_id]
+    sdoms = sdoms[["pdbId", "chnLett", "sdi", "domNo"]].drop_duplicates().dropna()
+
+    #Save all domains to fasta
+    domain_fasta = os.path.join(work_dir, "{}.fasta".format(int(sfam_id)))
+    domain_ids = {}
+    with open(domain_fasta, "w") as fasta:
+        for pdb_fname in structure_data["structure"]:
+            try:
+                seq = subprocess.check_output([sys.executable, os.path.join(PDB_TOOLS,
+                    "pdb_toseq.py"), pdb_fname])
+                fasta.write(">{}\n{}\n".format(pdb_fname, "\n".join(seq.splitlines()[1:])))
+                domain_ids[pdb_fname] = jobStoreID
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as e:
+                RealtimeLogger.info("Error getting fasta for : {} {}".format(sfam_id, fname))
+                pass
+
+    #Order domains by resolution so the ones with the highest resolutions are centroids
+    resolutions = pd.read_hdf(str(sdoms_file), "resolu")
+
+    try:
+        pdbs, ids, sequences = list(zip(*[(s.id.split("_", 1)[0].upper(), s.id, str(s.seq)) \
+            for s in SeqIO.parse(domain_fasta, "fasta")]))
+    except ValueError:
+        RealtimeLogger.info("Unable to cluster {}".format(sfam_id))
+        return
+
+    domains = pd.DataFrame({"pdbId":pdbs, "domainId":ids, "sequence":sequences})
+    domains = pd.merge(domains, resolutions, how="left", on="pdbId")
+    xray = domains[domains["resolution"] >= 0.].sort_values("resolution")
+    nmr = domains[domains["resolution"] < 0.]
+
+    with open(domain_fasta, "w") as f:
+        for row in it.chain(xray.itertuples(index=False), nmr.itertuples(index=False)):
+            print(">{} [resolution={}]\n{}".format(row.domainId, row.resolution, row.sequence))
+
+    sfam_key = "{0}/{0}.fasta".format(int(sfam_id))
+    out_store.write_output_file(domain_fasta, sfam_key)
+
+    clusters_file, uclust_file = run_usearch(["-cluster_fast",
+        "{i}"+domain_fasta, "-id", str(id),
+        "-centroids", "{out}"+"{}_clusters.uc".format(int(sfam_id)),
+        "-uc", "{o}"+"{}_clusters.uc".format(int(sfam_id))])
+
+    #Convert uclust to h5
+    uclust = pd.read_table(str(uclust_file), comment="#", header=None, names=[
+        "record_type",
+        "cluster",
+        "length",
+        "pctId",
+        "strand",
+        "unk1",
+        "unk2",
+        "alignment",
+        "label_query",
+        "label_target"
+    ])
+    del uclust["unk1"]
+    del uclust["unk2"]
+    hdf_base = "{}_clusters.h5".format(int(sfam_id))
+    hdf_file = os.path.join(work_dir, hdf_base)
+    uclust.to_hdf(str(hdf_file), "table", complevel=9, complib="bzip2")
+    out_store.write_output_file(hdf_file, "{}/{}".format(int(sfam_id), hdf_base))
+    os.remove(uclust_file)
+
+    return clustered_pdbs
+
+def compare_clusters(job, seq_clusters, struct_clusters):
+    seq_clusters = seq_clusters[["label_query", "cluster"]].rename(columns={
+        "label_query":"pdb_file", "cluster":"sequence_cluster"})
+    clusters = pd.merge(seq_clusters, struct_clusters, on="pdb_file")
+    
+        
+def cluster(job, structures_data):
+    seq_job = job.addChildJobFn(cluster_by_sequence, structures_data)
+    struct_job = job.addChildJobFn(cluster_by_structre, structures_data["structures"])
+    job.addFollowOnJobFn(compare_clusters, seq_job.rv(), struct_job.rv())
+    
 def start_sae(job, sfam_id, work_dir=None):
     if work_dir is None and job is not None:
         work_dir = job.fileStore.getLocalTempDir()
@@ -130,7 +269,7 @@ def start_sae(job, sfam_id, work_dir=None):
 
 
     train(data_file, model_prefix="{}_sae".format(sfam_id), num_epochs=100,
-        use_resnet_unet=True, nFeatures=None, dropout_depth=True,
+        use_resnet_unet=True, dropout_depth=True,
         dropout_width=True, dropout_p=0.6, autoencoder=True,
         checkpoint_callback=callback)
 

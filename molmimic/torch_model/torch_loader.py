@@ -25,7 +25,7 @@ except:
     #Allow module to load without scn to read data
     scn = None
 
-from molmimic.common.Structure import InvalidPDB
+from molmimic.common.Structure import InvalidPDB, number_of_features
 from molmimic.common.voxels import ProteinVoxelizer
 from itertools import product
 
@@ -50,8 +50,49 @@ def dense_collate(data, batch_size=1):
 
     return batch
 
-def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
-    if scn is None or not create_tensor:
+class Batch(object):
+    def __init__(self):
+        self.indices = None
+        self.truth = None
+        self.id = []
+        self.data = None
+        self.sample_weights = None
+        self.weight = None
+       
+    def add_indices(self, indices):
+        if self.indices is None:
+            self.indices = indices
+        else:
+            self.indices = np.vstack((self.indices, indices))
+    
+    def add_data(self, data):
+        if self.data is None:
+            self.data = data
+        else:
+            self.data = np.vstack((self.data, data))
+
+    def add_truth(self, truth):
+        if self.truth is None:
+            self.truth = truth
+        else:
+            self.truth = np.vstack((self.truth, truth))
+    
+    def add_id(self, id):
+        self.id.append(id)
+    
+    def finish_samples(self):
+        self.indices = [torch.from_numpy(self.indices), torch.from_numpy(self.data)]
+        self.truth = torch.from_numpy(self.truth)
+        del self.data
+        self.data = None
+    
+    def pin_memory(self):
+        self.indices = [self.indices[0].pin_memory(), self.indices[1].pin_memory()]
+        self.truth = self.truth.pin_memory()
+        return self
+
+def sparse_collate(data, input_shape=(256,256,256), create_tensors=True, create_input_batch=False):
+    if scn is None or (not create_tensors and not create_input_batch):
         batch = {
             "indices": [],
             "data": [],
@@ -64,8 +105,31 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
             batch["data"].append(features)
             batch["truth"].append(truth)
             batch["id"].append(id)
-
-    else:
+        
+        def end_sample():
+            pass
+    elif create_tensors:
+        batch = Batch()
+#         {
+#             "indices":None,
+#             "data": None,
+#             "truth": None,
+#             "id": []
+#             }
+        
+        def add_sample(indices, features, truth, id):
+            i = batch.indices[-1, -1]+1 if batch.indices is not None else 0.
+            indices = np.concatenate((indices, np.ones((indices.shape[0], 1))*i), axis=1)
+            batch.add_indices(indices)
+            batch.add_data(features)
+            batch.add_truth(truth)
+            batch.add_id(id)
+        
+        def end_sample():
+            batch.finish_samples()
+                                           
+            
+    elif create_input_batch:
         inputSpatialSize = torch.LongTensor(input_shape)
         batch = {
             "data": scn.InputBatch(3, inputSpatialSize),
@@ -86,12 +150,21 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
                 pass
             #del features
             #del truth
+        def end_sample():
+            batch["data"].precomputeMetadata(1)
 
     sample_weights = []
     batch_weight = None
     num_data = 0.0
-    for i, d in enumerate(data):
+    
+    points = None
+    features = None
+    truth = None
+    
+    i = 0
+    for d in data:
         if d["data"] is None: continue
+        
         if batch_weight is None:
             batch_weight = 0.0 if d["truth"].shape[1] == 2 else np.zeros(data[0]["truth"].shape[1])
 
@@ -109,16 +182,14 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
             num_data += d["truth"].shape[0]
 
     batch_weight /= float(num_data)
-
-    if create_tensor:
-        batch["data"].precomputeMetadata(1)
+    end_sample()
 
     if isinstance(batch_weight, float):
-        batch["sample_weights"] = np.array(sample_weights)
-        batch["weight"] = np.array([1-batch_weight, batch_weight]) #None #1.-float(num_true)/len(data) #(256*256*256)
+        batch.sample_weights = np.array(sample_weights)
+        batch.weight = np.array([1-batch_weight, batch_weight]) #None #1.-float(num_true)/len(data) #(256*256*256)
     else:
-        batch["sample_weights"] = np.array(sample_weights)
-        batch["weight"] = batch_weight
+        batch.sample_weights = np.array(sample_weights)
+        batch.weight = batch_weight
     return batch
 
 class Dataset(_Dataset):
@@ -130,12 +201,15 @@ class Dataset(_Dataset):
 
         X = pd.read_csv(str(args[0]))
 
-        train, test = train_test_split(X)
+        train, val = train_test_split(X)
         train_args = [train]+list(args[1:])
         kwds["train"] = True
-        test_args = [test]+list(args[1:])
+        train = cls(*train_args, **kwds)
+        
+        val_args = [val]+list(args[1:])
         kwds["train"] = False
-        return {"train":cls(*train_args, **kwds), "test":cls(*test_args, **kwds)}
+        val = cls(*val_args, **kwds)
+        return {"train":train, "val":val}
 
     @classmethod
     def from_hdf(cls, *args, **kwds):
@@ -143,9 +217,9 @@ class Dataset(_Dataset):
         args = [X]+list(args[1:])
         return cls(*args, **kwds)
 
-    def get_data_loader(self, batch_size, shuffle, num_workers):
+    def get_data_loader(self, batch_size, shuffle, num_workers, pin_memory=True):
         return DataLoader(self, batch_size=batch_size, \
-            shuffle=shuffle, num_workers=num_workers, collate_fn=sparse_collate)
+            shuffle=shuffle, num_workers=num_workers, collate_fn=sparse_collate, pin_memory=pin_memory)
 
 class IBISDataset(Dataset):
     """IBIS Dataset used to train 3D-CNN (Unet) to predict binding site residues.
@@ -163,7 +237,7 @@ class IBISDataset(Dataset):
         Name of CDD Protein Family
     """
     def __init__(self, X, sfam_id=None, ppi_status="mixed", ppi_type="permanent",
-      autoencoder=False, train=True):
+      autoencoder=False, train=True, use_deepsite_features=False):
         assert ppi_status in ["mixed", "observed", "inferred"]
         assert ppi_type in ["all", "permanent", "weak_transient", "transient"]
         self.sfam_id = sfam_id
@@ -172,6 +246,7 @@ class IBISDataset(Dataset):
         self.autoencoder = autoencoder
         self.train = train
         self.X = X
+        self.use_deepsite_features = use_deepsite_features
 
         self.truth_key = "features" if autoencoder else "truth"
         
@@ -199,7 +274,8 @@ class IBISDataset(Dataset):
         try:
             voxelizer = ProteinVoxelizer(pdb_file, datum.pdb, datum.chain,
                 datum.sdi, datum.domNo, features_path=features_path)
-            indices, data, truth = voxelizer.map_atoms_to_voxel_space(autoencoder=self.autoencoder)
+            indices, data, truth = voxelizer.map_atoms_to_voxel_space(autoencoder=self.autoencoder,     
+                use_deepsite_features=self.use_deepsite_features)
         except (KeyboardInterrupt, SystemExit):
             raise
         except InvalidPDB as RuntimeError:
@@ -242,14 +318,17 @@ class IBISDataset(Dataset):
             "cdd":          self.sfam_id
         }
         
-        if self.autoencoder:
-            sample["data"] = sample["data"][:, self.one_hot]
-            sample["truth"] = sample["truth"][:, self.one_hot]
+#         if self.autoencoder:
+#             sample["data"] = sample["data"][:, self.one_hot]
+#             sample["truth"] = sample["truth"][:, self.one_hot]
         
         return sample
 
     def __len__(self):
         return self.X.shape[0]
+    
+    def get_number_of_features(self):
+        return number_of_features(use_deepsite_features=self.use_deepsite_features)
 
 class MMDBDataset(Dataset):
     """Full MMDB Dataset used to train a protein family autoencoder to learn the

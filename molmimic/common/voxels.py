@@ -248,7 +248,7 @@ class ProteinVoxelizer(Structure):
             truth = np.array([int(truth)])
 
             try:
-                features = self.get_features_for_residue(residue, only_aa=only_aa, non_geom_features=non_geom_features, use_deepsite_features=False)
+                features = self.get_features_for_residue(residue, only_aa=only_aa, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features)
             except Exception as e:
                 print(e)
                 raise
