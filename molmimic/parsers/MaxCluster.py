@@ -57,7 +57,7 @@ def run_maxcluster(*args, **kwds):
             raise
         except:
             job.log("FILE LIST IS [{}]".format(open(file_parameters["l"]).read()))
-            raise
+            return None
             #return run_scwrl(pdb_file, output_prefix=output_prefix, framefilename=framefilename,
             #    sequencefilename=sequencefilename, paramfilename=paramfilename, in_cystal=in_cystal,
             #    remove_hydrogens=remove_hydrogens, remove_h_n_term=remove_h_n_term, work_dir=work_dir, docker=False)

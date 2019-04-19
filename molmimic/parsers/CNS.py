@@ -6,12 +6,13 @@
 
 #Standard libraries
 import os
+import sys
 import re
 import shutil
 
 import pandas as pd
 
-from molmimic.generate_data.util import izip_missing
+from molmimic.generate_data.util import izip_missing, PDB_TOOLS, SubprocessChain
 
 try:
     from toil.lib.docker import apiDockerCall
@@ -23,17 +24,17 @@ script_dir = os.path.dirname(__file__)
 
 def load_cns_environment():
     if "CNS_TOPPAR" not in os.environ:
-	try:
-	    cns = subprocess.check_output(["which", "cns_solve"])
-	except:
-	    raise RuntimeError("Unable to load CNS")
-	    cns_dir = os.path.dirname(os.path.dirname(os.path.dirname(cns)))
-	    env_file = os.path.join(cns_dir, "cns_solve_env.zsh")
-	    output = subprocess.check_output("source {}; env -0".format(env_file),
-	        shell=True, executable="/bin/zsh")
-	    new_env = dict([line.partition('=')[::2] for line in output.split('\0')])
-	    os.environ.clear()
-	    os.environ.update(new_env)
+    	try:
+    	    cns = subprocess.check_output(["which", "cns_solve"])
+    	except:
+    	    raise RuntimeError("Unable to load CNS")
+    	    cns_dir = os.path.dirname(os.path.dirname(os.path.dirname(cns)))
+    	    env_file = os.path.join(cns_dir, "cns_solve_env.zsh")
+    	    output = subprocess.check_output("source {}; env -0".format(env_file),
+    	        shell=True, executable="/bin/zsh")
+    	    new_env = dict([line.partition('=')[::2] for line in output.split('\0')])
+    	    os.environ.clear()
+    	    os.environ.update(new_env)
 
 def CNS(input_file, prefix, work_dir=None, docker=True, job=None, template=True, **template_kwds):
     work_dir = work_dir or os.getcwd()
@@ -107,6 +108,12 @@ def Minimize(pdb_file, output_file_prefix=None, work_dir=None, docker=True, job=
             minimized_file = new_minimized_file
         else:
             raise RuntimeError("CNS minimization has failed!! Check output: {}".format(cns))
+
+    cmds = [[sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), minimized_file]]
+    tidy_file = minimized_file+".tidy"
+    with open(tidy_file, "w") as f:
+        SubprocessChain(cmds, f)
+    minimized_file = tidy_file
 
     m = cns_output_re.search(cns)
     if m:

@@ -1,6 +1,7 @@
 from __future__ import print_function
 import os
 import sys
+import shutil
 import re
 import subprocess
 from contextlib import contextmanager
@@ -426,3 +427,40 @@ def rottrans(moving_pdb, matrix_file, new_file=None):
             print("LINE:{:8.3f}{:8.3f}{:8.3f}".format(x, y, z))
             yield "{:8.3f}{:8.3f}{:8.3f}".format(x, y, z)
     return update_xyz(moving_pdb, coords, updated_pdb=new_file, process_new_lines=get_coords)
+
+def rottrans_from_matrix(moving_pdb, M, t, new_file=None):
+    coords = read_pdb(moving_pdb)
+    coords = np.dot(coords, M)+t
+    def get_coords(mat):
+        for xyz in mat:
+            #print("LINE:{:8.3f}{:8.3f}{:8.3f}".format(x, y, z))
+            #yield "{:8.3f}{:8.3f}{:8.3f}".format(x, y, z)
+            print("".join(("{:<8.3f}".format(i)[:8] for i  in xyz)))
+            yield "".join(("{:<8.3f}".format(i)[:8] for i  in xyz))
+    return update_xyz(moving_pdb, coords, updated_pdb=new_file, process_new_lines=get_coords)
+
+def tidy(pdb_file, replace=False, new_file=None):
+    _new_file = pdb_file+".tidy.pdb" if new_file is None else new_file
+    with open(_new_file, "w") as f:
+        subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), pdb_file], stdout=f)
+
+    if replace and new_file is None:
+        try:
+            os.remove(pdb_file)
+        except OSEror:
+            pass
+        shutil.move(_new_file, pdb_file)
+        return pdb_file
+    else:
+        return _new_file
+
+def remove_ter_lines(pdb_file, updated_pdb=None):
+    if updated_pdb is None:
+        updated_pdb = "{}.untidy.pdb".format(os.path.splitext(pdb_file)[0])
+
+    with open(pdb_file) as f, open(updated_pdb, "w") as updated:
+        for line in f:
+            if not line.startswith("TER"):
+                updated.write(line)
+
+    return updated_pdb

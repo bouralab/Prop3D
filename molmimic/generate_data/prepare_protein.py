@@ -90,10 +90,13 @@ def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_ch
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_selmodel.py"), "-1", input],
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_selchain.py"), "-{}".format(chain)],
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_delocc.py")],
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_rslice.py")]+rslices,
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_striphet.py")],
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
     ]
+
+    if rslices is not None:
+        commands += [[sys.executable, os.path.join(PDB_TOOLS, "pdb_rslice.py")]+rslices]
+    commands += [[sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]]
 
     if rename_chain is not None:
         commands.append([sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"),
@@ -167,7 +170,7 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e1:
-        RealtimeLogger.inof("PDB2PQR failed: {}".format(e1))
+        RealtimeLogger.info("PDB2PQR failed: {}".format(e1))
         #Might have failed to missing too many heavy atoms
         #Try again, but first add correct side chains
         try:
@@ -227,7 +230,7 @@ Most likeley reason for failing is that the structure is missing too many heavy 
 
     return cleaned_file
 
-def process_domain(job, sdi, pdbFileStoreID, work_dir=None, preemptable=True):
+def process_domain(job, sdi, pdbFileStoreID, force_chain=None, force_rslices=None, force=False, work_dir=None, cleanup=True, preemptable=True):
     if work_dir is None:
         if job:
             work_dir = job.fileStore.getLocalTempDir()
@@ -240,11 +243,11 @@ def process_domain(job, sdi, pdbFileStoreID, work_dir=None, preemptable=True):
     sdom = all_sdoms[all_sdoms["sdi"]==float(sdi)]
     if sdom.shape[0] == 0:
         RealtimeLogger.info("SDI {} does not exist".format(sdi))
-        return
+        return None, None, None
 
     sfam_id = sdom.iloc[0].sfam_id
     pdb = sdom.iloc[0].pdbId
-    chain = sdom.iloc[0].chnLett
+    chain = force_chain if force_chain is not None else sdom.iloc[0].chnLett
     domNo = sdom.iloc[0].domNo
 
     prefix = "aws:us-east-1" #job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
@@ -255,8 +258,12 @@ def process_domain(job, sdi, pdbFileStoreID, work_dir=None, preemptable=True):
         p[1:3].lower(), p.upper(), c, s, d)
 
     key = get_key(int(sfam_id), pdb, chain, sdi, domNo)
-    if out_store.exists(key):
-        return key, sfam_id
+    if not force and out_store.exists(key):
+        pdb_path = os.path.join(work_dir, key)
+        if not os.path.isdir(os.path.dirname(pdb_path)):
+            os.makedirs(os.path.dirname(pdb_path))
+        out_store.read_input_file(key, pdb_path)
+        return pdb_path, key, sfam_id
 
     pdb_path = os.path.join("by_superfamily", str(sfam_id), pdb[1:3].upper())
     domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdb, chain, sdi, domNo))
@@ -273,8 +280,11 @@ def process_domain(job, sdi, pdbFileStoreID, work_dir=None, preemptable=True):
         in_store.read_input_file(pdb_file_base, pdb_file)
         assert os.path.isfile(pdb_file)
 
-        #Multiple ranges for one sdi. Might be domain swaped?
-        rslices = ["{}:{}".format(st, en) for st, en in sdom[["from", "to"]].drop_duplicates().itertuples(index=False)]
+        if force_rslices is not None:
+            rslices = force_rslices
+        else:
+            #Multiple ranges for one sdi. Might be domain swaped?
+            rslices = ["{}:{}".format(st, en) for st, en in sdom[["from", "to"]].drop_duplicates().itertuples(index=False)]
 
         #Extract domain; cleaned but atomic coordinates not added or changed
         domain_file = extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, work_dir=work_dir)
@@ -298,14 +308,15 @@ def process_domain(job, sdi, pdbFileStoreID, work_dir=None, preemptable=True):
         RealtimeLogger.info("Cannot process {}.{}.d{} ({}), error: {}".format(pdb, chain, domNo, sdi, e))
         raise
 
-    for f in (pdb_file, domain_file, prepared_file):
-        if os.path.isfile(f):
-            try:
-                os.remove(f)
-            except OSError:
-                pass
+    if cleanup:
+        for f in (pdb_file, domain_file, prepared_file):
+            if os.path.isfile(f):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
 
-    return domain_file_base, sfam_id
+    return prepared_file, domain_file_base, sfam_id
 
 def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.90, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
@@ -521,10 +532,9 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cores=1):
         processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi,
             sdoms_file), axis=1).compute()
     else:
-        processed_domains = job.addChildJobFn(map_job_rv, process_domain, sdoms,
+        job.addChildJobFn(map_job, process_domain, sdoms,
             pdbFileStoreID, preemptable=True).rv()
 
-    return processed_domains
 
 def post_process_sfam(job, sfam_id, jobStoreIDs):
     cluster(job, sfam_id, jobStoreIDs)
