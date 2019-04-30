@@ -216,7 +216,18 @@ class Complex(Select):
 
     def cns_energy(self):
         from molmimic.parsers.CNS import Minimize, calculate_energy
-        return calculate_energy(self.pdb, work_dir=self.work_dir, job=self.job)
+        try:
+            return calculate_energy(self.pdb, work_dir=self.work_dir, job=self.job)
+        except RuntimeError:
+            return pd.Series({
+                 "cns_Etotal": np.nan,
+                 "cns_grad(E)":np.nan,
+                 "cns_E(BOND)":np.nan,
+                 "cns_E(ANGL)":np.nan,
+                 "cns_E(DIHE)":np.nan,
+                 "cns_E(IMPR)":np.nan,
+                 "cns_E(VDW )":np.nan,
+                 "cns_E(ELEC)":np.nan})
 
     def haddock_score(self):
         from molmimic.parsers.haddock import score_complex

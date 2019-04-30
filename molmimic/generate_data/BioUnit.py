@@ -11,7 +11,7 @@ from toil.realtimeLogger import RealtimeLogger
 
 parser = Bio.PDB.PDBParser(QUIET=1, PERMISSIVE=True)
 
-def check_contacts(original_complex, mol_file, mol_res, int_file, int_res):
+def check_contacts(original_complex, mol_file, mol_res, int_file, int_res, return_vars=False):
     try:
         s = parser.get_structure("ref", original_complex)
     except (SystemExit, KeyboardInterrupt):
@@ -23,7 +23,7 @@ def check_contacts(original_complex, mol_file, mol_res, int_file, int_res):
     assert len(chains)==2
 
     try:
-        ic = calculate_ic(s)
+        ic = calculate_ic(s, d_cutoff=8.)
     except ValueError:
         return False
 
@@ -34,13 +34,17 @@ def check_contacts(original_complex, mol_file, mol_res, int_file, int_res):
     face1, face2 = set([r.id[1] for r in face1]), set([r.id[1] for r in face2])
     RealtimeLogger.info("FACE1 {} {}".format(mol_res, face1))
     RealtimeLogger.info("FACE2 {} {}".format(int_res, face2))
-    full_face1 = len(face1.intersection(mol_res))/float(len(mol_res)) > 0.5
-    full_face2 = len(face2.intersection(int_res))/float(len(int_res)) > 0.5
-    return len(ic) > 0 and full_face1 and full_face2
+
+    full_face1 = len(face1.intersection(mol_res))/float(len(mol_res))
+    full_face2 = len(face2.intersection(int_res))/float(len(int_res))
+    if not return_vars:
+        return len(ic) > 0 and full_face1 >= 0.5 and full_face2 >= 0.5
+    else:
+        return ic, face1, face2, full_face1, full_face2
 
 def build_biounit(moving_mol, mol_pdb, mol_chain, moving_int, int_pdb, int_chain, work_dir):
     #Original files may be correct
-    yield moving_mol, moving_int
+    yield moving_int
 
     #Get BioUnit info for interactint domain (since inferred are Superimposed into it)
     pdbId = int_pdb
@@ -54,21 +58,22 @@ def build_biounit(moving_mol, mol_pdb, mol_chain, moving_int, int_pdb, int_chain
         raise RuntimeError("No REMARK 350")
     quat = quat350(remarks[350])
 
-    for i, (Mi, ti) in enumerate(quat):
-        if not (Mi == np.eye(3)).all() and not (ti == np.zeros(3)).all():
-            rt_mol = "{}.rottrans.{}.pdb".format(os.path.splitext(moving_mol)[0], i)
-            tidy(rottrans_from_matrix(moving_mol, Mi, ti, rt_mol), replace=True)
-        else:
-            rt_mol = moving_mol
+    # for i, (Mi, ti) in enumerate(quat):
+    #     if not (Mi == np.eye(3)).all() and not (ti == np.zeros(3)).all():
+    #         rt_mol = "{}.rottrans.{}.pdb".format(os.path.splitext(moving_mol)[0], i)
+    #         tidy(rottrans_from_matrix(moving_mol, Mi, ti, rt_mol), replace=True)
+    #     else:
+    #         rt_mol = moving_mol
 
-        for j, (Mj, tj) in enumerate(quat):
-            if not (Mj == np.eye(3)).all() and not (tj == np.zeros(3)).all():
-                rt_int = "{}.rottrans.{}.pdb".format(os.path.splitext(moving_int)[0], j)
-                tidy(rottrans_from_matrix(moving_int, Mj, tj, rt_int), replace=True)
-            else:
-                rt_int = moving_int
+    for j, (Mj, tj) in enumerate(quat):
+        #if not (Mj == np.eye(3)).all(): # and not (tj == np.zeros(3)).all():
+        rt_int = "{}.rottrans.{}.pdb".format(os.path.splitext(moving_int)[0], j)
+        tidy(rottrans_from_matrix(moving_int, Mj, tj, rt_int), replace=True)
+        # else:
+        #     continue
+        #     rt_int = moving_int
 
-            yield rt_mol, rt_int
+        yield rt_int
 
     del remarks
     del quat

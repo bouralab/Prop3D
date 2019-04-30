@@ -12,16 +12,12 @@ except ImportError:
 
 modeller_file = """import os, sys, json
 
-print os.getcwd()
 os.chdir("{work_dir}")
-print os.getcwd()
-
-#new_target = open(os.devnull, "w")
-#old_target, sys.stdout = sys.stdout, new_target
-#old_err, sys.stderr = sys.stderr, new_target
 
 from modeller import *
 from modeller.automodel import *
+
+#Add New Class Here
 
 env = environ()
 env.io.hydrogen = env.io.hetatm = env.io.water = True
@@ -31,20 +27,41 @@ a = automodel(env,
           knowns   = ("{template}"),  # Use just one template.
           sequence = "{model}",
           assess_methods=(assess.DOPE))
-a.starting_model= 1
+a.starting_model = 1
 a.ending_model = {num_models}
 a.make()
-
-#sys.stdout = old_target
-#sys.stderr = old_err
 
 output = {{x["name"]:x["DOPE score"] for x in a.outputs if x['failure'] is None}}
 print json.dumps(output)
 """
+
 pir_text = ">P1;{template}\nstructure:{template}:.:{chain}:.:{chain}::::\n{seq}*\n" + \
            ">P1;{target}\nsequence:{target}:.:{chain}:.:{chain}::::\n{seq}*\n"
 
-def run_modeller(pir, template, model, num_models=5, work_dir=None, docker=True, job=None):
+
+ca_model = """# This will transfer residue numbers and chain ids from model2 to model.
+class CaModel(automodel):
+    def special_patches(self, aln):
+        if not hasattr(self, "ca_template"):
+            self.ca_template = model(env, file="{template}")
+        self.res_num_from(self.ca_template, aln)
+"""
+
+def make_modeller_file(pir, template, model, num_models=5, work_dir="", callback=None):
+    global _modeller_file
+    _modeller_file = modeller_file.format(pir=pir, template=template, model=model,
+        num_models=num_models, work_dir=work_dir)
+    if callable(callback):
+        _modeller_file = callback(_modeller_file, pir, template, model, num_models, work_dir)
+    return _modeller_file
+
+def ca_callback(modeller_file, pir, template, model, num_models, work_dir):
+    _ca_model = ca_model.format(template=template)
+    f = modeller_file.replace("#Add New Class Here", _ca_model)
+    return f.replace("a = automodel", "a = CaModel")
+
+def run_modeller(pir, template, model, num_models=5, work_dir=None, docker=True,
+  job=None, make_model_callback=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
@@ -59,10 +76,11 @@ def run_modeller(pir, template, model, num_models=5, work_dir=None, docker=True,
             shutil.copy(template, work_dir)
 
         with open(python_file, "w") as f:
-            f.write(modeller_file.format(
+            f.write(make_modeller_file(
                 pir = os.path.join("/data", os.path.basename(pir)),
                 template = os.path.basename(template).rsplit(".", 1)[0],
-                model=model, num_models=num_models, work_dir="/data"))
+                model=model, num_models=num_models, work_dir="/data",
+                callback=make_model_callback))
 
         parameters = [os.path.join("/data", os.path.basename(python_file))]
 
@@ -83,8 +101,9 @@ def run_modeller(pir, template, model, num_models=5, work_dir=None, docker=True,
 
     else:
         with open(python_file, "w") as f:
-            f.write(modeller_file.format(
-                pir = pir, template = template, model=model, num_models=num_models, work_dir=work_dir))
+            f.write(make_modeller_file(
+                pir = pir, template = template, model=model, num_models=num_models,
+                work_dir=work_dir, callback=make_model_callback))
 
         try:
             outputs = subprocess.check_output([sys.executable, python_file])
@@ -129,7 +148,11 @@ def run_ca2model(ca_only_model, chain, num_models=5, work_dir=None, docker=True,
 
     pir_file = os.path.join(work_dir, template_file_prefix+".pir")
     with open(pir_file, "w") as pir:
-        pir.write(pir_text.format(template = template_file_prefix, target = model_file_prefix, chain=chain, seq=seq))
+        pir.write(pir_text.format(
+        template = template_file_prefix,
+        target = model_file_prefix,
+        chain=chain,
+        seq=seq))
 
     return run_modeller(pir_file, full_template_file, model_file_prefix, num_models=num_models,
-        work_dir=work_dir, docker=docker, job=job)
+        work_dir=work_dir, docker=docker, job=job, make_model_callback=ca_callback)

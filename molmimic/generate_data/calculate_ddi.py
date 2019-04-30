@@ -161,12 +161,15 @@ def get_int_file(job, mol_pdb, int_pdb, mol_chain, int_chain,
                                     except (ClientError, AssertionError):
                                         #Multiple ranges for one sdi. Might be domain swaped?
                                         rslices = ["{}:{}".format(chain["from"].min(), chain["to"].max())]
-                                        int_file, _, _ = process_domain(job,
-                                            int_sdi_id,
-                                            pdbFileStoreID,
-                                            force_chain=chnLett,
-                                            force_rslices=rslices,
-                                            work_dir=work_dir)
+                                        try:
+                                            int_file, _, _ = process_domain(job,
+                                                int_sdi_id,
+                                                pdbFileStoreID,
+                                                force_chain=chnLett,
+                                                force_rslices=rslices,
+                                                work_dir=work_dir)
+                                        except ClientError:
+                                            continue
                                 else:
                                     int_file = -1
 
@@ -225,14 +228,17 @@ def check_full_chain(job, sdi, pdb, res, pdbFileStoreID, work_dir):
     face = [r.id[1] for r in mol.get_residues() if r.id[1] in res]
     del mol
     if len(face)==0:
-        pdbf, _, _ = process_domain(job,
-            sdi,
-            pdbFileStoreID,
-            force=True,
-            cleanup=False,
-            work_dir=work_dir)
-        RealtimeLogger.info("NEW FILE IS {}".format(pdbf))
-        assert os.path.isfile(pdbf)
+        try:
+            pdbf, _, _ = process_domain(job,
+                sdi,
+                pdbFileStoreID,
+                force=True,
+                cleanup=False,
+                work_dir=work_dir)
+            RealtimeLogger.info("NEW FILE IS {}".format(pdbf))
+            assert os.path.isfile(pdbf)
+        except (RuntimeError, AssertionError):
+            return None
     else:
         pdbf = pdb
 
@@ -317,6 +323,8 @@ def process_interface(job, row, int_type, pdbFileStoreID, download=True, work_di
             return None, None, None, None, False, {}
 
     mol_file = check_full_chain(job, mol_sdi_id, mol_file, mol_resi, pdbFileStoreID, work_dir)
+    if mol_file is None:
+        return None, None, None, None, False, {}
 
     try:
         int_resi = list(map(int, str(row["int_res"]).split(",")))
@@ -331,6 +339,8 @@ def process_interface(job, row, int_type, pdbFileStoreID, download=True, work_di
             return None, None, None, None, False, {}
 
     int_file = check_full_chain(job, int_sdi_id, int_file, int_resi, pdbFileStoreID, work_dir)
+    if int_file is None:
+        return None, None, None, None, False, {}
 
     if int_type == "inferred":
         try:
@@ -492,69 +502,114 @@ def get_original_complexes(job, mol_sfam, int_sfam, group, int_type, pdbFileStor
     if work_dir is None:
         work_dir = os.cwd()
 
+    ddi_store = IOStore.get("aws:us-east-1:molmimic-ddi")
+
+    files_to_clean = []
     complex_files = []
     interface_info = []
     for _, row in group:
         orow = row.copy()
         row = row.iloc[0]
 
-        mol_file_f, mol_resi, int_file_f, int_resi, int_inside, _align_info = process_interface(job,
-            row, int_type, pdbFileStoreID, work_dir=work_dir)
+        if int_type == "observed":
+            int_id = row["obs_int_id"]
+        else:
+            int_id = "{}_{}_{}".format(row["nbr_obs_int_id"], row["nbr_sdi_id"], row["mol_sdi"])
 
-        # try:
-        #     mol_file = download_pdb(job, row.mol_superfam_id, row.mol_pdb,
-        #         row.mol_chain, row.mol_sdi_id, row.mol_domNo, work_dir=work_dir)
-        #
-        #     int_file = download_pdb(job, row.int_superfam_id, row.int_pdb,
-        #         row.int_chain, row.int_sdi_id, row.int_domNo, work_dir=work_dir)
-        # except (KeyboardInterrupt, SystemExit):
-        #     raise
-        # except Exception as e:
-        if mol_file_f is None:
-            #PDB files not found, skip
-            RealtimeLogger.info("Cannot download mol PDB {}.{}.{} bc it was not found {}".format(
-                row.mol_pdb, row.mol_chain, row.mol_sdi_id if int_type=="observed" else row.mol_sdi, "INT INSIDE" if int_inside else ""))
-            if int_inside:
-                complex_files.append((-1, None))
-            else:
-                complex_files.append((None, None))
-            continue
-        if int_file_f is None:
-            RealtimeLogger.info("Cannot download int PDB {}.{}.{} bc it was not found {}".format(
-                row.int_pdb, row.int_chain, row.int_sdi_id if int_type=="observed" else row.int_sdi, "INT INSIDE" if int_inside else ""))
-            if int_inside:
-                complex_files.append((-1, None))
-            else:
-                complex_files.append((None, None))
-            continue
+        unrefined_files = list(ddi_store.list_input_directory("{}_{}/unrefined_{}/{}".format(
+            int(mol_sfam), int(int_sfam), int_type, int_id)))
 
-        #Check for biounit
-        try:
-            for i, (_mol_file_f, _int_file_f) in enumerate(build_biounit(
-              mol_file_f, row.mol_pdb, row.mol_chain, int_file_f, row.int_pdb,
-              row.int_chain, work_dir)):
-                RealtimeLogger.info("Trying Biounit {}".format(i))
-                merged_file_f = next(prep((_mol_file_f, "M"), (_int_file_f, "I"), merge=True,
-                    work_dir=work_dir))
+        if len(unrefined_files) == 0:
+            #Put together interaction from monomers
 
-                if check_contacts(merged_file_f, _mol_file_f, mol_resi, _int_file_f, int_resi):
-                    break
-            else:
+            mol_file_f, mol_resi, _int_file_f, int_resi, int_inside, _align_info = process_interface(job,
+                row, int_type, pdbFileStoreID, work_dir=work_dir)
+
+            files_to_clean += [mol_file_f, _int_file_f]
+
+            if mol_file_f is None:
+                #PDB files not found, skip
+                RealtimeLogger.info("Cannot download mol PDB {}.{}.{} bc it was not found {}".format(
+                    row.mol_pdb, row.mol_chain, row.mol_sdi_id if int_type=="observed" else row.mol_sdi, "INT INSIDE" if int_inside else ""))
+                if int_inside:
+                    complex_files.append((-1, None))
+                else:
+                    complex_files.append((None, None))
+                continue
+            if _int_file_f is None:
+                RealtimeLogger.info("Cannot download int PDB {}.{}.{} bc it was not found {}".format(
+                    row.int_pdb, row.int_chain, row.int_sdi_id if int_type=="observed" else row.int_sdi, "INT INSIDE" if int_inside else ""))
+                if int_inside:
+                    complex_files.append((-1, None))
+                else:
+                    complex_files.append((None, None))
+                continue
+
+            #Check for biounit
+            try:
+                for i, int_file_f in enumerate(build_biounit(
+                  mol_file_f, row.mol_pdb, row.mol_chain, _int_file_f, row.int_pdb,
+                  row.int_chain, work_dir)):
+                    RealtimeLogger.info("Trying Biounit {}".format(i))
+                    merged_file_f = next(prep((mol_file_f, "M"), (int_file_f, "I"), merge=True,
+                        work_dir=work_dir))
+                    files_to_clean += [int_file_f, merged_file_f]
+
+                    if check_contacts(merged_file_f, mol_file_f, mol_resi, int_file_f, int_resi):
+                        break
+                else:
+                    RealtimeLogger.info("Failed to find complex for {} {}: {}".format(mol_file_f, _int_file_f,
+                        check_contacts(merged_file_f, mol_file_f, mol_resi, int_file_f, int_resi, return_vars=True)))
+                    complex_files.append((None, None))
+                    continue
+            except RuntimeError:
+                RealtimeLogger.info("Failed (RuntimeError) to find complex for {} {}".format(mol_file_f, _int_file_f))
                 complex_files.append((None, None))
                 continue
-        except RuntimeError:
-            complex_files.append((None, None))
-            continue
 
-        mol_file = (os.path.basename(_mol_file_f), job.fileStore.writeGlobalFile(_mol_file_f, cleanup=True))
-        int_file = (os.path.basename(_int_file_f), job.fileStore.writeGlobalFile(_int_file_f, cleanup=True))
+        else:
+            #Unrefined DDI exists
+            merged_file_f = os.path.join(work_dir, os.path.basename(unrefined_files[0]))
+            files_to_clean.append(merged_file_f)
+            try:
+                ddi_store.read_input_file(unrefined_files[0], merged_file_f)
+
+                _, mol_resi, _, int_resi, int_inside, _align_info = process_interface(job,
+                    row, int_type, pdbFileStoreID, download=False, work_dir=work_dir)
+
+                #Split chains
+                subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_splitchain.py"), merged_file_f])
+                fname_root = merged_file_f[:-4]
+                mol_file_f = fname_root+"_M.pdb"
+                int_file_f = fname_root+"_I.pdb"
+                assert os.path.isfile(mol_file_f)
+                assert os.path.isfile(int_file_f)
+                files_to_clean += [mol_file_f, int_file_f]
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except:
+                complex_files.append((None, None))
+                continue
+
+
+        mol_file = (os.path.basename(mol_file_f), job.fileStore.writeGlobalFile(mol_file_f, cleanup=True))
+        int_file = (os.path.basename(int_file_f), job.fileStore.writeGlobalFile(int_file_f, cleanup=True))
         merged_file = (os.path.basename(merged_file_f), job.fileStore.writeGlobalFile(merged_file_f, cleanup=True))
 
         complex_files.append(merged_file)
 
         interface_info.append((mol_file, mol_resi, int_file, int_resi, int_inside, _align_info))
 
-        for f in (merged_file_f, mol_file_f, int_file_f, _mol_file_f, _int_file_f):
+        if int_type == "observed":
+            int_id = row["obs_int_id"]
+        else:
+            int_id = "{}_{}_{}".format(row["nbr_obs_int_id"], row["nbr_sdi_id"], row["mol_sdi"])
+
+        ddi_store.write_output_file(merged_file_f, "{}_{}/unrefined_{}/{}_{}".format(
+            int(mol_sfam), int(int_sfam), int_type, int_id, merged_file[0]))
+
+        for f in files_to_clean:
+            if not f: continue
             try:
                 os.remove(f)
             except OSError:
@@ -607,8 +662,11 @@ def cluster(job, mol_sfam, int_sfam, pdb_complexes, work_dir=None):
     ddi_store.write_output_file(file_list, file_key)
 
     if ddi_store.exists(log_key):
-        ddi_store.read_input_file(log_key, log_file)
-        ddi_store.read_input_file(distance_key, distance_file)
+        try:
+            ddi_store.read_input_file(log_key, log_file)
+            ddi_store.read_input_file(distance_key, distance_file)
+        except ClientError:
+            return None, None
         logs = log_file
     else:
         if len(successful_pdbs)>1:
@@ -745,8 +803,12 @@ def process_sfam_sfam(job, group, pdbFileStoreID, int_type, rerun=False, cores=1
     if int_type == "observed":
         #Get PPI Bind Structures
         pdb_bind_f = os.path.join(work_dir, "pdb_bind_ppi.csv")
-        ddi_store.read_input_file("pdb_bind_ppi.csv", pdb_bind_f)
-        pdb_bind = pd.read_csv(pdb_bind_f, usecols=["pdbId"])["pdbId"]
+        try:
+            ddi_store.read_input_file("pdb_bind_ppi.csv", pdb_bind_f)
+            pdb_bind = pd.read_csv(pdb_bind_f, usecols=["pdbId"])["pdbId"]
+        except ClientError:
+            pdb_bind = pd.Series([], name="pdbId")
+
         in_pdbbind = group["mol_pdb"].apply(lambda x: x in pdb_bind)
         in_pdbbind.index = group.index
         group = group.assign(in_pdbbind=in_pdbbind)
@@ -1042,7 +1104,12 @@ def process_sfam(job, sfam_id, pdbFileStoreID, observed=True, int_sfams=None, mi
     interfaces_key = "{s}/{s}.{o}_interactome".format(
         s=sfam_id, o="observed" if observed else "inferred")
     interfaces_file = os.path.basename(interfaces_key)
-    interface_store.read_input_file(interfaces_key, interfaces_file)
+
+    try:
+        interface_store.read_input_file(interfaces_key, interfaces_file)
+    except ClientError:
+        RealtimeLogger.info("Cannot read SFAM: {}".format(sfam_id))
+        return
 
     interfaces = pd.read_hdf(interfaces_file, "table")
 
@@ -1146,7 +1213,7 @@ def best_sfams(job, all_counts, max_sfams=300):
 def get_sfam_ddi_sizes(job, sfam_id, observed=True):
     int_type = "observed" if observed else "inferred"
     work_dir = job.fileStore.getLocalTempDir()
-    interface_store = IOStore.get("aws:us-east-1:molmimic-interfaces")
+    interface_store = IOStore.get("aws:us-east-1:molmimic-interfaces-1")
 
     interfaces_key = "{s}/{s}.{o}_interactome".format(
         s=sfam_id, o="observed" if observed else "inferred")
@@ -1171,6 +1238,7 @@ def start_toil(job, observed=True, run_haddock=True, memory="1G"):
     work_dir = job.fileStore.getLocalTempDir()
     store = IOStore.get("aws:us-east-1:molmimic-ddi")
     pdb_store = IOStore.get("aws:us-east-1:molmimic-ibis")
+    ddi_store = IOStore.get("aws:us-east-1:molmimic-ddi")
 
     #Download PDB info
     sdoms_file = os.path.join(work_dir, "PDB.h5")
@@ -1194,11 +1262,34 @@ def start_toil(job, observed=True, run_haddock=True, memory="1G"):
     #295086_296406
     #278516_281043
     #304940_305068
-    #merge_job.addFollowOnJobFn(process_sfam, "281208", pdbFileStoreID, int_sfams=["288551"])
-    merge_job.addFollowOnJobFn(process_sfams, pdbFileStoreID, observed)
+    #merge_job.addFollowOnJobFn(process_sfam, "304408", pdbFileStoreID, int_sfams=["304408"])
+    #merge_job.addFollowOnJobFn(process_sfams, pdbFileStoreID, observed)
 
     #map_job(job, process_sfam, observed, 5000)
     #map_job(job, process_sfam, inferred, True)
+    if False:
+        from itertools import groupby
+        import pandas as pd
+
+        pdb_bind_f = os.path.join(work_dir, "pdb_bind_ppi.csv")
+        ddi_store.read_input_file("pdb_bind_ppi.csv", pdb_bind_f)
+        pdbbind_pdbIds = pd.read_csv(pdb_bind_f, usecols=["pdbId"])["pdbId"].apply(lambda c: c.upper())
+
+        pdb = pd.read_hdf(sdoms_file, "merged")
+        pdbbind_pdbs = pdb[pdb["pdbId"].isin(pdbbind_pdbIds)]
+        sfams = pdbbind_pdbs["sfam_id"].drop_duplicates().dropna().apply(lambda x: str(int(x)))
+
+        map_job(job, process_sfam, sfams, pdbFileStoreID, observed)
+
+    interface_store = IOStore.get("aws:us-east-1:molmimic-interfaces-1")
+    observed_sfam = set(key.split("/")[0] for key in interface_store.list_input_directory() \
+        if key.endswith("observed_interactome"))
+    done = set([key.split("/")[0] for key in  ddi_store.list_input_directory() \
+        if "inferred" not in key and key.endswith("results.csv")])
+    sfams_to_run = list(observed_sfam-done)
+    RealtimeLogger.info("RUNNING {} SFAMS".format(len(sfams_to_run)))
+    map_job(job, process_sfam, sfams_to_run, pdbFileStoreID, observed)
+
 
 if __name__ == "__main__":
     parser = Job.Runner.getDefaultArgumentParser()

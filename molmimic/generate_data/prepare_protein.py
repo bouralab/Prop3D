@@ -170,7 +170,6 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e1:
-        RealtimeLogger.info("PDB2PQR failed: {}".format(e1))
         #Might have failed to missing too many heavy atoms
         #Try again, but first add correct side chains
         try:
@@ -181,6 +180,7 @@ def prepare_domain(pdb_file, chain, work_dir=None, pdb=None, domainNum=None, sdi
         except Exception as e2:
             if is_ca_model(pdb_file):
                 #Run modeller to predict full atom model
+                RealtimeLogger.info("Building CA model")
                 try:
                     full_model_file = run_ca2model(pdb_file, chain, work_dir=work_dir, job=job)
                     pqr_file = run_pdb2pqr(full_model_file, whitespace=False, ff="parse", parameters=pdb2pqr_parameters, work_dir=work_dir, job=job)
@@ -250,6 +250,14 @@ def process_domain(job, sdi, pdbFileStoreID, force_chain=None, force_rslices=Non
     chain = force_chain if force_chain is not None else sdom.iloc[0].chnLett
     domNo = sdom.iloc[0].domNo
 
+    _whole_chain = all_sdoms[(all_sdoms["pdbId"]==pdb)&(all_sdoms["chnLett"]==chain)]
+    all_domains = _whole_chain[_whole_chain["whole_chn"]!=1.0]["sdi"].drop_duplicates()
+    whole_chain = _whole_chain[_whole_chain["whole_chn"]==1.0]["sdi"].drop_duplicates()
+
+    if len(all_domains) == 1 and force_rslices is None:
+        #Use full chain
+        force_rslices = [":"]
+
     prefix = "aws:us-east-1" #job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
     in_store = IOStore.get("{}:molmimic-pdb".format(prefix))
     out_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
@@ -263,7 +271,16 @@ def process_domain(job, sdi, pdbFileStoreID, force_chain=None, force_rslices=Non
         if not os.path.isdir(os.path.dirname(pdb_path)):
             os.makedirs(os.path.dirname(pdb_path))
         out_store.read_input_file(key, pdb_path)
-        return pdb_path, key, sfam_id
+
+        #Correct ca_alignments
+        needs_update = False
+        out_store.read_input_file(key+".extracted", pdb_path+".extracted")
+        with open(pdb_path) as dom, open(pdb_path+".extracted") as raw:
+            atom1, atom2 = next(dom), next(raw)
+            if atom1[17:20] != atom2[17:20]:
+                needs_update = True
+        if not needs_update:
+            return pdb_path, key, sfam_id
 
     pdb_path = os.path.join("by_superfamily", str(sfam_id), pdb[1:3].upper())
     domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdb, chain, sdi, domNo))
@@ -275,7 +292,6 @@ def process_domain(job, sdi, pdbFileStoreID, force_chain=None, force_rslices=Non
 
     try:
         #Download PDB archive from JobStore
-
         RealtimeLogger.info("AWS GET: {}; Save to: {}".format(pdb_file_base, pdb_file))
         in_store.read_input_file(pdb_file_base, pdb_file)
         assert os.path.isfile(pdb_file)
@@ -298,7 +314,9 @@ def process_domain(job, sdi, pdbFileStoreID, force_chain=None, force_rslices=Non
 
         try:
             prepared_file = prepare_domain(domain_file, chain, work_dir=work_dir, job=job)
-            out_store.write_output_file(prepared_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), os.path.basename(prepared_file)))
+            prepared_key = os.path.join(str(int(sfam_id)), pdb[1:3].lower(), os.path.basename(prepared_file))
+            out_store.write_output_file(prepared_file, prepared_key)
+            RealtimeLogger.info("Wrote output file {}".format(prepared_key))
         except RuntimeError as e:
             RealtimeLogger.info(str(e))
             raise

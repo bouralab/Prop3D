@@ -62,7 +62,7 @@ def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domN
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
-        raise
+        return
         fail_key = "{}_error.fail".format(key)
         fail_file = os.path.join(work_dir, os.path.basename(key))
         with open(fail_file, "w") as f:
@@ -77,10 +77,10 @@ def calculate_features_for_sfam(job, sfam_id, further_parallelize=True):
     out_store = IOStore.get("aws:us-east-1:molmimic-features")
 
     extensions = set(["atom.npy", "residue.npy", "edges.gz"])
-    done_files = lambda k: set([f.rsplit("_", 1)[1] for f in \
-        out_store.list_input_directory(k)])
+    # done_files = lambda k: set([f.rsplit("_", 1)[1] for f in \
+    #     out_store.list_input_directory(k)])
     pdb_keys = [k for k in pdb_store.list_input_directory(str(int(sfam_id))) if \
-        k.endswith(".pdb") and extensions != done_files(os.path.splitext(k)[0])]
+        k.endswith(".pdb")]# and extensions != done_files(os.path.splitext(k)[0])]
 
     if further_parallelize:
         map_job(job, calculate_features, pdb_keys)
@@ -99,17 +99,20 @@ def calculate_features_for_sfam(job, sfam_id, further_parallelize=True):
 
 
 def start_toil(job):
-    # import pandas as pd
-    # work_dir = job.fileStore.getLocalTempDir()
-    # in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
-    #
-    # pdb_file = os.path.join(work_dir, "PDB.h5")
-    # in_store.read_input_file("PDB.h5", pdb_file)
-    #
-    # sfams = pd.read_hdf(pdb_file, "Superfamilies", columns=
-    #     ["sfam_id"]).drop_duplicates().dropna()["sfam_id"].sort_values()
+    import pandas as pd
+    work_dir = job.fileStore.getLocalTempDir()
+    in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
 
-    sfams = [299845.0]
+    pdb_file = os.path.join(work_dir, "PDB.h5")
+    in_store.read_input_file("PDB.h5", pdb_file)
+
+    sfams = pd.read_hdf(pdb_file, "Superfamilies", columns=
+        ["sfam_id"]).drop_duplicates().dropna()["sfam_id"].sort_values().tolist()
+
+    RealtimeLogger.info("Running {} SFAMs".format(len(sfams)))
+    RealtimeLogger.info("{}".format(sfams))
+
+    # sfams = [299845.0]
 
     map_job(job, calculate_features_for_sfam, sfams)
 

@@ -1,6 +1,7 @@
 import os
 from io import StringIO
 
+import pandas as pd
 import numpy as np
 from sklearn.decomposition import PCA
 from Bio import PDB
@@ -40,15 +41,15 @@ def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=Fals
         return PDB.Polypeptide.aa3
     feature_names = [
         "C", "CT", "CA", "N", "N2", "N3", "NA", "O", "O2", "OH", "S", "SH", "Unk_atom",
-        "C", "N", "O", "S", "Unk_element",
+        "C_elem", "N_elem", "O_elem", "S_elem", "Unk_element",
         "vdw_volume", "charge", "neg_charge", "pos_charge", "neutral_charge",
-        "electrostatic_potential", "is_electropositive", "is_electronegative"
+        "electrostatic_potential", "is_electropositive", "is_electronegative",
         "cx", "is_concave", "is_convex", "is_concave_and_convex",
-        "hydrophobicity", "is_hydrophbic", "is_hydrophilic", "hydrophobicity_is_0"
+        "hydrophobicity", "is_hydrophbic", "is_hydrophilic", "hydrophobicity_is_0",
         "atom_asa", "atom_is_buried", "atom_exposed",
         "residue_asa", "residue_buried", "residue_exposed"]
-    feature_names += PDB.Polypeptide.aa3
-    feature_names += ["Unk_residue", "is_helix", "is_sheet", "Unk_SS"]
+    feature_names += PDB.Polypeptide.aa3+["Unk_residue"]
+    feature_names += ["is_helix", "is_sheet", "Unk_SS"]
     feature_names += [ #DeepSite features
         "hydrophobic_atom",
         "aromatic_atom",
@@ -57,10 +58,25 @@ def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=Fals
         "metal",
         "is_hydrogen",
     ]
-    fearues_names += [
+    feature_names += [
         "conservation_normalized",
         "conservation_scale",
         "is_conserved"
+    ]
+
+    return feature_names
+
+def get_residue_feature_names():
+    feature_names = [
+        "charge", "neg_charge", "pos_charge", "neutral_charge",
+        "electrostatic_potential", "is_electropositive", "is_electronegative",
+        "cx", "is_concave", "is_convex", "is_concave_and_convex",
+        "hydrophobicity", "is_hydrophbic", "is_hydrophilic", "hydrophobicity_is_0",
+        "residue_asa", "residue_buried", "residue_exposed"]
+    feature_names += PDB.Polypeptide.aa3
+    feature_names += [
+        "Unk_residue", "is_helix", "is_sheet", "Unk_SS",
+        "conservation_normalized", "conservation_scale", "is_conserved"
     ]
     return feature_names
 
@@ -113,10 +129,10 @@ class Structure(object):
         self.features_path = os.environ.get("MOLMIMIC_FEATURES", features_path)
 
         self.residue_features_file = os.path.join(features_path,
-            self.pdb.lower()[1:3], "{}_residue.npy".format(self.id))
+            self.pdb.lower()[1:3], "{}_residue.h5".format(self.id))
 
         self.atom_features_file = os.path.join(features_path,
-            self.pdb.lower()[1:3], "{}_atom.npy".format(self.id))
+            self.pdb.lower()[1:3], "{}_atom.h5".format(self.id))
 
         if not os.path.isdir(os.path.dirname(self.atom_features_file)):
             os.makedirs(os.path.dirname(self.atom_features_file))
@@ -131,10 +147,24 @@ class Structure(object):
         else:
             self.residue_feature_mode = feature_mode
 
-        self.residue_features = np.memmap(self.residue_features_file,
-            dtype=np.float, mode=self.residue_feature_mode, shape=(self.n_residues, self.n_residue_features))
-        self.atom_features = np.memmap(self.atom_features_file,
-            dtype=np.float, mode=self.atom_feature_mode, shape=(self.n_atoms, self.n_atom_features))
+        # self.residue_features = np.memmap(self.residue_features_file,
+        #     dtype=np.float, mode=self.residue_feature_mode, shape=(self.n_residues, self.n_residue_features))
+        # self.atom_features = np.memmap(self.atom_features_file,
+        #     dtype=np.float, mode=self.atom_feature_mode, shape=(self.n_atoms, self.n_atom_features))
+
+        if self.atom_feature_mode == "r":
+            self.atom_features = pd.read_hdf(self.atom_features_file, "table")
+        else:
+            atom_index = [a.serial_number for a in self.structure.get_atoms()]
+            self.atom_features = pd.DataFrame(columns=get_feature_names(),
+                index=atom_index)
+
+        if self.residue_feature_mode == "r":
+            self.residue_features = pd.read_hdf(self.residue_features_file, "table")
+        else:
+            residue_index = [r.get_id() for r in self.structure.get_residues()]
+            self.residue_features = pd.DataFrame(columns=get_residue_feature_names(),
+                index=residue_index)
 
     def get_atoms(self, include_hetatms=False, exclude_atoms=None):
         for a in self.filter_atoms(self.structure.get_atoms(), include_hetatms=include_hetatms, exclude_atoms=exclude_atoms):

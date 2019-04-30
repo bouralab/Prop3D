@@ -1,5 +1,6 @@
 import os
 
+import pandas as pd
 import numpy as np
 from sklearn.gaussian_process.kernels import RBF
 from Bio import PDB
@@ -39,7 +40,7 @@ class ProteinFeaturizer(Structure):
                 use_deepsite_features=use_deepsite_features) \
                 for r in self.structure.get_residues()]
             if self.residue_feature_mode == "w+":
-                self.residue_features.flush()
+                self.write_features(course_grained=True)
             return features, self.residue_features_file
         else:
             features = [self.calculate_features_for_atom(atom, only_aa=only_aa,
@@ -47,8 +48,15 @@ class ProteinFeaturizer(Structure):
                 use_deepsite_features=use_deepsite_features) \
                 for atom in self.structure.get_atoms()]
             if self.atom_feature_mode == "w+":
-                self.atom_features.flush()
+                self.write_features()
             return features, self.atom_features_file
+
+    def write_features(self, course_grained=False):
+        if course_grained:
+            self.residue_features.to_hdf(self.residue_features_file, "table")
+        else:
+            self.atom_features.to_hdf(self.atom_features_file, "table")
+            #self.atom_features.flush()
 
     def get_features_per_atom(residue_list):
         """Get features for eah atom, but not organized in grid"""
@@ -102,7 +110,8 @@ class ProteinFeaturizer(Structure):
         RealtimeLogger.info("Feats shape {}".format(features.shape))
         RealtimeLogger.info("atom_features shape {}".format(self.atom_features.shape))
 
-        self.atom_features[atom.serial_number-1,:] = features
+        #self.atom_features[atom.serial_number-1,:] = features
+        self.atom_features.loc[atom.serial_number, :] = features
 
         RealtimeLogger.info("atom_features is {}".format(self.atom_features))
 
@@ -132,7 +141,8 @@ class ProteinFeaturizer(Structure):
                 self.get_ss(residue),
                 self.get_evolutionary_conservation_score(residue)), axis=None)
 
-        self.residue_features[residue.get_id()[1]-1,:] = features
+        #self.residue_features[residue.get_id()[1]-1,:] = features
+        self.residue_features.loc[residue.get_id(), :] = features
 
     def get_atom_type(self, atom):
         """
@@ -469,12 +479,8 @@ class ProteinFeaturizer(Structure):
         import networkx as nx
         structure_graph = nx.Graph()
         for r1, r2 in self.calculate_neighbors(d_cutoff=d_cutoff):
-            r1_id, r2_id = r1.get_id()[1], r2.get_id()[1]
-            # if r1_id not in structure_graph:
-            #     structure_graph.add_node(r1_id)
-            # if r2_id not in structure_graph:
-            #     structure_graph.add_node(r2_id)
-            structure_graph.add_edge(r1_id, r2_id, attr_dict=self.get_edge_features(r1, r2))
+            structure_graph.add_edge(r1.get_id(), r2.get_id(),
+                attr_dict=self.get_edge_features(r1, r2))
 
         edge_file = os.path.join(self.work_dir, "{}.edges.gz".format(self.id))
         nx.write_edgelist(structure_graph, edge_file)
