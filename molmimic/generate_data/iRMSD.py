@@ -1,3 +1,4 @@
+from __future__ import print_function
 import os
 from collections import defaultdict
 
@@ -45,22 +46,36 @@ class Complex(Select):
         selection = "{} {}".format(chain1, chain2)
         self.work_dir = work_dir or os.getcwd()
         self.job = job
+
         self.pdb = pdb
         self.chain1 = chain1
         self.chain2 = chain2
         self.temp = temp
         self.method = method
         self.s = Complex.parser.get_structure("ref", pdb)
-        try:
-            self.face1 = [r.id[1] for r in self.s[0][chain1] if r.id[1] in face1]
-            self.face2 = [r.id[1] for r in self.s[0][chain2] if r.id[1] in face2]
-        except KeyError:
-            job.log("CHAINS: {} {}".format([c.id for c in self.s.get_chains()], get_all_chains(pdb)))
-            raise
-        self.prodigy = Prodigy(self.s, selection, temp)
+        if face1 is not None and face2 is not None:
+            try:
+                RealtimeLogger.info("ALL MOL RESI : {}".format([r.id[1] for r in self.s[0][chain1]]))
+                RealtimeLogger.info("ALL INT RESI : {}".format([r.id[1] for r in self.s[0][chain2]]))
+                self.face1 = [r.id[1] for r in self.s[0][chain1] if r.id[1] in face1]
+                self.face2 = [r.id[1] for r in self.s[0][chain2] if r.id[1] in face2]
+            except KeyError:
+                job.log("CHAINS: {} {}".format([c.id for c in self.s.get_chains()], get_all_chains(pdb)))
+                raise
+        else:
+            self.face1 = None
+            self.face2 = None
+
+        self.prodigy = Prodigy(self.s, selection, temp, strict=False)
         self.prodigy.predict(distance_cutoff=5.5, acc_threshold=0.05)
-        self.interface = set([r.id for rs in calculate_ic(self.s,
-            d_cutoff=10.) for r in rs])
+
+        try:
+            self.interface = set([r.id for rs in calculate_ic(self.s,
+                d_cutoff=10.) for r in rs])
+        except ValueError:
+            #No contatcs at 10 Angtroms!
+            self.interface = set()
+
         self.neighbors = {c.id:defaultdict(list) for c in self.s.get_chains()}
 
         for resA, resB in self.prodigy.ic_network:
@@ -156,15 +171,21 @@ class Complex(Select):
                 bsa[at_id] = at_bsa
             ppi_type = None
 
-        resi1 = "+".join(map(str, self.face1))
-        sel1 = "face1, chain {} and resi {}".format(self.chain1, resi1)
-        sel1 = freesasa.selectArea((sel1,), chains[0], chain1)
-        face1_asa = sel1["face1"]
+        if isinstance(self.face1, (list, tuple)) and len(self.face1) > 0:
+            resi1 = "+".join(map(str, self.face1))
+            sel1 = "face1, chain {} and resi {}".format(self.chain1, resi1)
+            sel1 = freesasa.selectArea((sel1,), chains[0], chain1)
+            face1_asa = sel1["face1"]
+        else:
+            face1_asa = None
 
-        resi2 = "+".join(map(str, self.face2))
-        sel2 = "face2, chain {} and resi {}".format(self.chain2, resi2)
-        sel2 = freesasa.selectArea((sel2,), chains[1], chain2)
-        face2_asa = sel2["face2"]
+        if isinstance(self.face2, (list, tuple)) and len(self.face2) > 0:
+            resi2 = "+".join(map(str, self.face2))
+            sel2 = "face2, chain {} and resi {}".format(self.chain2, resi2)
+            sel2 = freesasa.selectArea((sel2,), chains[1], chain2)
+            face2_asa = sel2["face2"]
+        else:
+            face2_asa = None
 
         return pd.Series({
             "c1_asa": c1_asa,
@@ -185,7 +206,6 @@ class Complex(Select):
         return pd.Series({"Rg_1":r1, "Rg_2":r2, "Rg_interface":rI})
 
     def zrank(self):
-        self.job.log("ZRANK PDB CHAINS: {}".format(get_all_chains(self.pdb)))
         zrank_initial_score = run_zrank(self.pdb, work_dir=self.work_dir, job=self.job)
         zrank_refinement_score = run_zrank(self.pdb, refinement=True,
             work_dir=self.work_dir, job=self.job)
@@ -196,7 +216,18 @@ class Complex(Select):
 
     def cns_energy(self):
         from molmimic.parsers.CNS import Minimize, calculate_energy
-        return calculate_energy(self.pdb, work_dir=self.work_dir, job=self.job)
+        try:
+            return calculate_energy(self.pdb, work_dir=self.work_dir, job=self.job)
+        except RuntimeError:
+            return pd.Series({
+                 "cns_Etotal": np.nan,
+                 "cns_grad(E)":np.nan,
+                 "cns_E(BOND)":np.nan,
+                 "cns_E(ANGL)":np.nan,
+                 "cns_E(DIHE)":np.nan,
+                 "cns_E(IMPR)":np.nan,
+                 "cns_E(VDW )":np.nan,
+                 "cns_E(ELEC)":np.nan})
 
     def haddock_score(self):
         from molmimic.parsers.haddock import score_complex
@@ -263,6 +294,8 @@ class Complex(Select):
         return rmsd, tm_score
 
     def I_RMS(self, moving):
+        if len(self.interface) == 0 or len(moving.interface) == 0:
+            return None, None
         interface1 = self.save_interface()
         interface2 = moving.save_interface()
         f, rmsd, tm_score, _ = align(
@@ -295,16 +328,12 @@ class Complex(Select):
         #Assume chain 1 and chain 2 match in both complexes, but they might have different IDs
         chain_map = {self.chain1:moving.chain1, self.chain2:moving.chain2}
 
-        RealtimeLogger(chain_map)
-        RealtimeLogger(list(self.neighbors_id.keys()))
-        RealtimeLogger(list(moving.neighbors_id.keys()))
-
         #Finds each common pairs for the 2 interfaces
         common = sum(len(set([r for r in self.neighbors_id[res_id]]).intersection(\
             set([r for r in moving.neighbors_id[res_id]]))) \
             for res_id in self.neighbors_id if res_id in moving.neighbors_id)
 
-        fcc = float(common/total)
+        fcc = float(common)/total if total>0 else 0.0
 
         return fcc
 

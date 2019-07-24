@@ -8,7 +8,7 @@ while len(conn.get_all_domains()) > 0:
        conn.delete_domain(d.name)
 
 s3 = boto3.resource('s3', "us-east-1", config=botocore.client.Config(signature_version='s3v4'))
-buckets = [bucket for bucket in s3.buckets.all() if not bucket.name.startswith("molmimic")]
+buckets = [bucket for bucket in s3.buckets.all() if not bucket.name.endswith("--files")]
 for bucket in buckets:
     bucket.objects.all().delete()
     for obj in bucket.objects.all():

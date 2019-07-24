@@ -1,3 +1,4 @@
+from __future__ import print_function
 import os
 import tempfile
 
@@ -8,9 +9,12 @@ except ImportError:
     import subprocess
     zrank_path = subprocess.check_output(["which", "zrank"])
 
+from molmimic.parsers.Electrostatics import run_pdb2pqr
+
 from toil.realtimeLogger import RealtimeLogger
 
-def run_zrank(complex_path, refinement=False, work_dir=None, docker=True, job=None):
+def run_zrank(complex_path, refinement=False, retry_with_protonatation=True,
+  work_dir=None, docker=True, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
@@ -24,6 +28,7 @@ def run_zrank(complex_path, refinement=False, work_dir=None, docker=True, job=No
         print(os.path.basename(pdb), file=listfile)
     listfile.close()
 
+    needs_retry = None
     if docker and apiDockerCall is not None and job is not None:
         parameters = _parameters + [os.path.basename(listfile.name)]
         try:
@@ -36,9 +41,7 @@ def run_zrank(complex_path, refinement=False, work_dir=None, docker=True, job=No
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:
-            RealtimeLogger.info("Error running docker for {} becuase {}".format(complex_path, e))
-            raise
-            return run_zrank(complex_path, refinement=refinement, work_dir=work_dir, docker=False)
+            needs_retry = e
     else:
         cmd = [zrank_path] + _parameters + [os.path.join("/data", listfile.name)]
         try:
@@ -46,7 +49,16 @@ def run_zrank(complex_path, refinement=False, work_dir=None, docker=True, job=No
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:
-            raise RuntimeError("Cannot run zrank for {}. Error: {}".format(complex_path, e))
+            needs_retry = e
+
+    if needs_retry is not None:
+        if retry_with_protonatation:
+            protonated_complex_file = run_pdb2pqr(complex_path, whitespace=False,
+                ff="amber", work_dir=work_dir, docker=docker, job=job)
+            return run_zrank(protonated_complex_file, refinement=refinement,
+                work_dir=work_dir, retry_with_protonatation=False, docker=docker, job=job)
+        else:
+            raise RuntimeError("Cannot run zrank for {}. Error: {}".format(complex_path, needs_retry))
 
     assert os.path.isfile(listfile.name+".zr.out"), "No output for zrank"
 

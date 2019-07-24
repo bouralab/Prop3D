@@ -4,7 +4,9 @@ import shutil
 
 from joblib import Memory
 
-from molmimic.util import silence_stdout, silence_stderr
+from molmimic.generate_data.util import silence_stdout, silence_stderr, \
+    get_all_chains, extract_chains, SubprocessChain, PDB_TOOLS
+from molmimic.generate_data.util import remove_ter_lines as _remove_ter_lines
 from molmimic.parsers.psize import Psize
 
 try:
@@ -129,11 +131,14 @@ def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=
     assert os.path.isfile(out_file), "Outfile not found: {}".format(os.listdir(work_dir))
     return out_file
 
-def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir=None, docker=True, job=None):
+def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None,
+  remove_ter_lines=True, tidy=False, chain=True, work_dir=None, docker=True, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
-    full_pdb_path = pdb_file
+    save_chains = get_all_chains(pdb_file)
+
+    full_pdb_path = _remove_ter_lines(pdb_file) if remove_ter_lines else pdb_file
     pdb_path = os.path.basename(full_pdb_path)
     pqr_file = "{}.pqr".format(pdb_path)
 
@@ -141,11 +146,13 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
     _parameters.append("--ff={}".format(ff))
     if whitespace:
         _parameters.append("--whitespace")
+    if chain and "--chain" not in _parameters:
+        _parameters.append("--chain")
 
     if docker and apiDockerCall is not None and job is not None:
         #Docker can only read from work_dir
-        if not os.path.abspath(os.path.dirname(pdb_file)) == os.path.abspath(work_dir):
-            shutil.copy(pdb_file, work_dir)
+        if not os.path.abspath(os.path.dirname(full_pdb_path)) == os.path.abspath(work_dir):
+            shutil.copy(full_pdb_path, work_dir)
 
         _parameters += ["/data/{}".format(pdb_path), "/data/{}.pqr".format(pdb_path)]
         try:
@@ -162,7 +169,7 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
             #    parameters=parameters, work_dir=work_dir, docker=False)
 
     else:
-        pqr_file = os.path.join(work_dir, pqr_file)
+        pqr_file = os.path.join(work_dir, full_pdb_path)
         command = ["/usr/share/pdb2pqr/pdb2pqr.py"]+parameters
         command += [full_pdb_path, pqr_file]
 
@@ -174,6 +181,18 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None, work_dir
         except Exception as e:
             raise
             #raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
+
+    if tidy:
+        pqr_chains = extract_chains(pqr_file, save_chains)
+        cmds = [[sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), pqr_chains]]
+        tidy_file = pqr_file+".tidy"
+        with open(tidy_file, "w") as f:
+            SubprocessChain(cmds, f)
+        try:
+            os.remove(pqr_file)
+        except OSError:
+            pass
+        shutil.move(tidy_file, pqr_file)
 
     assert os.path.isfile(pqr_file)
     return pqr_file

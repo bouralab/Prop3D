@@ -5,6 +5,7 @@ import argparse
 import time
 from itertools import groupby
 import glob
+import tempfile
 
 from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.util import get_file, filter_hdf, filter_hdf_chunks
@@ -13,8 +14,10 @@ from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
 
 from toil.realtimeLogger import RealtimeLogger
 
-def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domNo=None, work_dir=None):
-    from molmimic.common.featurizer import ProteinFeaturizer
+def calculate_voxels(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domNo=None,
+  rotations=100, autoencoder=True, work_dir=None):
+    assert autoencoder, "Bindig Site Voxeliztion not suppported yet"
+    from molmimic.common.voxels import ProteinVoxelizer
 
     if work_dir is None and job is not None:
         work_dir = job.fileStore.getLocalTempDir()
@@ -22,8 +25,9 @@ def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domN
     if work_dir is None or not os.path.isdir(work_dir):
         work_dir = os.getcwd()
 
-    in_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
-    out_store = IOStore.get("aws:us-east-1:molmimic-features")
+    pdb_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
+    feature_store = IOStore.get("aws:us-east-1:molmimic-features")
+    out_store = IOStore.get("aws:us-east-1:molmimic-voxels-autoencoder")
 
     if [sfam_id, chain, sdi, domNo].count(None) == 0:
         #pdb_or_key is pdb
@@ -37,32 +41,35 @@ def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domN
         pdb, chain, sdi, domNo = os.path.basename(key).split("_")
         sdi, domNo = sdi[3:], domNo[1:]
 
+
+
     try:
         pdb_path = os.path.join(work_dir, os.path.basename(key)+".pdb")
-        in_store.read_input_file(key+".pdb", pdb_path)
+        pdb_store.read_input_file(key+".pdb", pdb_path)
 
-        s = ProteinFeaturizer(pdb_path, pdb, chain, sdi, domNo, job, work_dir)
+        s = ProteinVoxelizer(pdb_path, pdb, chain, sdi, domNo, rotate=False,
+            features_path=work_dir)
 
-        _, atom_features = s.calculate_flat_features()
-        RealtimeLogger.info("Finished atom features")
-        _, residue_features = s.calculate_flat_features(course_grained=True)
-        RealtimeLogger.info("Finished residue features")
-        graph_features = s.calculate_graph()
-        RealtimeLogger.info("Finished edge features")
+        feature_store.read_input_file(key+"_atom.npy", s.atom_features_file)
 
-        out_store.write_output_file(atom_features, key+"_atom.npy")
-        out_store.write_output_file(residue_features, key+"_residue.npy")
-        out_store.write_output_file(graph_features, key+"_edges.gz")
+        for r, theta, phi, z in s.rotate(rotations):
+            indices, data, _ = voxelizer.map_atoms_to_voxel_space(autoencoder=autoencoder)
+            temp_name = os.path.join(work_dir, "{}.npz".format(
+                next(tempfile._get_candidate_names())))
+            np.savez(temp_name, indices=indices, data=data)
+            key = "{}/r{:.3f}_theta{:.3f}_phi{:.3f}_z{:.3f}.npz".format(key, r,
+                theta, phi, z)
+            out_store.write_output_file(temp_name, key)
 
-        for f in (pdb_path, atom_features, residue_features, graph_features):
             try:
-                os.remove(f)
+                os.remove(temp_name)
             except OSError:
                 pass
+
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
-        return
+        raise
         fail_key = "{}_error.fail".format(key)
         fail_file = os.path.join(work_dir, os.path.basename(key))
         with open(fail_file, "w") as f:
@@ -71,16 +78,16 @@ def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domN
         os.remove(fail_file)
 
 
-def calculate_features_for_sfam(job, sfam_id, further_parallelize=True):
+def calculate_voxels_for_sfam(job, sfam_id, further_parallelize=True):
     work_dir = job.fileStore.getLocalTempDir()
     pdb_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
     out_store = IOStore.get("aws:us-east-1:molmimic-features")
 
     extensions = set(["atom.npy", "residue.npy", "edges.gz"])
-    # done_files = lambda k: set([f.rsplit("_", 1)[1] for f in \
-    #     out_store.list_input_directory(k)])
+    done_files = lambda k: set([f.rsplit("_", 1)[1] for f in \
+        out_store.list_input_directory(k)])
     pdb_keys = [k for k in pdb_store.list_input_directory(str(int(sfam_id))) if \
-        k.endswith(".pdb")]# and extensions != done_files(os.path.splitext(k)[0])]
+        k.endswith(".pdb") and extensions != done_files(os.path.splitext(k)[0])]
 
     if further_parallelize:
         map_job(job, calculate_features, pdb_keys)
@@ -99,20 +106,17 @@ def calculate_features_for_sfam(job, sfam_id, further_parallelize=True):
 
 
 def start_toil(job):
-    import pandas as pd
-    work_dir = job.fileStore.getLocalTempDir()
-    in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
+    # import pandas as pd
+    # work_dir = job.fileStore.getLocalTempDir()
+    # in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
+    #
+    # pdb_file = os.path.join(work_dir, "PDB.h5")
+    # in_store.read_input_file("PDB.h5", pdb_file)
+    #
+    # sfams = pd.read_hdf(pdb_file, "Superfamilies", columns=
+    #     ["sfam_id"]).drop_duplicates().dropna()["sfam_id"].sort_values()
 
-    pdb_file = os.path.join(work_dir, "PDB.h5")
-    in_store.read_input_file("PDB.h5", pdb_file)
-
-    sfams = pd.read_hdf(pdb_file, "Superfamilies", columns=
-        ["sfam_id"]).drop_duplicates().dropna()["sfam_id"].sort_values().tolist()
-
-    RealtimeLogger.info("Running {} SFAMs".format(len(sfams)))
-    RealtimeLogger.info("{}".format(sfams))
-
-    # sfams = [299845.0]
+    sfams = [299845.0]
 
     map_job(job, calculate_features_for_sfam, sfams)
 
