@@ -70,9 +70,9 @@ class ProteinVoxelizer(Structure):
             undersample=undersample)
 
     def map_atoms_to_voxel_space(self, binding_site_residues=None,
-      include_full_protein=False, only_aa=False, only_atom=False,
+      include_full_protein=True, only_aa=False, only_atom=False,
       use_deepsite_features=False, non_geom_features=False, undersample=False,
-      only_surface=True, autoencoder=False):
+      only_surface=True, autoencoder=False, return_voxel_map=False):
         """Map atoms to sparse voxel space.
 
         Parameters
@@ -102,6 +102,7 @@ class ProteinVoxelizer(Structure):
                 atoms = list(self.filter_atoms(atoms))
                 binding_site_atoms = [a.get_serial_number() for a in atoms]
                 non_binding_site_atoms = []
+                nAtoms = len(atoms)
             else:
                 atoms = list(self.get_atoms(include_hetatms=True))
                 nAtoms = len(atoms)
@@ -159,16 +160,19 @@ class ProteinVoxelizer(Structure):
 
         data_voxels = defaultdict(lambda: np.zeros(nFeatures))
         truth_voxels = {}
+        
+        voxel_map = {}
 
         skipped = 0
+        skipped_inside = []
+        
         for atom in atoms:
             if autoencoder:
                 truth = True
-            elif binding_site_residues is not None:
+            elif binding_site_residues is None:
                 truth = False
             else:
                 truth = atom.get_serial_number() in binding_site_atoms
-
 
             if not truth and undersample and atom.get_serial_number() not in non_binding_site_atoms:
                 skipped += 1
@@ -178,11 +182,13 @@ class ProteinVoxelizer(Structure):
                 features, is_buried = self.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features, warn_if_buried=True)
                 if not truth and is_buried:
                     skipped += 1
+                    skipped_inside.append((atom, features, is_buried))
                     continue
             else:
                 features = self.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features)
 
             truth_value = np.array([0.,1.]) if truth else np.array([1.,0.])
+
             for atom_grid in self.get_grid_coords_for_atom_by_kdtree(atom):
                 atom_grid = tuple(atom_grid.tolist())
                 try:
@@ -192,20 +198,29 @@ class ProteinVoxelizer(Structure):
                     print(nFeatures, data_voxels[atom_grid].shape, features.shape)
                     raise
                 truth_voxels[atom_grid] = truth_value
+                voxel_map[atom_grid] = atom.get_parent().get_id()
+        
+        
+        #assert len(list(data_voxels)) > 0, (self.pdb, self.chain, self.sdi, data_voxels, list(data_voxels), np.array(list(data_voxels)), skipped, nAtoms, skipped_inside)
+        
+        outputs = None
 
         try:
             if binding_site_residues is None and not autoencoder:
-                return np.array(list(data_voxels)), np.array(list(data_voxels.values()))
+                outputs = [np.array(list(data_voxels)), np.array(list(data_voxels.values()))]
             else:
-                data = np.array(list(data_voxels.values()))
+                data = np.array(list(data_voxels.values())) #Always in same order as put in
                 if autoencoder:
                     truth = data
                 else:
                     truth = np.array([truth_voxels[grid] for grid in data_voxels])
-                return np.array(list(data_voxels)), data, truth
+                outputs = [np.array(list(data_voxels)), data, truth]
         except Exception as e:
             print(e)
             raise
+        
+        outputs.append(np.array(list(voxel_map.values())) if return_voxel_map else None)
+        return outputs
 
     def map_residues_to_voxel_space(self, binding_site_residues=None, include_full_protein=False, non_geom_features=True, only_aa=False, use_deepsite_features=False, undersample=False):
         if binding_site_residues is not None:

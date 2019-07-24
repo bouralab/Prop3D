@@ -38,6 +38,16 @@ def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=Fals
         return ["C", "N", "O", "S", "Unk_element"]
     if only_aa:
         return PDB.Polypeptide.aa3
+    if use_deepsite_features:
+        return [ #DeepSite features
+            "hydrophobic_atom",
+            "aromatic_atom",
+            "hbond_acceptor",
+            "hbond_donor",
+            "metal",
+            "is_hydrogen",
+            "is_conserved"
+        ]
     feature_names = [
         "C", "CT", "CA", "N", "N2", "N3", "NA", "O", "O2", "OH", "S", "SH", "Unk_atom",
         "C", "N", "O", "S", "Unk_element",
@@ -57,7 +67,7 @@ def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=Fals
         "metal",
         "is_hydrogen",
     ]
-    fearues_names += [
+    feature_names += [
         "conservation_normalized",
         "conservation_scale",
         "is_conserved"

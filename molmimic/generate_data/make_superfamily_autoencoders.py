@@ -194,15 +194,18 @@ def cluster(job, structures_data):
     struct_job = job.addChildJobFn(cluster_by_structre, structures_data["structures"])
     job.addFollowOnJobFn(compare_clusters, seq_job.rv(), struct_job.rv())
     
-def start_sae(job, sfam_id, work_dir=None):
+def start_sae(job, sfam_id, work_dir=None, sae=True):
     if work_dir is None and job is not None:
         work_dir = job.fileStore.getLocalTempDir()
     elif work_dir is None:
         work_dir = os.getcwd()
     # pdb_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
     # feature_store = IOStore.get("aws:us-east-1:molmimic-structure-features")
-    sae_store = IOStore.get("aws:us-east-1:molmimic-structure-features")
+    #sae_store = IOStore.get("aws:us-east-1:molmimic-structure-features")
     
+    #if not sae:
+    #    ibis_store = IOStore.get("aws:us-east-1:molmimic-interfaces-1")
+    #
     # extensions = set(["atom.npy", "residue.npy", "edges.gz"])
     # done_files = lambda k: set([f.rsplit("_", 1)[1] for f in \
     #     feature_store.list_input_directory(k)])
@@ -217,10 +220,14 @@ def start_sae(job, sfam_id, work_dir=None):
     sfam_id = str(int(sfam_id))
     #for feature_key in feature_store.list_input_directory(sfam_id):
         #if feature_key.endswith("atom.npy"):
+        
+    int_file = os.path.join(work_dir, "interfaces", "{}.observed_interactome".format(sfam_id))
+    ibis_df = pd.read_hdf(int_file, "table")
     
     for feature_file in glob.glob(os.path.join(work_dir, "features", sfam_id, "*", "*_atom.npy")):
         if True:
-            #data_key = feature_key[:-8]
+            print(feature_file)
+            #data_key = feature_key[:-9]
             #feature_file = feature_key #os.path.join(work_dir, "features", feature_key[len(sfam_id):])
 
             # if not os.path.isdir(os.path.dirname(feature_file)):
@@ -245,18 +252,33 @@ def start_sae(job, sfam_id, work_dir=None):
 
             if not os.path.isfile(pdb_file):
                 print("Skipping "+os.path.basename(feature_file[:-8]))
-
-            data.append([key, pdb, chain, sdi, domNo, pdb_file, feature_file])
+                
+            datum = [key, pdb, chain, sdi, domNo, pdb_file, feature_file]
+            
+            if not sae:
+                curr_int = ibis_df[ibis_df["mol_sdi_id"]==int(sdi)]
+                res = set([r for res in curr_int["mol_res"] for r in res.split(",")])
+                if len(res) == 0:
+                    continue
+                    
+                datum.append(",".join(map(str, sorted(res))))
+                
+            data.append(datum)
 
     data_key = os.path.join(sfam_id, "autoencoder_keys.csv")
     data_file = os.path.join(work_dir, "autoencoder_keys.csv" )
-    df = pd.DataFrame(data, columns=["key", "pdb", "chain", "sdi", "domNo",
-        "structure", "features"])
+    cols = ["key", "pdb", "chain", "sdi", "domNo", "structure", "features"]
+    if not sae:
+        cols +=["mol_res"]
+    df = pd.DataFrame(data, columns=cols)
     df.to_csv(data_file)
     #normalize(job, df["features"], work_dir=work_dir)
     #sae_store.write_output_file(data_file, data_key)
     del df
     del data
+    
+    if not sae:
+        return data_file
 
     def callback(epoch, statsfile, graphs, model_file, epoch_file):
         pass
@@ -270,7 +292,7 @@ def start_sae(job, sfam_id, work_dir=None):
 
     train(data_file, model_prefix="{}_sae".format(sfam_id), num_epochs=100,
         use_resnet_unet=True, dropout_depth=True,
-        dropout_width=True, dropout_p=0.6, autoencoder=True,
+        dropout_width=True, dropout_p=0.6, autoencoder=sae,
         checkpoint_callback=callback)
 
 def start_toil(job):
