@@ -13,9 +13,9 @@ from molmimic.common.ProteinTables import vdw_radii, vdw_aa_radii, surface_areas
 
 class ProteinVoxelizer(Structure):
     def __init__(self, path, pdb, chain, sdi, domNo, input_format="pdb",
-      volume=264, voxel_size=1.0, rotate=True, features_path=None):
+      volume=264, voxel_size=1.0, rotate=True, features_path=None, residue_feature_mode=None):
         super().__init__(path, pdb, chain, sdi, domNo,
-            input_format=input_format, feature_mode="r", features_path=features_path)
+            input_format=input_format, feature_mode="r", features_path=features_path, residue_feature_mode=residue_feature_mode)
 
         self.mean_coord = np.zeros(3)
         self.mean_coord_updated = False
@@ -72,7 +72,7 @@ class ProteinVoxelizer(Structure):
     def map_atoms_to_voxel_space(self, binding_site_residues=None,
       include_full_protein=True, only_aa=False, only_atom=False,
       use_deepsite_features=False, non_geom_features=False, undersample=False,
-      only_surface=True, autoencoder=False, return_voxel_map=False):
+      only_surface=True, autoencoder=False, return_voxel_map=False, nClasses=2):
         """Map atoms to sparse voxel space.
 
         Parameters
@@ -166,6 +166,15 @@ class ProteinVoxelizer(Structure):
         skipped = 0
         skipped_inside = []
         
+        if nClasses == 2:
+            true_value_ = np.array([0.,1.])
+            neg_value_ = np.array([1.,0.])
+        elif nClasses == 1:
+            true_value_ = np.array([1.])
+            neg_value_ = np.array([0.])
+        elif nClasses == "sfams":
+            pass
+        
         for atom in atoms:
             if autoencoder:
                 truth = True
@@ -186,8 +195,10 @@ class ProteinVoxelizer(Structure):
                     continue
             else:
                 features = self.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features)
+            
+            features = features.astype(float)
 
-            truth_value = np.array([0.,1.]) if truth else np.array([1.,0.])
+            truth_value = true_value_.copy() if truth else neg_value_.copy()
 
             for atom_grid in self.get_grid_coords_for_atom_by_kdtree(atom):
                 atom_grid = tuple(atom_grid.tolist())
@@ -309,14 +320,15 @@ class ProteinVoxelizer(Structure):
             atom = atom.disordered_get_list()[0]
 
         try:
-            features = self.atom_features[atom.serial_number-1]
+            features = self.atom_features.loc[atom.serial_number].values
             is_buried = bool(features[35])
 
             if use_deepsite_features:
+                
                 feats = np.concatenate((
                     features[64:70],
-                    features[20:22],
-                    features[72:]))
+                    features[21:23],
+                    features[-1:]))
                 if warn_if_buried:
                     return feats, is_buried
                 else:

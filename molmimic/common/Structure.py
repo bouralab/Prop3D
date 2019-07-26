@@ -47,6 +47,8 @@ def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=Fals
             "hbond_donor",
             "metal",
             "is_hydrogen",
+            "is_pos",
+            "is_neg",
             "is_conserved"
         ]
     feature_names = [
@@ -92,7 +94,7 @@ def get_residue_feature_names():
 
 class Structure(object):
     def __init__(self, path, pdb, chain, sdi, domNo, input_format="pdb",
-      feature_mode="r", features_path=None):
+      feature_mode="r", features_path=None, residue_feature_mode="r"):
         self.path = path
         if not os.path.isfile(self.path):
             raise InvalidPDB("Cannot find file {}".format(self.path))
@@ -137,40 +139,52 @@ class Structure(object):
         self.n_atom_features = number_of_features(course_grained=False)
 
         self.features_path = os.environ.get("MOLMIMIC_FEATURES", features_path)
-
-        self.residue_features_file = os.path.join(features_path,
-            self.pdb.lower()[1:3], "{}_residue.h5".format(self.id))
-
-        self.atom_features_file = os.path.join(features_path,
-            self.pdb.lower()[1:3], "{}_atom.h5".format(self.id))
+        
+        if features_path.endswith("_atom.h5"):
+            self.features_path = os.path.dirname(features_path)
+            self.atom_features_file = features_file
+            self.residue_features_file = os.path.join(self.features_path,
+            self.pdb.lower()[1:3], "{}_residue.npy".format(self.id))
+        elif features_path.endswith("_residue.npy"):
+            self.features_path = os.path.dirname(features_path)
+            self.residue_features_file = features_file 
+            self.atom_features_file = os.path.join(self.features_path,
+            self.pdb.lower()[1:3], "{}_atom.npy".format(self.id))
+        else:
+            self.atom_features_file = os.path.join(self.features_path,
+            self.pdb.lower()[1:3], "{}_atom.npy".format(self.id))
+            self.residue_features_file = os.path.join(self.features_path,
+            self.pdb.lower()[1:3], "{}_residue.npy".format(self.id))
 
         if not os.path.isdir(os.path.dirname(self.atom_features_file)):
             os.makedirs(os.path.dirname(self.atom_features_file))
 
-        if feature_mode == "r" and not os.path.isfile(self.atom_features_file):
+        if False and feature_mode == "r" and not os.path.isfile(self.atom_features_file):
             self.atom_feature_mode = "w+"
         else:
             self.atom_feature_mode = feature_mode
 
-        if feature_mode == "r" and not os.path.isfile(self.residue_features_file):
+        if False and feature_mode == "r" and not os.path.isfile(self.residue_features_file):
             self.residue_feature_mode = "w+"
         else:
-            self.residue_feature_mode = feature_mode
+            self.residue_feature_mode = residue_feature_mode
 
         # self.residue_features = np.memmap(self.residue_features_file,
         #     dtype=np.float, mode=self.residue_feature_mode, shape=(self.n_residues, self.n_residue_features))
         # self.atom_features = np.memmap(self.atom_features_file,
         #     dtype=np.float, mode=self.atom_feature_mode, shape=(self.n_atoms, self.n_atom_features))
 
+        atom_index = [a.serial_number for a in self.structure.get_atoms()]
         if self.atom_feature_mode == "r":
-            self.atom_features = pd.read_hdf(self.atom_features_file, "table")
+            self.atom_features = pd.read_hdf(self.atom_features_file, "table", mode="r")
+            self.atom_features = self.atom_features.reset_index()
+            self.atom_features = self.atom_features.reindex(index=atom_index)
         else:
-            atom_index = [a.serial_number for a in self.structure.get_atoms()]
             self.atom_features = pd.DataFrame(columns=get_feature_names(),
                 index=atom_index)
 
         if self.residue_feature_mode == "r":
-            self.residue_features = pd.read_hdf(self.residue_features_file, "table")
+            self.residue_features = pd.read_hdf(self.residue_features_file, "table", mode="r")
         else:
             residue_index = [r.get_id() for r in self.structure.get_residues()]
             self.residue_features = pd.DataFrame(columns=get_residue_feature_names(),
