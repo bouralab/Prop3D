@@ -1,5 +1,7 @@
 # molmimic
 
+**Note: this is all research code and has real outputs yet**
+
 molmimic is a tool to annotate binding sites involved in protein-protein interactions (PPI) given the structure of only one of the interaction partners. This method differs from other binding site prediction programs becuase we treat the problem as a 3D image/volume segmentaion problem. We use Sparse 3D Fully Convolutionary Neural Networks, or Sparse 3D Unet, to make voxel level predictions, where each atom is mapped to one or more voxels.
 
 In the future we hope to report binding partners, binding sites for protein-ligand interactions (PLI), sites shared by PPI an PLI for drug repurposing, and sites that are 'mimicking' known interactions, e.g. host-pathogen PPI.
