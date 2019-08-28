@@ -6,10 +6,16 @@ import re
 import subprocess
 from contextlib import contextmanager
 
+from botocore.exceptions import ClientError
+from molmimic.generate_data.iostore import IOStore
+from toil.realtimeLogger import RealtimeLogger
 
 import pandas as pd
 import numpy as np
 import toil.fileStore
+
+from joblib import Memory
+memory = Memory("/tmp", verbose=0)
 
 #Auto-scaling on AWS with toil has trouble finding modules? Heres the workaround
 PDB_TOOLS = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pdb_tools")
@@ -249,7 +255,19 @@ def natural_keys(text, use_int=False):
     (See Toothy's implementation in the comments)
     float regex comes from https://stackoverflow.com/a/12643073/190597
     '''
-    return [ atof(c, use_int=use_int) for c in re.split(r'[+-]?([0-9]+(?:[.][0-9]*)?|[.][0-9]+)', str(text)) ]
+    if isinstance(text, (list,tuple)):
+        if len(text)==3 and isinstance(text[0], str) and isinstance(text[0], int) and isinstance(text[2], str):
+            return text
+        assert 0, "{} must be str".format(text)
+    key =  [ atof(c, use_int=use_int) for c in re.split(r'[+-]?([0-9]+(?:[.][0-9]*)?|[.][0-9]+)', str(text)) ]
+    assert len(key)==3, "key:{}; text:{}".format(key, text)
+    key[0] = ' '.join(key[0].split())
+    key[2] = ' '.join(key[2].split())
+    if len(key[0]) == "":
+        key[0] = " "
+    if len(key[2]) == "":
+        key[2] = " "
+    return tuple(key)
 
 def to_int(s):
     if isinstance(s, int):
@@ -288,9 +306,11 @@ def get_pdb_residues(pdb_file):
         with open(pdb_file) as f:
             prev_res = None
             for line in f:
-                res = natural_keys(line[22:27], use_int=True) #inlcude icode
-                if line.startswith("ATOM") and not res == prev_res:
-                    yield res
+                if line.startswith("ATOM"):
+                    res = natural_keys(line[22:27], use_int=True) #inlcude icode
+                    if not res == prev_res:
+                        yield res
+                    prev_res = res
     except IOError:
         pass
 
@@ -464,3 +484,65 @@ def remove_ter_lines(pdb_file, updated_pdb=None):
                 updated.write(line)
 
     return updated_pdb
+
+def s3_download_pdb(pdb, work_dir=None, remove=False):
+    if work_dir is None:
+        work_dir = os.getcwd()
+
+    store = IOStore.get("aws:us-east-1:molmimic-pdb")
+
+    pdb_file_base = os.path.join(pdb[1:3].lower(), "pdb{}.ent.gz".format(pdb.lower()))
+    pdb_file = os.path.join(work_dir, "pdb{}.ent.gz".format(pdb.lower()))
+
+    format = "pdb"
+
+    for file_format, obs in (("pdb", False), ("mmCif", False), ("pdb", True), ("mmCif", True)):
+        _pdb_file_base = pdb_file_base.replace(".ent.", ".mmcif.") if file_format == "mmcif" else pdb_file_base
+        _pdb_file = pdb_file.replace(".ent.", ".mmcif.") if file_format == "mmcif" else pdb_file
+        _pdb_file_base = "obsolete/"+_pdb_file_base if obs else _pdb_file_base
+
+        try:
+            store.read_input_file(_pdb_file_base, _pdb_file)
+        except ClientError:
+            continue
+
+        if os.path.isfile(_pdb_file):
+            pdb_file_base = _pdb_file_base
+            pdb_file = _pdb_file
+            break
+    else:
+        from Bio.PDB.PDBList import PDBList
+        import gzip
+
+        # obsolete = False
+        # pdb_file = PDBList().retrieve_pdb_file(pdb, pdir=work_dir, file_format="pdb")
+        # if not os.path.isfile(pdb_file):
+        #     obsolete = True
+        #     pdb_file = PDBList().retrieve_pdb_file(pdb, obsolete=True, pdir=work_dir, file_format="pdb")
+        #     if not os.path.isfile(pdb_file):
+        #         raise IOError("{} not found".format(r))
+
+        for file_format, obs in (("pdb", False), ("mmCif", False), ("pdb", True), ("mmCif", True)):
+            pdb_file = PDBList().retrieve_pdb_file(pdb, obsolete=obs, pdir=work_dir, file_format=file_format)
+            if os.path.isfile(pdb_file):
+                obsolete = obs
+                format = file_format
+                break
+        else:
+            raise IOError("{} not found".format(pdb))
+
+        if file_format == "mmcif":
+            pdb_file_base = "{}.cif.gz".format(pdb_file[:-7])
+            pdb_file = "{}.cif.gz".format(pdb_file[:-7])
+
+        with open(pdb_file, 'rb') as f_in, gzip.open(pdb_file+'.gz', 'wb') as f_out:
+            f_out.writelines(f_in)
+
+        store.write_output_file(pdb_file+".gz", "{}{}".format("obsolete/" if obsolete else "", pdb_file_base))
+
+        try:
+            os.remove(pdb_file+".gz")
+        except OSError:
+            pass
+
+    return pdb_file, format

@@ -13,7 +13,7 @@ except ImportError:
 
 from molmimic.generate_data.util import PDB_TOOLS, extract_chains, SubprocessChain, get_all_chains, get_atom_lines, update_xyz
 
-def align(fixed_file, fixed_chain, moving_file, moving_chain, method="tmalign", force_alignment=None, extract=True, docker=True, work_dir=None, job=None):
+def align(fixed_file, fixed_chain, moving_file, moving_chain, method="tmalign", force_alignment=None, extract=True, parse_postions=False, docker=True, work_dir=None, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
@@ -106,6 +106,11 @@ def align(fixed_file, fixed_chain, moving_file, moving_chain, method="tmalign", 
                 for i, mat_line in enumerate(lines):
                     if i>4: break
                     matfile.write(mat_line)
+        if parse_postions and line.startswith("(\":\" denotes aligned residue"):
+            moving_ungapped_to_gapped = [i for i, aa in enumerate(next(lines)) if aa != "-"]
+            next(lines)
+            target_ungapped_to_gapped = [i for i, aa in enumerate(next(lines)) if aa != "-"]
+
 
     ending = ".sup_all_atm_lig" if method == "tmalign" else ".sup_all"
     _outfile = _outf+ending
@@ -160,4 +165,7 @@ def align(fixed_file, fixed_chain, moving_file, moving_chain, method="tmalign", 
             pass
 
     assert os.path.isfile(outfile)
-    return outfile, rmsd, tm_score, matrix_file
+    if not parse_postions:
+        return outfile, rmsd, tm_score, matrix_file
+    else:
+        return outfile, rmsd, tm_score, matrix_file, moving_ungapped_to_gapped, target_ungapped_to_gapped

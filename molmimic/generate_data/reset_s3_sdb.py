@@ -1,3 +1,4 @@
+from __future__ import print_function
 import boto3
 import boto.sdb
 import botocore
@@ -8,8 +9,9 @@ while len(conn.get_all_domains()) > 0:
        conn.delete_domain(d.name)
 
 s3 = boto3.resource('s3', "us-east-1", config=botocore.client.Config(signature_version='s3v4'))
-buckets = [bucket for bucket in s3.buckets.all() if not bucket.name.endswith("--files")]
+buckets = [bucket for bucket in s3.buckets.all() if bucket.name.endswith("--files")]
 for bucket in buckets:
+    print("Removing", bucket.name)
     bucket.objects.all().delete()
     for obj in bucket.objects.all():
         obj.delete()

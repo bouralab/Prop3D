@@ -36,6 +36,7 @@ from toil.realtimeLogger import RealtimeLogger
 import subprocess
 import datetime
 import json
+import subprocess
 
 # Need stuff for Amazon s3
 try:
@@ -761,7 +762,7 @@ class S3IOStore(IOStore):
 
         """
         self.__connect()
-        
+
         if with_times:
             get_output = lambda f: (f.key, f.last_modified)
         else:
@@ -772,6 +773,12 @@ class S3IOStore(IOStore):
 
         for obj in bucket:
             yield get_output(obj)
+
+    def download_input_directory(self, prefix, local_dir, postfix=None):
+        cmd = ["aws", "s3", "sync", "s3://{}/{}".format(self.bucket_name, self.bucket_name), local_dir]
+        if postfix is not None:
+            cmd += ["--exclude=\"*\"", "--include=\"*{}\"".format(postfix)]
+        subprocess.call(cmd)
 
     def write_output_file(self, local_path, output_path):
         """

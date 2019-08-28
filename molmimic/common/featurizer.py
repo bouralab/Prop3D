@@ -507,6 +507,10 @@ class ProteinFeaturizer(Structure):
 
         theta = get_dihedral(c_a, mid_a, mid_b, c_b)
 
+        c = mid_b-mid_a
+
+        scalar_triple_product = c*np.cross(a,b)
+
         #chirality = int(theta > 0)
 
         return {

@@ -18,11 +18,13 @@ def show_predicted_interface(sfam_id, prediction_file):
     interfaces = pd.read_hdf(interface_file, "table")
     print interfaces[["mol_pdb", "mol_chain", "mol_sdi_id", "mol_domNo"]].head()
 
+    scores = {}
+
     with open(prediction_file)  as f:
         for line in f:
             fields = line.rstrip().split(",")
             id, pred_resi = fields[0], fields[1:]
-            print id
+            print id, pred_resi
             pdb, chain, sdi, domNo = id.split("_")
             sdi, domNo = sdi[3:], domNo[1:]
 
@@ -38,20 +40,24 @@ def show_predicted_interface(sfam_id, prediction_file):
                 print "Skipped", id
                 continue
 
-            true_resi = set()
+            true_resi = []
             for resi in interface["mol_res"]:
-                true_resi &= set(resi.split(","))
+                true_resi += resi.split(",")
+            true_resi = set(true_resi)
             pred_resi = set(pred_resi)
+
+            print "   ", true_resi
+            print "   ", pred_resi
 
             tp_resi = true_resi.intersection(pred_resi)
             fp_resi = pred_resi-true_resi
             fn_resi = true_resi-pred_resi
 
-            f1 = (2*len(tp_resi))/(2*len(tp_resi)+len(fn_resi)+len(fp_resi))
+            f1 = (2*len(tp_resi))/float((2*len(tp_resi)+len(fn_resi)+len(fp_resi)))
 
-            if len(tp_resi) == 0 :
+            if len(tp_resi) == 0:
                 print "    Failed"
-                continue
+                
             else:
                 print id, "f1:", f1
 
@@ -69,9 +75,9 @@ hide everything
 show surface, {id}
 color gray90, {id}
 
-select {id}_tp, {tp_resi}
-select {id}_fp, {fp_resi}
-select {id}_fn, {fn_resi}
+select {id}_tp, resi {tp_resi}
+select {id}_fp, resi {fp_resi}
+select {id}_fn, resi {fn_resi}
 color marine, {id}_tp
 color firebrick, {id}_fp
 color tv_orange, {id}_fn
@@ -80,3 +86,6 @@ color tv_orange, {id}_fn
 
             with open("{}.pymol".format(id), "w") as pymol:
                 pymol.write(pymol_file)
+
+            scores[id] = f1
+    return scores

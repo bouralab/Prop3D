@@ -8,6 +8,7 @@ import time
 import itertools as it
 from collections import defaultdict
 from multiprocessing.pool import ThreadPool
+import logging
 
 import pandas as pd
 import dask
@@ -20,6 +21,8 @@ from toil.job import JobFunctionWrappingJob
 
 from toil.realtimeLogger import RealtimeLogger
 
+from botocore.exceptions import ClientError
+
 from molmimic.parsers.Electrostatics import run_pdb2pqr
 from molmimic.parsers.SCWRL import run_scwrl
 from molmimic.parsers.MODELLER import run_ca2model
@@ -27,7 +30,7 @@ from molmimic.parsers.CNS import Minimize
 from molmimic.parsers.mmtf_spark import PdbToMmtfFull
 from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.job_utils import cleanup_ids, map_job_rv, map_job
-from molmimic.generate_data.util import get_first_chain, get_all_chains, number_of_lines, \
+from molmimic.generate_data.util import get_file, get_first_chain, get_all_chains, number_of_lines, \
     iter_unique_superfams, SubprocessChain, get_jobstore_name, is_ca_model
 
 #Auto-scaling on AWS with toil has trouble finding modules? Heres the workaround
@@ -37,7 +40,7 @@ def setup_dask(num_workers):
     dask.config.set(scheduler='multiprocessing')
     dask.config.set(pool=ThreadPool(num_workers))
 
-def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_chain=None, striphet=True, work_dir=None):
+def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_chain=None, striphet=True, cath=True, work_dir=None):
     """Extract a domain from a protein structure and cleans the output to make
     it in standard PDB format. No information in changed or added
 
@@ -70,8 +73,12 @@ def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_ch
     if work_dir is None:
         work_dir = os.getcwd()
 
-    domain_file = os.path.join(work_dir, "{}_{}_sdi{}_d{}.pdb.extracted".format(
-        pdb, chain, int(sdi), domNo))
+    if cath:
+        domain_file = os.path.join(work_dir, "{}.pdb".format(sdi))
+    else:
+        domain_file = os.path.join(work_dir, "{}_{}_sdi{}_d{}.pdb".format(
+            pdb, chain, int(sdi), domNo))
+
 
     open_fn = gzip.open if pdb_file.endswith(".gz") else open
 
@@ -102,12 +109,14 @@ def extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, rename_ch
         commands.append([sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"),
             "-{}".format("1" if isinstance(rename_chain, bool) and rename_chain else rename_chain)])
 
+    RealtimeLogger.info("{}".format(commands))
     with open(domain_file, "w") as output:
         SubprocessChain(commands, output)
 
     with open(domain_file) as f:
         content = f.read().rstrip()
         if content == "":
+            RealtimeLogger.info(open(domain_file+".full").read())
             raise RuntimeError("Error processing PDB: {}".format(domain_file))
 
     if pdb_file.endswith(".gz"):
@@ -230,42 +239,76 @@ Most likeley reason for failing is that the structure is missing too many heavy 
 
     return cleaned_file
 
-def process_domain(job, sdi, pdbFileStoreID, force_chain=None, force_rslices=None, force=False, work_dir=None, cleanup=True, preemptable=True):
+def process_domain(job, sdi, pdbFileStoreID, force_chain=None, force_rslices=None, force=False, work_dir=None, cleanup=True, cath=True, memory="12G", preemptable=True):
     if work_dir is None:
         if job:
             work_dir = job.fileStore.getLocalTempDir()
         else:
             work_dir = os.getcwd()
 
+    in_store = IOStore.get("aws:us-east-1:molmimic-pdb")
     pdb_info_file = copy_pdb_h5(job, pdbFileStoreID)
-    all_sdoms = pd.read_hdf(str(pdb_info_file), "merged") #, where="sdi == {}".format(sdi))
 
-    sdom = all_sdoms[all_sdoms["sdi"]==float(sdi)]
-    if sdom.shape[0] == 0:
-        RealtimeLogger.info("SDI {} does not exist".format(sdi))
-        return None, None, None
+    if cath:
+        all_sdoms = pd.read_hdf(str(pdb_info_file), "table")
+        sdom = all_sdoms[all_sdoms.cath_domain==sdi]
+        all_domains = all_sdoms[all_sdoms.cath_domain.str.startswith(sdi[:5])].cath_domain.drop_duplicates()
+        if len(all_domains) == 1 and force_rslices is None:
+            #Use full chain
+            rslices = [":"]
+        elif force_rslices is not None:
+            rslices = force_rslices
+        else:
+            rslices = ["{}:{}".format(st, en) for st, en in \
+                sdom.sort_values("nseg")[["srange_start", "srange_stop"]]\
+                .drop_duplicates().itertuples(index=False)]
 
-    sfam_id = sdom.iloc[0].sfam_id
-    pdb = sdom.iloc[0].pdbId
-    chain = force_chain if force_chain is not None else sdom.iloc[0].chnLett
-    domNo = sdom.iloc[0].domNo
+        sfam_id = sdom.iloc[0].cathcode
+        pdb = sdom.iloc[0].pdb
+        chain = force_chain if force_chain is not None else sdi[4]
+        domNo = sdom.iloc[0].domain
 
-    _whole_chain = all_sdoms[(all_sdoms["pdbId"]==pdb)&(all_sdoms["chnLett"]==chain)]
-    all_domains = _whole_chain[_whole_chain["whole_chn"]!=1.0]["sdi"].drop_duplicates()
-    whole_chain = _whole_chain[_whole_chain["whole_chn"]==1.0]["sdi"].drop_duplicates()
+        key = "{}/{}.pdb".format(sfam_id.replace(".", "/"), sdi)
+        out_store = IOStore.get("aws:us-east-1:molmimic-cath-structures")
 
-    if len(all_domains) == 1 and force_rslices is None:
-        #Use full chain
-        force_rslices = [":"]
+        RealtimeLogger.info("CATH_DOMAIN {} CHAIN {}".format(sdi, chain))
 
-    prefix = "aws:us-east-1" #job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
-    in_store = IOStore.get("{}:molmimic-pdb".format(prefix))
-    out_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
+    else:
 
-    get_key = lambda f, p, c, s, d: "{}/{}/{}_{}_sdi{}_d{}.pdb".format(int(f),
-        p[1:3].lower(), p.upper(), c, s, d)
 
-    key = get_key(int(sfam_id), pdb, chain, sdi, domNo)
+        all_sdoms = pd.read_hdf(str(pdb_info_file), "merged") #, where="sdi == {}".format(sdi))
+
+        sdom = all_sdoms[all_sdoms["sdi"]==float(sdi)]
+        if sdom.shape[0] == 0:
+            RealtimeLogger.info("SDI {} does not exist".format(sdi))
+            return None, None, None
+
+        sfam_id = sdom.iloc[0].sfam_id
+        pdb = sdom.iloc[0].pdbId
+        chain = force_chain if force_chain is not None else sdom.iloc[0].chnLett
+        domNo = sdom.iloc[0].domNo
+
+        _whole_chain = all_sdoms[(all_sdoms["pdbId"]==pdb)&(all_sdoms["chnLett"]==chain)]
+        all_domains = _whole_chain[_whole_chain["whole_chn"]!=1.0]["sdi"].drop_duplicates()
+        whole_chain = _whole_chain[_whole_chain["whole_chn"]==1.0]["sdi"].drop_duplicates()
+
+        if len(all_domains) == 1 and force_rslices is None:
+            #Use full chain
+            rslices = [":"]
+        elif force_rslices is not None:
+            rslices = force_rslices
+        else:
+            rslices = ["{}:{}".format(st, en) for st, en in sdom[["from", "to"]]\
+                .drop_duplicates().itertuples(index=False)]
+
+
+        out_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
+
+        get_key = lambda f, p, c, s, d: "{}/{}/{}_{}_sdi{}_d{}.pdb".format(int(f),
+            p[1:3].lower(), p.upper(), c, s, d)
+
+        key = get_key(int(sfam_id), pdb, chain, sdi, domNo)
+
     if not force and out_store.exists(key):
         pdb_path = os.path.join(work_dir, key)
         if not os.path.isdir(os.path.dirname(pdb_path)):
@@ -274,16 +317,17 @@ def process_domain(job, sdi, pdbFileStoreID, force_chain=None, force_rslices=Non
 
         #Correct ca_alignments
         needs_update = False
-        out_store.read_input_file(key+".extracted", pdb_path+".extracted")
-        with open(pdb_path) as dom, open(pdb_path+".extracted") as raw:
+        out_store.read_input_file(key, pdb_path)
+        with open(pdb_path) as dom, open(pdb_path) as raw:
             atom1, atom2 = next(dom), next(raw)
             if atom1[17:20] != atom2[17:20]:
                 needs_update = True
-        if not needs_update:
+
+        if not needs_update and not out_store.exists(key+".prepared"):
             return pdb_path, key, sfam_id
 
-    pdb_path = os.path.join("by_superfamily", str(sfam_id), pdb[1:3].upper())
-    domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdb, chain, sdi, domNo))
+    #pdb_path = os.path.join("by_superfamily", str(sfam_id), pdb[1:3].upper())
+    #domain_file = os.path.join(pdb_path, "{}_{}_sdi{}_d{}.pdb".format(pdb, chain, sdi, domNo))
 
     pdb_file_base = os.path.join(pdb[1:3].lower(), "pdb{}.ent.gz".format(pdb.lower()))
     pdb_file = os.path.join(work_dir, "pdb{}.ent.gz".format(pdb.lower()))
@@ -294,13 +338,30 @@ def process_domain(job, sdi, pdbFileStoreID, force_chain=None, force_rslices=Non
         #Download PDB archive from JobStore
         RealtimeLogger.info("AWS GET: {}; Save to: {}".format(pdb_file_base, pdb_file))
         in_store.read_input_file(pdb_file_base, pdb_file)
-        assert os.path.isfile(pdb_file)
+    except ClientError:
+        try:
+            in_store.read_input_file("obsolete/"+pdb_file_base, pdb_file)
+        except ClientError:
+            from Bio.PDBList import PDBList
+            import gzip
+            obsolete = False
+            pdb_file = PDBList().retrieve_pdb_file(pdb, pdir=work_dir, file_format="pdb")
+            if not os.path.isfile(pdb_file):
+                obsolete = True
+                pdb_file = PDBList().retrieve_pdb_file(pdb, obsolete=True, pdir=work_dir, file_format="pdb")
+                if not os.path.isfile(pdb_file):
+                    raise IOError("{} not found".format(r))
 
-        if force_rslices is not None:
-            rslices = force_rslices
-        else:
-            #Multiple ranges for one sdi. Might be domain swaped?
-            rslices = ["{}:{}".format(st, en) for st, en in sdom[["from", "to"]].drop_duplicates().itertuples(index=False)]
+            with open(pdb_file, 'rb') as f_in, gzip.open(pdb_file+'.gz', 'wb') as f_out:
+                f_out.writelines(f_in)
+
+            in_store.write_output_file(pdb_file, "{}{}".format("obsolete/" if obsolete else "", pdb_file_base))
+
+            try:
+                os.remove(pdb_file+".gz")
+            except OSError:
+                pass
+
 
         #Extract domain; cleaned but atomic coordinates not added or changed
         domain_file = extract_domain(pdb_file, pdb, chain, sdi, rslices, domNo, sfam_id, work_dir=work_dir)
@@ -310,13 +371,13 @@ def process_domain(job, sdi, pdbFileStoreID, force_chain=None, force_rslices=Non
             pass
 
         domain_file_base = os.path.basename(domain_file)
-        out_store.write_output_file(domain_file, os.path.join(str(int(sfam_id)), pdb[1:3].lower(), domain_file_base))
+        out_store.write_output_file(domain_file, key) #os.path.join(str(int(sfam_id)), pdb[1:3].lower(), domain_file_base))
 
         try:
             prepared_file = prepare_domain(domain_file, chain, work_dir=work_dir, job=job)
-            prepared_key = os.path.join(str(int(sfam_id)), pdb[1:3].lower(), os.path.basename(prepared_file))
-            out_store.write_output_file(prepared_file, prepared_key)
-            RealtimeLogger.info("Wrote output file {}".format(prepared_key))
+            #prepared_key = os.path.join(str(int(sfam_id)), pdb[1:3].lower(), os.path.basename(prepared_file))
+            out_store.write_output_file(prepared_file, key+".prepared")
+            RealtimeLogger.info("Wrote output file {}".format(key+".prepared"))
         except RuntimeError as e:
             RealtimeLogger.info(str(e))
             raise
@@ -324,7 +385,7 @@ def process_domain(job, sdi, pdbFileStoreID, force_chain=None, force_rslices=Non
         raise
     except Exception as e:
         RealtimeLogger.info("Cannot process {}.{}.d{} ({}), error: {}".format(pdb, chain, domNo, sdi, e))
-        raise
+        return
 
     if cleanup:
         for f in (pdb_file, domain_file, prepared_file):
@@ -335,121 +396,6 @@ def process_domain(job, sdi, pdbFileStoreID, force_chain=None, force_rslices=Non
                     pass
 
     return prepared_file, domain_file_base, sfam_id
-
-def cluster(job, sfam_id, jobStoreIDs, pdbFileStoreID, id=0.90, preemptable=True):
-    work_dir = job.fileStore.getLocalTempDir()
-    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
-    out_store = IOStore.get("{}:molmimic-clustered-structures".format(prefix))
-
-    sdoms_file = copy_pdb_h5(job, pdbFileStoreID)
-
-    sdoms = pd.read_hdf(str(sdoms_file), "merged")
-    sdoms = sdoms[sdoms["sfam_id"]==sfam_id]
-    sdoms = sdoms[["pdbId", "chnLett", "sdi", "domNo"]].drop_duplicates().dropna()
-
-    #Save all domains to fasta
-    domain_fasta = os.path.join(work_dir, "{}.fasta".format(int(sfam_id)))
-    domain_ids = {}
-    with open(domain_fasta, "w") as fasta:
-        for jobStoreID, pdb_fname, _ in jobStoreIDs:
-            with job.fileStore.readGlobalFileStream(jobStoreID) as f:
-                try:
-                    seq = subprocess.check_output([sys.executable, os.path.join(PDB_TOOLS,
-                        "pdb_toseq.py")], stdin=f)
-                    fasta.write(">{}\n{}\n".format(pdb_fname, "\n".join(seq.splitlines()[1:])))
-                    domain_ids[pdb_fname] = jobStoreID
-                except (KeyboardInterrupt, SystemExit):
-                    raise
-                except Exception as e:
-                    RealtimeLogger.info("Error getting fasta for : {} {}".format(sfam_id, fname))
-                    pass
-
-    # d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
-    # d_sdoms.apply(lambda row: subprocess.call([sys.executable,
-    #     os.path.join(PDB_TOOLS, "pdb_toseq.py"), f])
-    #
-    # process_domain(job, dataset_name, row.sdi) \
-    #     if not os.path.isfile(os.path.join(
-    #         PDB_PATH, dataset_name, "by_superfamily", str(sfam_id),
-    #         row.pdbId[1:3].upper(), "{}_{}_sdi{}_d{}.pdb".format(
-    #             row.pdbId, row.chnLett, row.sdi, row.domNo
-    #         )
-    #     )) else None, axis=1).compute()
-
-
-    #Save all domains to fasta
-    # domain_fasta = os.path.join(pdb_path, "{}.fasta".format(int(sfam_id)))
-    # with open(domain_fasta, "w") as fasta:
-    #     for f in glob.glob(os.path.join(pdb_path, "*", "*.pdb")):
-    #         subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_toseq.py"),
-    #             f], stdout=fasta, stderr=subprocess.PIPE)
-
-    #Order domains by resolution so the ones with the highest resolutions are centroids
-    resolutions = pd.read_hdf(str(sdoms_file), "resolu")
-
-    try:
-        pdbs, ids, sequences = list(zip(*[(s.id.split("_", 1)[0].upper(), s.id, str(s.seq)) \
-            for s in SeqIO.parse(domain_fasta, "fasta")]))
-    except ValueError:
-        RealtimeLogger.info("Unable to cluster {}. No PDBs passed the protonation/minization steps.".format(sfam_id))
-        return
-
-    domains = pd.DataFrame({"pdbId":pdbs, "domainId":ids, "sequence":sequences})
-    domains = pd.merge(domains, resolutions, how="left", on="pdbId")
-    xray = domains[domains["resolution"] >= 0.].sort_values("resolution")
-    nmr = domains[domains["resolution"] < 0.]
-
-    with open(domain_fasta, "w") as f:
-        for row in it.chain(xray.itertuples(index=False), nmr.itertuples(index=False)):
-            print(">{} [resolution={}]\n{}".format(row.domainId, row.resolution, row.sequence))
-
-    sfam_key = "{0}/{0}.fasta".format(int(sfam_id))
-    out_store.write_output_file(domain_fasta, sfam_key)
-
-    clusters_file, uclust_file = run_usearch(["-cluster_fast",
-        "{i}"+domain_fasta, "-id", str(id),
-        "-centroids", "{{out}}{}_clusters.uc".format(int(sfam_id)),
-        "-uc", "{{o}}{}_clusters.uc".format(int(sfam_id))])
-
-    #Convert uclust to h5
-    uclust = pd.read_table(str(uclust_file), comment="#", header=None, names=[
-        "record_type",
-        "cluster",
-        "length",
-        "pctId",
-        "strand",
-        "unk1",
-        "unk2",
-        "alignment",
-        "label_query",
-        "label_target"
-    ])
-    del uclust["unk1"]
-    del uclust["unk2"]
-    hdf_base = "{}_clusters.h5".format(int(sfam_id))
-    hdf_file = os.path.join(work_dir, hdf_base)
-    uclust.to_hdf(str(hdf_file), "table", complevel=9, complib="bzip2")
-    out_store.write_output_file(hdf_file, "{}/{}".format(int(sfam_id), hdf_base))
-    os.remove(uclust_file)
-
-    #Upload clustered pdbs
-    clustered_pdbs = []
-    for seq in SeqIO.parse(clusters_file, "fasta"):
-        pdb_base = seq.id
-        jobStoreID = domain_ids[pdb_base]
-        pdb_key = "{}/{}/{}".format(int(sfam_id), pdb_base[1:3], pdb_base)
-        pdb_file = job.fileStore.readGlobalFile(jobStoreID)
-        out_store.write_output_file(pdb_file, pdb_key)
-        os.remove(pdb_file)
-        clustered_pdbs.append((jobStoreID, pdb_base, sfam_id))
-
-        #Remove jobStoreID for list so the actual file won't be removed
-        del jobStoreIDs[jobStoreID.index(jobStoreID)]
-
-    #Delete all reduant pdb files
-    cleanup_ids(jobStoreIDs)
-
-    return clustered_pdbs
 
 def convert_pdb_to_mmtf(job, sfam_id, jobStoreIDs=None, clustered=True, preemptable=True):
     raise NotImplementedError()
@@ -526,32 +472,35 @@ def copy_pdb_h5(job, path_or_pdbFileStoreID):
 
         return sdoms_file
 
-def process_sfam(job, sfam_id, pdbFileStoreID, cores=1):
+def process_sfam(job, sfam_id, pdbFileStoreID, cath, clusterFileStoreID, further_parallize=False, cores=1):
     work_dir = job.fileStore.getLocalTempDir()
-    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
-    in_store = IOStore.get("{}:molmimic-full-structures".format(prefix))
 
-    sdoms_file = copy_pdb_h5(job, pdbFileStoreID)
-
-    sdoms = pd.read_hdf(str(sdoms_file), "merged") #, where="sfam_id == {}".format(sfam_id))
-    # skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keep.csv")
-    # if os.path.isfile(skip_file):
-    #     skip = pd.read_csv(skip_file)
-    #     sdoms = sdoms[sdoms["sdi"].isin(skip["sdi"])]
-
-    sdoms = sdoms[sdoms["sfam_id"]==float(sfam_id)]["sdi"].drop_duplicates().dropna()
-    #sdoms = sdoms[:1]
-
-    if cores > 2:
-        #Only makes sense for slurm or other bare-matal clsuters
-        setup_dask(cores)
-        d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
-        RealtimeLogger.info("Running sfam dask {}".format(sdoms))
-        processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi,
-            sdoms_file), axis=1).compute()
+    if cath:
+        clusters_file = get_file(job, "S100.txt", clusterFileStoreID, work_dir=work_dir)
+        all_sdoms = pd.read_csv(clusters_file, delim_whitespace=True, header=None,
+            usecols=[0, 1, 2, 3, 4], names=["cath_domain", "C", "A", "T", "H"])
+        RealtimeLogger.info("ALL SDOMS {}".format(all_sdoms.head()))
+        groups = all_sdoms.groupby(["C", "A", "T", "H"])
+        RealtimeLogger.info("Running sfam {}".format(sfam_id))
+        sdoms = groups.get_group(tuple(sfam_id))["cath_domain"].drop_duplicates().dropna()
     else:
-        job.addChildJobFn(map_job, process_domain, sdoms,
-            pdbFileStoreID, preemptable=True).rv()
+        sdoms_file = copy_pdb_h5(job, pdbFileStoreID)
+        sdoms = pd.read_hdf(str(sdoms_file), "merged")
+        sdoms = sdoms[sdoms["sfam_id"]==float(sfam_id)]["sdi"].drop_duplicates().dropna()
+    #sdoms = sdoms[:1]
+    if further_parallize:
+        if cores > 2:
+            #Only makes sense for slurm or other bare-matal clsuters
+            setup_dask(cores)
+            d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
+            RealtimeLogger.info("Running sfam dask {}".format(sdoms))
+            processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi,
+                sdoms_file), axis=1).compute()
+        else:
+            map_job(job, process_domain, sdoms, pdbFileStoreID)
+    else:
+        for sdom in sdoms:
+            process_domain(job, sdom, pdbFileStoreID)
 
 
 def post_process_sfam(job, sfam_id, jobStoreIDs):
@@ -561,29 +510,49 @@ def post_process_sfam(job, sfam_id, jobStoreIDs):
         convert_pdb_to_mmtf(job, sfam_id, jobStoreIDs)
         create_data_loader(job, sfam_id, jobStoreIDs)
 
-def start_toil(job, name="prep_protein"):
+def start_toil(job, cath=True):
     """Start the workflow to process PDB files"""
     work_dir = job.fileStore.getLocalTempDir()
-    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
-    in_store = IOStore.get("{}:molmimic-ibis".format(prefix))
 
-    #Download PDB info
-    sdoms_file = os.path.join(work_dir, "PDB.h5")
-    in_store.read_input_file("PDB.h5", sdoms_file)
 
-    #Add pdb info into local job store
-    pdbFileStoreID = job.fileStore.writeGlobalFile(sdoms_file)
+    if cath:
+        in_store = IOStore.get("aws:us-east-1:molmimic-cath")
+        sdoms_file = os.path.join(work_dir, "cath-domain-description-file-small.h5")
+        in_store.read_input_file("cath-domain-description-file-small.h5", sdoms_file)
 
-    #Get all unique superfamilies
-    sdoms = pd.read_hdf(str(sdoms_file), "merged")
+        #Add pdb info into local job store
+        pdbFileStoreID = job.fileStore.writeGlobalFile(sdoms_file)
 
-    # skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keep.csv")
-    # if os.path.isfile(skip_file):
-    #     skip = pd.read_csv(skip_file)
-    #     sdoms = sdoms[sdoms["sdi"].isin(skip["sdi"])]
-    #     RealtimeLogger.info("SKIPPING {} sdis; RUNIING {} sdis".format(skip.shape[0], sdoms.shape[0]))
-    #
-    sfams = sdoms["sfam_id"].drop_duplicates().dropna()
+        clusters_file = os.path.join(work_dir, "cath-domain-list-S100.txt")
+        in_store.read_input_file("cath-domain-list-S35.txt", clusters_file)
+
+        with open(clusters_file) as f:
+            sfams = list(set([tuple(map(int, l.split()[1:5])) for l in f if l and not l.startswith("#")]))
+
+        clusterFileStoreID = job.fileStore.writeGlobalFile(clusters_file)
+
+    else:
+        in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
+
+        #Download PDB info
+        sdoms_file = os.path.join(work_dir, "PDB.h5")
+        in_store.read_input_file("PDB.h5", sdoms_file)
+
+        #Add pdb info into local job store
+        pdbFileStoreID = job.fileStore.writeGlobalFile(sdoms_file)
+
+        #Get all unique superfamilies
+        sdoms = pd.read_hdf(str(sdoms_file), "merged")
+
+        # skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keep.csv")
+        # if os.path.isfile(skip_file):
+        #     skip = pd.read_csv(skip_file)
+        #     sdoms = sdoms[sdoms["sdi"].isin(skip["sdi"])]
+        #     RealtimeLogger.info("SKIPPING {} sdis; RUNIING {} sdis".format(skip.shape[0], sdoms.shape[0]))
+        #
+        sfams = sdoms["sfam_id"].drop_duplicates().dropna()
+
+        clusterFileStoreID = None
     #sfams = sfams[:1]
     #sfams = ["653504"]
 
@@ -593,14 +562,14 @@ def start_toil(job, name="prep_protein"):
 
     max_cores = job.fileStore.jobStore.config.defaultCores
     #Add jobs for each sdi
-    job.addChildJobFn(map_job, process_sfam, sfams, pdbFileStoreID,
+    job.addChildJobFn(map_job, process_sfam, sfams, pdbFileStoreID, cath, clusterFileStoreID,
         cores=max_cores)
 
     #Add jobs for to post process each sfam
     #job.addFollowOnJobFn(map_job, post_process_sfam, sfams, pdbFileStoreID,
     #    cores=max_cores)
 
-    del sdoms
+    del sfams
     os.remove(sdoms_file)
 
 if __name__ == "__main__":
@@ -611,6 +580,10 @@ if __name__ == "__main__":
     options = parser.parse_args()
     options.logLevel = "DEBUG"
     options.clean = "always"
+    options.targetTime = 1
+
+    detector = logging.StreamHandler()
+    logging.getLogger().addHandler(detector)
 
     job = Job.wrapJobFn(start_toil)
     with Toil(options) as toil:

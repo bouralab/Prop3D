@@ -62,25 +62,25 @@ def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domN
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
-        return
+        RealtimeLogger.info("Failed to get features for {}: {} - {}".format(os.path.basename(key), type(e), e))
         fail_key = "{}_error.fail".format(key)
         fail_file = os.path.join(work_dir, os.path.basename(key))
         with open(fail_file, "w") as f:
-            f.write("{}\n".format(e))
+            f.write("{}\n{}\n".format(type(e), w))
         out_store.write_output_file(fail_file, fail_key)
         os.remove(fail_file)
 
 
-def calculate_features_for_sfam(job, sfam_id, further_parallelize=True):
+def calculate_features_for_sfam(job, sfam_id, further_parallelize=False):
     work_dir = job.fileStore.getLocalTempDir()
     pdb_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
     out_store = IOStore.get("aws:us-east-1:molmimic-features")
 
     extensions = set(["atom.npy", "residue.npy", "edges.gz"])
-    # done_files = lambda k: set([f.rsplit("_", 1)[1] for f in \
-    #     out_store.list_input_directory(k)])
+    done_files = lambda k: set([f.rsplit("_", 1)[1] for f in \
+        out_store.list_input_directory(k)])
     pdb_keys = [k for k in pdb_store.list_input_directory(str(int(sfam_id))) if \
-        k.endswith(".pdb")]# and extensions != done_files(os.path.splitext(k)[0])]
+        k.endswith(".pdb") and extensions != done_files(os.path.splitext(k)[0])]
 
     if further_parallelize:
         map_job(job, calculate_features, pdb_keys)
