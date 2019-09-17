@@ -11,6 +11,8 @@ import json
 from pyasn1.codec.ber import decoder
 from itertools import groupby
 
+import numpy as np
+
 from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.util import natural_keys, get_pdb_residues, izip_missing
 
@@ -23,13 +25,14 @@ class InvalidSIFTS(RuntimeError):
     pass
 
 class ChangePDB(Exception):
-    def __init__(self, gi, old_pdb, old_chain, new_pdb, new_chain, new_res):
+    def __init__(self, gi, old_pdb, old_chain, new_pdb, new_chain, new_res, num_residues):
         self.gi = gi
         self.old_pdb  = old_pdb
         self.old_chain = old_chain
         self.new_pdb = new_pdb
         self.new_chain = new_chain
         self.new_res = new_res
+        self.num_residues = num_residues
 
 ns = "{http://www.ebi.ac.uk/pdbe/docs/sifts/eFamily.xsd}"
 def process_residue(residue):
@@ -171,7 +174,12 @@ def get_entrez(gi, work_dir):
     parse_indices = False
     parse_seq = False
 
-    handle = Entrez.efetch(db="protein", id=str(gi), retmode="text")
+    try:
+        handle = Entrez.efetch(db="protein", id=str(gi), retmode="text")
+    except AttributeError:
+        RealtimeLogger.info("Cannot download GI: {}".format(gi))
+        raise InvalidSIFTS("Cannot download GI: {}".format(gi))
+
     for i, line in enumerate(handle):
         if "mol" in line and not parse_gi:
             RealtimeLogger.info("MOL LINE is '{}'".format(line.strip()))
@@ -247,7 +255,7 @@ def get_entrez(gi, work_dir):
 
     return mmdb_indices, seq, num_residues, last_pdb, last_chain
 
-def mmdb_to_pdb_resi_obsolete(gi, pdb_name, chain, resi, replace_nulls=False, work_dir=None, job=None):
+def mmdb_to_pdb_resi_obsolete(gi, pdb_name, chain, resi, shrink_or_expand=False, replace_nulls=False, return_gi_len=False, work_dir=None, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
@@ -293,28 +301,32 @@ def mmdb_to_pdb_resi_obsolete(gi, pdb_name, chain, resi, replace_nulls=False, wo
     # parser = PDBParser() if file_format == "pdb" else MMCIFParser()
     # structure = parser.get_structure('dummy', pdb_file)
 
-    if chain in ["", " "]:
-        chain = next(structure.get_chains()).get_id()
-        RealtimeLogger.info("NEW CHAIN IS '{}'".format(chain))
+    # if chain in ["", " "]:
+    #     chain = next(structure.get_chains()).get_id()
+    #     RealtimeLogger.info("NEW CHAIN IS '{}'".format(chain))
 
     mmdb_indices, mmdb_seq, num_residues, mmdb_pdb, mmdb_chain = get_entrez(gi, work_dir)
 
     if chain in ["", " "]:
         chain = mmdb_chain
-        RealtimeLogger.info("NEW CHAIN IS '{}'".format(chain))
+        #RealtimeLogger.info("NEW CHAIN IS '{}'".format(chain))
 
     if mmdb_pdb.lower() != pdb_name.lower() or  mmdb_chain != chain:
-        RealtimeLogger.info("CHAINGING PDBs {}.{}=>{}.{}".format(pdb_name, chain, mmdb_pdb, mmdb_chain))
+        #RealtimeLogger.info("CHAINGING PDBs {}.{}=>{}.{}".format(pdb_name, chain, mmdb_pdb, mmdb_chain))
         new_res = list(mmdb_to_pdb_resi_obsolete(gi, mmdb_pdb, mmdb_chain, resi, \
+            shrink_or_expand=shrink_or_expand, return_gi_len=return_gi_len,
             replace_nulls=False, work_dir=work_dir, job=job))
-        if len(new_res) > 0:
-            raise ChangePDB(gi, pdb_name, chain, mmdb_pdb, mmdb_chain, new_res)
+
+        if return_gi_len:
+            num_residues = new_res[-1]
+            new_res = new_res[:-1]
         else:
-            RealtimeLogger.info("Models={}; CHAINS={}; INPUT-CHAIN={}.{} ({}.{})".format(
-                [m.get_id() for m in structure.get_models()],
-                [c.get_id() for c in structure.get_chains()],
-                pdb_name, chain, mmdb_pdb, mmdb_chain))
-            raise InvalidSIFTS("Cannot map old codes: {} {} {} {} {} {} {}".format(pdb_name, chain, mmdb_pdb, mmdb_chain, mmdb_pdb_map, pdb_residues, len(mmdb_pdb_map), len(pdb_residues)))
+            num_residues = None
+
+        if len(new_res) > 0:
+            raise ChangePDB(gi, pdb_name, chain, mmdb_pdb, mmdb_chain, new_res, num_residues)
+        else:
+            raise InvalidSIFTS("Cannot map old codes: {} {} {} {} {} {} {}".format(pdb_name, chain, mmdb_pdb, mmdb_chain, mmdb_pdb_map, len(mmdb_pdb_map)))
 
     # try:
     #     pdb_residues = [r.get_id() for r in structure[0][chain].get_residues() \
@@ -330,23 +342,46 @@ def mmdb_to_pdb_resi_obsolete(gi, pdb_name, chain, resi, replace_nulls=False, wo
     #             yield None
     #     raise StopIteration
 
-    RealtimeLogger.info("MMDB PDB is {} {}".format(mmdb_pdb, mmdb_chain))
+    #RealtimeLogger.info("MMDB PDB is {} {}".format(mmdb_pdb, mmdb_chain))
 
     if len(mmdb_indices) != len(mmdb_seq) and len(mmdb_seq) != num_residues:
-        RealtimeLogger.info("{} {} {}".format(mmdb_indices, mmdb_seq, num_residues))
+        #RealtimeLogger.info("{} {} {}".format(mmdb_indices, mmdb_seq, num_residues))
         raise InvalidSIFTS("Cannot map old codes")
 
+    if len(mmdb_indices) == 0:
+        if replace_nulls:
+            RealtimeLogger.info("mmdb_indices DNE {}".format(mmdb_indices))
+            yield None
+            raise StopIteration
+        else:
+            raise InvalidSIFTS("mmdb_indices DNE {}".format(mmdb_indices))
+
+
     last = None
-    last_index = -1
-    while last is None:
-        last = mmdb_indices[last_index]
+    last_index = len(mmdb_indices)-1
+    while last is None and last_index >= 0:
+        try:
+            last = mmdb_indices[last_index]
+        except IndexError:
+            pass
         last_index -= 1
 
     first = None
     first_index = 0
-    while first is None:
-        first = mmdb_indices[first_index]
+    while first is None and first_index < len(mmdb_indices):
+        try:
+            first = mmdb_indices[first_index]
+        except:
+            pass
         first_index += 1
+
+    if None is (first, last):
+        if replace_nulls:
+            RealtimeLogger.info("mmdb_indices DNE {}".format(mmdb_indices))
+            yield None
+            raise StopIteration
+        else:
+            raise InvalidSIFTS("mmdb_indices DNE {}".format(mmdb_indices))
 
     #mmdb_pdb_map = [i+1 for i, ind in enumerate(mmdb_indices) if ind is not None]
 
@@ -354,11 +389,11 @@ def mmdb_to_pdb_resi_obsolete(gi, pdb_name, chain, resi, replace_nulls=False, wo
     mmdb_pdb_map = {i:ind for i, ind in enumerate(mmdb_indices) if ind if ind is not None}#[ind for i, ind in enumerate(mmdb_indices) if ind is not None]
     if False and len(mmdb_pdb_map) != len(pdb_residues):
         if mmdb_pdb.lower() != pdb_name.lower():
-            RealtimeLogger.info("CHAINGING PDBs {}.{}=>{}.{}".format(pdb_name, chain, mmdb_pdb, mmdb_chain))
+            #RealtimeLogger.info("CHAINGING PDBs {}.{}=>{}.{}".format(pdb_name, chain, mmdb_pdb, mmdb_chain))
             new_res = list(mmdb_to_pdb_resi_obsolete(gi, mmdb_pdb, mmdb_chain, resi, \
                 replace_nulls=replace_nulls, work_dir=work_dir, job=job))
             if len(new_res) > 0:
-                raise ChangePDB(gi, pdb_name, chain, mmdb_pdb, mmdb_chain, new_res)
+                raise ChangePDB(gi, pdb_name, chain, mmdb_pdb, mmdb_chain, new_res, num_residues)
             else:
                 raise InvalidSIFTS("Cannot map old codes: {} {} {} {} {} {} {}".format(pdb_name, mmdb_pdb, chain, mmdb_pdb_map, pdb_residues, len(mmdb_pdb_map), len(pdb_residues)))
 
@@ -407,48 +442,81 @@ def mmdb_to_pdb_resi_obsolete(gi, pdb_name, chain, resi, replace_nulls=False, wo
                 failed = True
 
             if failed:
-                RealtimeLogger.info("FAILED matching lengths {} {} {}".format(pdb_name, chain, resi))
+                #RealtimeLogger.info("FAILED matching lengths {} {} {}".format(pdb_name, chain, resi))
                 if replace_nulls:
                     for _ in range(len(resi)):
                         yield None
                         raise StopIteration
                 else:
-                    RealtimeLogger.info("RES are {}".format([r.get_id() for r in structure[0][chain].get_residues()]))
+                    #RealtimeLogger.info("RES are {}".format([r.get_id() for r in structure[0][chain].get_residues()]))
                     raise RuntimeError("Cannot map old codes: {} {} {} {} {} {} {}".format(pdb_name, mmdb_pdb, chain, mmdb_pdb_map, pdb_residues, len(mmdb_pdb_map), len(pdb_residues)))
 
-    RealtimeLogger.info("{}".format(mmdb_pdb_map))
+    #RealtimeLogger.info("{}".format(mmdb_pdb_map))
 
     for i, r in enumerate(resi):
         try:
             yield mmdb_pdb_map[r] #.index(r)
             #RealtimeLogger.info("pdb_index {}".format(pdb_index))
         except KeyError:
-            if r < first_index+1:
-                yield first
-            elif r > last_index+1:
-                yield last
-            elif first_index+1 < r < last_index+1:
-                resi_range = range(r+1, last_index+1) if len(resi) == 2 and i == 0 else range(r-1, first_index+1, -1)
-                for next_r in resi_range:
-                    try:
-                        yield mmdb_pdb_map[next_r]
-                        break
-                    except ValueError:
-                        continue
-                else:
-                    if replace_nulls:
-                        RealtimeLogger.info("not found pdb_index for {} {} {} ".format(r, first, last))
-                        yield None
-                        continue
+            if shrink_or_expand:
+                if r <= first_index:
+                    yield first
+                elif r >= last_index:
+                    yield last
+                elif first_index <= r <= last_index:
+                    if len(resi) == 2:
+                        if r>resi[1-i]:
+                            #Expand to closest residue forward
+                            resi_range = range(r+1, last_index+1)
+                        else:
+                            #Shrink to closest residue backward
+                            resi_range = range(r-1, first_index+1, -1)
+                        for next_r in resi_range:
+                            try:
+                                yield mmdb_pdb_map[next_r]
+                                break
+                            except (KeyError, ValueError):
+                                continue
+                        else:
+                            if replace_nulls:
+                                #RealtimeLogger.info("not found pdb_index for {} {} {} ".format(r, first, last))
+                                yield None
+                                continue
+                            else:
+                                raise InvalidSIFTS("{} {} resnum {} does not exit {}".format(pdb_name, chain, r, mmdb_pdb_map))
                     else:
-                        raise InvalidSIFTS("{} {} resnum {} does not exit {}".format(pdb_name, chain, r, sorted_map))
+                        choose_resi = []
+                        for range_ in (range(r+1, last_index+1), range(r-1, first_index+1, -1)):
+                            for j, next_r in enumerate(range_):
+                                try:
+                                    choose_resi.append((j, mmdb_pdb_map[next_r]))
+                                    break
+                                except (KeyError, ValueError):
+                                    continue
+
+                        if len(choose_resi)> 0:
+                            yield min(choose_resi, key=lambda x: x[0])[1]
+                        else:
+                            if replace_nulls:
+                                yield None
+                                continue
+                            else:
+                                raise InvalidSIFTS("{} {} resnum {} does not exit {}".format(pdb_name, chain, r, mmdb_pdb_map))
+
+                elif replace_nulls:
+                    yield None
+                    continue
+                else:
+                    raise InvalidSIFTS("{} {} resnum {} does not exit {}".format(pdb_name, chain, r, mmdb_pdb_map))
+
             elif replace_nulls:
-                RealtimeLogger.info("not found pdb_index for {} {} {} ".format(r, first, last))
                 yield None
                 continue
             else:
-                raise InvalidSIFTS("{} {} resnum {} does not exit {}".format(pdb_name, chain, r, sorted_map))
+                raise InvalidSIFTS("{} {} resnum {} does not exit {}".format(pdb_name, chain, r, mmdb_pdb_map))
 
+    if return_gi_len:
+        yield num_residues
 
         # try:
         #     yield pdb_residues[pdb_index]
@@ -575,9 +643,12 @@ def comare_to_pdb(pdb_file, resi):
     for test_resi, known_resi in izip_missing(iter(resi), get_pdb_residues(pdb_file)):
         yield test_resi
 
-def decode_residues(job, pdb, chain, res, row=None):
+def decode_residues(job, gi, pdb, chain, res, work_dir=None, row=None):
     if not pdb or pdb == np.NaN or not isinstance(pdb, str):
         raise InvalidSIFTS
+
+    if work_dir is None:
+        work_dir = os.getcwd()
 
     residues = []
 
@@ -594,7 +665,7 @@ def decode_residues(job, pdb, chain, res, row=None):
         if type(res, str) and "," in res:
             return res
         else:
-            return np.NaN
+            return ""
 
     for i in range(len(code)):
         c = code[i]
@@ -602,15 +673,18 @@ def decode_residues(job, pdb, chain, res, row=None):
         for x in range(range_from, range_to + 1):
             residues.append(x)
 
+    # try:
+    #     return ",".join(map(str, mmdb_to_pdb_resi(pdb, chain, residues, job=job)))
+    # except Exception as error:
+    #     RealtimeLogger.info("TRY OBSOLETE")
     try:
-        return ",".join(map(str, mmdb_to_pdb_resi(pdb, chain, residues, job=job)))
+        residues = ["".join(map(str, r)).strip() for r in mmdb_to_pdb_resi_obsolete(
+            gi, pdb, chain, residues, replace_nulls=True, work_dir=work_dir,
+            job=job) if r is not None]
+        return ",".join(map(str, residues))
     except Exception as error:
-        RealtimeLogger.info("TRY OBSOLETE")
-        try:
-            return ",".join(map(str, mmdb_to_pdb_resi_obsolete(pdb, chain, residues, job=job)))
-        except Exception as error:
-            raise
-            RealtimeLogger.info("Error mapping mmdb for", pdb, chain, error, row)
-            raise InvalidSIFTS
-            residues.insert(0, "mmdb")
-            return ",".join(map(str,residues))
+        raise
+        RealtimeLogger.info("Error mapping mmdb for", pdb, chain, error, row)
+        raise InvalidSIFTS
+        residues.insert(0, "mmdb")
+        return ",".join(map(str,residues))

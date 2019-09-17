@@ -3,7 +3,7 @@ import shutil
 import string
 import logging
 from itertools import product
-
+#
 import numpy as np
 import pandas as pd
 import dask.dataframe as dd
@@ -24,29 +24,50 @@ def convert_row(job, row, work_dir=None):
     #     frm, to = list(mmdb_to_pdb_resi(row["pdbId"], row["chnLett"], resi, replace_nulls=True, job=job))
     # except (IOError, TypeError, ValueError, InvalidSIFTS) as e:
     try:
-        frm, to = list(mmdb_to_pdb_resi_obsolete(row["gi"], row["pdbId"], row["chnLett"], resi, replace_nulls=False, job=job))
+        frm, to, num_residues = list(mmdb_to_pdb_resi_obsolete(row["gi"], row["pdbId"],
+            row["chnLett"], resi, shrink_or_expand=True, return_gi_len=True,
+            replace_nulls=False, job=job))
     except ChangePDB as e:
         if None in e.new_res:
             return pd.Series({
                 "pdbId": row["pdbId"],
                 "chnLett": row["chnLett"],
+                "num_residues": np.NaN,
+                "whole_chain": np.NaN,
                 "from": np.NaN,
                 "to":   np.NaN})
         else:
+            whole_chain = e.num_residues-row["to"]+row["from"]<12
             return pd.Series({
                 "pdbId": e.new_pdb,
                 "chnLett": e.new_chain,
+                "num_residues": e.num_residues,
+                "whole_chain": whole_chain,
                 "from": "".join(map(str, e.new_res[0][1:])).strip(),
                 "to":   "".join(map(str, e.new_res[1][1:])).strip()})
     except (SystemExit, KeyboardInterrupt):
         raise
-    except Exception as e:
+    except InvalidSIFTS as e:
         import traceback
         RealtimeLogger.info("Error mapping mmdb for {} '{}' {} {} {} {} {}".format(
             row["pdbId"], row["chnLett"], row["sdi"], resi, e.__class__.__name__, e, traceback.format_exc()))
         return pd.Series({
             "pdbId": row["pdbId"],
             "chnLett": row["chnLett"],
+            "num_residues": np.NaN,
+            "whole_chain": np.NaN,
+            "from": np.NaN,
+            "to":   np.NaN})
+    except Exception as e:
+        raise
+        import traceback
+        RealtimeLogger.info("Error mapping mmdb for {} '{}' {} {} {} {} {}".format(
+            row["pdbId"], row["chnLett"], row["sdi"], resi, e.__class__.__name__, e, traceback.format_exc()))
+        return pd.Series({
+            "pdbId": row["pdbId"],
+            "chnLett": row["chnLett"],
+            "num_residues": np.NaN,
+            "whole_chain": np.NaN,
             "from": np.NaN,
             "to":   np.NaN})
 
@@ -54,12 +75,17 @@ def convert_row(job, row, work_dir=None):
         return pd.Series({
             "pdbId": row["pdbId"],
             "chnLett": row["chnLett"],
+            "num_residues": np.NaN,
+            "whole_chain": np.NaN,
             "from": np.NaN,
             "to":   np.NaN})
 
+    whole_chain = num_residues-row["to"]+row["from"]<12
     return pd.Series({
         "pdbId": row["pdbId"],
         "chnLett": row["chnLett"],
+        "num_residues": num_residues,
+        "whole_chain": whole_chain,
         "from": "".join(map(str, frm[1:])).strip(),
         "to":   "".join(map(str, to[1:])).strip()})
 
@@ -107,8 +133,6 @@ def mmdb2pdb(job, pdb_group, mmdb_file, missing=False, use_sdi=False, use_chunk=
     # sdoms = sdoms[~sdoms.isin(bad_sdi)]
     # del sdoms_l
 
-    RealtimeLogger.info("DF1 {}".format(sdoms))
-
     if dask:
         ddf = dd.from_pandas(sdoms, npartitions=NUM_WORKERS)
         meta = pd.DataFrame({"from":[str], "to":[str]})
@@ -121,24 +145,36 @@ def mmdb2pdb(job, pdb_group, mmdb_file, missing=False, use_sdi=False, use_chunk=
         pdb_map = sdoms.apply(lambda row: convert_row(job, row, work_dir=work_dir), axis=1)
 
     sdoms.loc[:, ["pdbId", "chnLett", "from", "to"]] = pdb_map #sdoms = pd.concat((sdoms, pdb_map), axis=1) #
-    RealtimeLogger.info("DF2 {}".format(sdoms))
+    sdoms = sdoms.assign(
+        num_residues = pdb_map["num_residues"],
+        whole_chain = pdb_map["whole_chain"])
+
     sdoms = sdoms.dropna()
-    sdoms["from"] = sdoms["from"].astype(str)
-    sdoms["to"] = sdoms["to"].astype(str)
+    # sdoms["from"] = sdoms["from"].astype(str)
+    # sdoms["to"] = sdoms["to"].astype(str)
+    sdoms[["pdbId", "chnLett", "from", "to"]] = sdoms[["pdbId", "chnLett", "from", "to"]].astype(str)
+    sdoms[["sdi", "domNo", "gi", "num_residues", "whole_chain"]] = \
+        sdoms[["sdi", "domNo", "gi", "num_residues", "whole_chain"]].astype(int)
+
 
     if len(sdoms)>0:
-        sdoms.to_hdf(str(tmp_path), "table", complevel=9, complib="bzip2", min_itemsize=756)
-        store.write_output_file(tmp_path, "{}/{}".format("sdi" if missing else "groups", os.path.basename(tmp_path)))
-        RealtimeLogger.info("Finished group {}".format(pdb_group))
+        sdoms.to_hdf(str(tmp_path), "table", table=True, format="table", complevel=9, complib="bzip2", min_itemsize=756)
+        store.write_output_file(tmp_path, "{}/{}".format("sdi" if missing else "chunks_", os.path.basename(tmp_path)))
     else:
         RealtimeLogger.info("Failed group {}".format(pdb_group))
 
-def merge(job, mmdb_file, missing=False, disk="100G", cores=8, preemptable=False):
+# def dl(key, output_dir):
+#     store_ = IOStore.get("aws:us-east-1:molmimic-ibis")
+#     outfile = os.path.join(output_dir, os.path.basename(key))
+#     store_.read_input_file(key, outfile)
+#     del store_
+
+def merge(job, mmdb_file, missing=False, cores=8, preemptable=False):
     work_dir = job.fileStore.getLocalTempDir()
     store = IOStore.get("aws:us-east-1:molmimic-ibis")
 
     merged_file = os.path.join(work_dir, "PDB.h5")
-    prefix = "groups/"
+    prefix = "chunks_/"
 
     if missing:
         store.read_input_file("PDB.h5", merged_file)
@@ -151,17 +187,34 @@ def merge(job, mmdb_file, missing=False, disk="100G", cores=8, preemptable=False
                 pass
         pdbStore.close()
 
-    store.download_input_directory(prefix)
+    # from joblib import Parallel, delayed
+    #
+    # Parallel(n_jobs=-1)(delayed(dl)(k, work_dir) for k in store.list_input_directory(prefix))
+
+    # for i, pdb_group_key in enumerate(store.list_input_directory(prefix)):
+    #     if i >= 10: break
+    #     pdb_group_file = os.path.join(work_dir, os.path.basename(pdb_group_key))
+    #     store.read_input_file(pdb_group_key, pdb_group_file)
+
+    store.download_input_directory(prefix, work_dir)
 
     output = os.path.join(work_dir, "PDB.h5")
-
+    import dask
     from multiprocessing.pool import Pool
-    dask.config.set(pool=Pool(8))
 
-    ddf = dd.read_hdf(os.path.join(work_dir, prefix, "*.h5"), "table")
-    ddf = ddf.apply()
-    ddf.to_hdf(output, "table", scheduler="processes", )
-    # remove_keys = []
+    dask.config.set(scheduler="processes")
+    dask.config.set(pool=Pool(cores-1))
+
+    import glob
+    #
+    # RealtimeLogger.info("WORK_DIR {} {}".format(os.path.join(work_dir),
+    #     os.listdir(os.path.join(work_dir))))
+    #
+    ddf = dd.read_hdf(glob.glob(str(os.path.join(work_dir, "*.h5"))), "table")
+    ddf = ddf.repartition(npartitions=cores-1)
+    ddf.to_hdf(output, "StructuralDomains", format="table", table=True, complevel=9,
+        complib="bzip2", min_itemsize=768)
+    # # remove_keys = []
     # for pdb_group_key in store.list_input_directory(prefix):
     #     pdb_group_file = os.path.join(work_dir, os.path.basename(pdb_group_key))
     #     store.read_input_file(pdb_group_key, pdb_group_file)
@@ -189,8 +242,8 @@ def merge(job, mmdb_file, missing=False, disk="100G", cores=8, preemptable=False
     #         os.remove(pdb_group_file)
     #     except OSError:
     #         pass
-    #
-    #     remove_keys.append(pdb_group_key)
+
+        #remove_keys.append(pdb_group_key)
 
     mmdb_path = os.path.join(work_dir, "MMDB.h5")
     if mmdb_file is None:
@@ -216,10 +269,8 @@ def merge(job, mmdb_file, missing=False, disk="100G", cores=8, preemptable=False
 
     store.write_output_file(merged_file, "PDB.h5")
 
-    RealtimeLogger.info("MERGED {} GROUPS".format(len(remove_keys)))
-
-    for key in remove_keys:
-        pass #store.remove_file(key)
+    # for key in remove_keys:
+    #     pass #store.remove_file(key)
 
     try:
         os.remove(merged_file)
@@ -227,7 +278,7 @@ def merge(job, mmdb_file, missing=False, disk="100G", cores=8, preemptable=False
         pass
 
 
-def start_toil(job, missing=False, use_sdi=False, use_chunk=True, force_merge=False, name="mmdb2pdb"):
+def start_toil(job, missing=False, use_sdi=False, use_chunk=True, force_merge=True, name="mmdb2pdb"): #, preemptable=True):
     """Initiate Toil Jobs for converting MMDB to PDB
 
     Paramters
@@ -239,6 +290,7 @@ def start_toil(job, missing=False, use_sdi=False, use_chunk=True, force_merge=Fa
     mmdb2pdb : toil.Job
     """
     work_dir = job.fileStore.getLocalTempDir()
+
     store = IOStore.get("aws:us-east-1:molmimic-ibis")
 
     # if jobStore.exists("PDB.h5"):
@@ -284,12 +336,20 @@ def start_toil(job, missing=False, use_sdi=False, use_chunk=True, force_merge=Fa
             #existing = set(int(k[7:-3]) for k in store.list_input_directory("sdi/"))
             #groups -= existing
 
+            #range(int(mmdb.shape[0]/100)+1)
+
             groups = list(groups)[:1]
             use_sdi = True
             RealtimeLogger.info("USING SDIs Instead: {}".format(len(groups)))
         elif use_chunk:
             groups = list(range(int(mmdb.shape[0]/100)+1))
             use_chunk = True
+            # skip_chunks = set(int(f[8:-3]) for f in store.list_input_directory("chunks_"))
+            # RealtimeLogger.info("SKIP_CHUNKS={} {}".format(len(skip_chunks), list(skip_chunks)[:5]))
+            # if len(skip_chunks) > 0:
+            #     groups = list(set(groups)-skip_chunks)
+            #     RealtimeLogger.info("RUN GRoup {}".format(len(groups)))
+
         else:
             existing = pd.Series([k[7:-3] for k in store.list_input_directory("groups/")]).astype(str)
 
@@ -327,15 +387,20 @@ if __name__ == "__main__":
     from toil.common import Toil
     from toil.job import Job
 
+    os.environ["TOIL_CUSTOM_DOCKER_INIT_COMMAND"] = 'pip install awscli && eval $(aws ecr get-login --no-include-email --region us-east-1)'
+
     parser = Job.Runner.getDefaultArgumentParser()
     options = parser.parse_args()
     options.logLevel = "DEBUG"
     options.clean = "always"
-    options.targetTime = 1
+    #options.targetTime = 1
 
-    detector = logging.StreamHandler()
-    logging.getLogger().addHandler(detector)
+    #detector = logging.StreamHandler()
+    #logging.getLogger().addHandler(detector)
 
     job = Job.wrapJobFn(start_toil)
-    with Toil(options) as toil:
-        toil.start(job)
+    with Toil(options) as workflow:
+        from boto.utils import get_instance_metadata
+        instanceMetadata = get_instance_metadata()["iam"]["security-credentials"]["toil_cluster_toil"]
+        RealtimeLogger.info("CREDS={}".format(instanceMetadata))
+        workflow.start(job)
