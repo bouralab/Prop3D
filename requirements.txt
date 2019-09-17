@@ -15,4 +15,5 @@ cloudpickle >= 0.2.1
 tables
 freesasa
 boto3
-aws
+botocore
+awscli

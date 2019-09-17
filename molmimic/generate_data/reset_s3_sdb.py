@@ -20,13 +20,13 @@ for bucket in buckets:
     bucket.delete()
 
 client = boto3.client('ec2', 'us-east-1')
-spots = client.describe_spot_instance_requests()
-for spot in spots["SpotInstanceRequests"]:
-    if spot["State"] == "active":
-        client.terminate_instances(InstanceIds=[spot["InstanceId"]])
-    if spot["State"] in ["open", "active"]:
-        print("Closing", spot["SpotInstanceRequestId"])
-        client.cancel_spot_instance_requests(SpotInstanceRequestIds=[spot["SpotInstanceRequestId"]])
+spots = [s for s in client.describe_spot_instance_requests()["SpotInstanceRequests"] if s["State"] in ["open", "active"]]
+for i in range(0, len(spots)+1, 50):
+    ids_ = [s["InstanceId"] for s in spots[i:i+50]]
+    spotids_ = [s["SpotInstanceRequestId"] for s in spots[i:i+50]]
+    client.terminate_instances(InstanceIds=ids_)#[spot["InstanceId"]])
+    print("Closing", spotids_)
+    client.cancel_spot_instance_requests(SpotInstanceRequestIds=spotids_) #[spot["SpotInstanceRequestId"]])
 
 response = client.describe_instances()
 for reservation in response["Reservations"]:

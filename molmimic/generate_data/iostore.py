@@ -775,10 +775,41 @@ class S3IOStore(IOStore):
             yield get_output(obj)
 
     def download_input_directory(self, prefix, local_dir, postfix=None):
-        cmd = ["aws", "s3", "sync", "s3://{}/{}".format(self.bucket_name, self.bucket_name), local_dir]
+        from boto.utils import get_instance_metadata
+#         instanceMetadata = get_instance_metadata()["iam"]["security-credentials"]["toil_cluster_toil"]
+#         RealtimeLogger.info("CRED={}".format(instanceMetadata))
+#         os.environ["AWS_ACCESS_KEY_ID"] = instanceMetadata["AccessKeyId"]
+#         os.environ["AWS_SECRET_ACCESS_KEY"] = instanceMetadata["SecretAccessKey"]
+#         os.environ["AWS_SESSION_TOKEN"] = instanceMetadata["Token"]
+#
+#         if not os.path.isfile("~/.aws/credentials"):
+#             if not os.path.isdir("~/.aws"):
+#                 os.makedirs("~/.aws")
+#             with open("~/.aws/credentials", "w") as f:
+#                 print("""[default]
+# aws_access_key_id = {AccessKeyId}
+# aws_secret_access_key = {SecretAccessKey}
+# """.format(**instanceMetadata))
+
+        subprocess.call([sys.executable, "-m", "pip", "install", "awscli", "--upgrade", "--user"])
+
+        import awscli.clidriver
+        driver = awscli.clidriver.create_clidriver()
+
+        cmd = ["s3", "sync", "s3://{}/{}".format(self.bucket_name, prefix), local_dir]
         if postfix is not None:
             cmd += ["--exclude=\"*\"", "--include=\"*{}\"".format(postfix)]
-        subprocess.call(cmd)
+
+
+        rc = driver.main(args=cmd)
+
+        # del os.environ["AWS_ACCESS_KEY_ID"]
+        # del os.environ["AWS_SECRET_ACCESS_KEY"]
+        # del os.environ["AWS_SESSION_TOKEN"]
+        del awscli.clidriver
+
+        if rc != 0:
+            subprocess.call(["aws", "configure"])
 
     def write_output_file(self, local_path, output_path):
         """
