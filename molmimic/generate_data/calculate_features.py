@@ -22,20 +22,36 @@ def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domN
     if work_dir is None or not os.path.isdir(work_dir):
         work_dir = os.getcwd()
 
-    in_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
-    out_store = IOStore.get("aws:us-east-1:molmimic-features")
-
     if [sfam_id, chain, sdi, domNo].count(None) == 0:
         #pdb_or_key is pdb
+        in_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
+        out_store = IOStore.get("aws:us-east-1:molmimic-features")
+
         pdb = pdb_or_key
         key = "{}/{}/{}_{}_sdi{}_d{}".format(int(sfam_id), pdb.lower()[1:3],
             pdb.upper(), chain, sdi, domNo)
-    else:
-        #pdb_or_key is key
-        assert pdb_or_key.count("_") == 3
+    elif pdb_or_key.count("_") == 3:
+        #pdb_or_key is mmdb sdi key
+        in_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
+        out_store = IOStore.get("aws:us-east-1:molmimic-features")
+
+        use_cath = False
         key = os.path.splitext(pdb_or_key)[0]
         pdb, chain, sdi, domNo = os.path.basename(key).split("_")
         sdi, domNo = sdi[3:], domNo[1:]
+        sfam_id = pdb_or_key.rsplit("/", 1)[0]
+
+    else:
+        in_store = IOStore.get("aws:us-east-1:molmimic-cath-structures")
+        out_store = IOStore.get("aws:us-east-1:molmimic-cath-features")
+
+        use_cath = True
+        key = os.path.splitext(pdb_or_key)[0]
+        sdi = os.path.basename(key)
+        pdb, chain, domNo = sdi[:4].lower(), sdi[4], sdi[5:]
+        sfam_id = pdb_or_key.rsplit("/", 1)[0]
+
+    RealtimeLogger.info("Running {}".format(key))
 
     try:
         pdb_path = os.path.join(work_dir, os.path.basename(key)+".pdb")
@@ -50,9 +66,9 @@ def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domN
         graph_features = s.calculate_graph()
         RealtimeLogger.info("Finished edge features")
 
-        out_store.write_output_file(atom_features, key+"_atom.npy")
-        out_store.write_output_file(residue_features, key+"_residue.npy")
-        out_store.write_output_file(graph_features, key+"_edges.gz")
+        out_store.write_output_file(atom_features, key+"_atom.h5")
+        out_store.write_output_file(residue_features, key+"_residue.h5")
+        out_store.write_output_file(graph_features, key+"_edges.h5")
 
         for f in (pdb_path, atom_features, residue_features, graph_features):
             try:
@@ -71,16 +87,27 @@ def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domN
         os.remove(fail_file)
 
 
-def calculate_features_for_sfam(job, sfam_id, further_parallelize=False):
+def calculate_features_for_sfam(job, sfam_id, further_parallelize=False, use_cath=True):
     work_dir = job.fileStore.getLocalTempDir()
     pdb_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
     out_store = IOStore.get("aws:us-east-1:molmimic-features")
 
-    extensions = set(["atom.npy", "residue.npy", "edges.gz"])
+    extensions = set(["atom.h5", "residue.h5", "edges.gz"])
     done_files = lambda k: set([f.rsplit("_", 1)[1] for f in \
         out_store.list_input_directory(k)])
-    pdb_keys = [k for k in pdb_store.list_input_directory(str(int(sfam_id))) if \
-        k.endswith(".pdb") and extensions != done_files(os.path.splitext(k)[0])]
+
+    if use_cath:
+        pdb_store = IOStore.get("aws:us-east-1:molmimic-cath-structures")
+        out_store = IOStore.get("aws:us-east-1:molmimic-features-cath")
+        pdb_keys = [k for k in pdb_store.list_input_directory(sfam_id) if \
+            k.endswith(".pdb") and \
+            extensions != done_files(os.path.splitext(k)[0])][:1]
+    else:
+        pdb_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
+        out_store = IOStore.get("aws:us-east-1:molmimic-features")
+        pdb_keys = [k for k in pdb_store.list_input_directory(
+            str(int(sfam_id))) if k.endswith(".pdb") and \
+            extensions != done_files(os.path.splitext(k)[0])]
 
     if further_parallelize:
         map_job(job, calculate_features, pdb_keys)
@@ -98,23 +125,37 @@ def calculate_features_for_sfam(job, sfam_id, further_parallelize=False):
     #         os.remove(fail_file)
 
 
-def start_toil(job):
+def start_toil(job, further_parallelize=False, use_cath=True):
     import pandas as pd
     work_dir = job.fileStore.getLocalTempDir()
-    in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
 
-    pdb_file = os.path.join(work_dir, "PDB.h5")
-    in_store.read_input_file("PDB.h5", pdb_file)
 
-    sfams = pd.read_hdf(pdb_file, "Superfamilies", columns=
-        ["sfam_id"]).drop_duplicates().dropna()["sfam_id"].sort_values().tolist()
+    if use_cath:
+        in_store = IOStore.get("aws:us-east-1:molmimic-cath")
+        sfam_file = os.path.join(work_dir, "cath.h5")
+        # in_store.read_input_file("cath-domain-description-file-small.h5", sfam_file)
+        # sfams = pd.read_hdf(sfam_file, "table", columns=["cathcode"])["cathcode"]
+        # sfams = sfams.str.replace(".", "/")
+        sfams = ["2/60/40/10"]
+    else:
+        in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
+        sfam_file = os.path.join(work_dir, "PDB.h5")
+        in_store.read_input_file("PDB.h5", sfam_file)
+
+        sfams = pd.read_hdf(sfam_file, "Superfamilies", columns=
+            ["sfam_id"]).drop_duplicates().dropna()["sfam_id"].sort_values()
 
     RealtimeLogger.info("Running {} SFAMs".format(len(sfams)))
     RealtimeLogger.info("{}".format(sfams))
 
     # sfams = [299845.0]
 
-    map_job(job, calculate_features_for_sfam, sfams)
+    map_job(job, calculate_features_for_sfam, sfams, further_parallelize, use_cath)
+
+    # try:
+    #     os.remove(sfam_file)
+    # except (FileNotFoundError, OSError):
+    #     pass
 
     #os.remove(pdb_file)
 
@@ -131,5 +172,5 @@ if __name__ == "__main__":
     options.targetTime = 1
 
     job = Job.wrapJobFn(start_toil)
-    with Toil(options) as toil:
-        toil.start(job)
+    with Toil(options) as workflow:
+        workflow.start(job)

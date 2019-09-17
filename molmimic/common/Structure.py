@@ -82,7 +82,7 @@ def get_residue_feature_names():
 
 class Structure(object):
     def __init__(self, path, pdb, chain, sdi, domNo, input_format="pdb",
-      feature_mode="r", features_path=None):
+      feature_mode="r", features_path=None, cath_format=True):
         self.path = path
         if not os.path.isfile(self.path):
             raise InvalidPDB("Cannot find file {}".format(self.path))
@@ -119,7 +119,11 @@ class Structure(object):
         if len(all_chains) > 1:
             raise InvalidPDB("Only accepts PDBs with 1 chain in {} {}".format(pdb, self.path))
 
-        self.id = "{}_{}_sdi{}_d{}".format(self.pdb, self.chain, self.sdi, self.domNo)
+        if cath_format:
+            self.id = "{}{}{:02d}".format(self.pdb, self.chain, int(self.domNo))
+        else:
+            self.id = "{}_{}_sdi{}_d{}".format(self.pdb, self.chain, self.sdi,
+                self.domNo)
 
         self.n_residues = max(r.get_id()[1] for r in self.structure.get_residues())
         self.n_atoms = max(a.serial_number for a in self.structure.get_atoms())

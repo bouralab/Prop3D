@@ -461,7 +461,7 @@ class ProteinFeaturizer(Structure):
             is_atom = False
             residue = atom_or_residue
         else:
-            raise RuntimeErorr("Input must be Atom or Residue")
+            raise RuntimeError("Input must be Atom or Residue")
 
         try:
             normalized_score, conservation_score = self._consurf[residue.get_id()]
