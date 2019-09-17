@@ -25,10 +25,10 @@ class ProteinVoxelizer(Structure):
         self.voxel_tree = None
         self.atom_tree = None
 
-        if not rotate:
+        if rotate is None:
             self.shift_coords_to_volume_center()
         else:
-            next(self.rotate())
+            next(self.rotate(rotate))
 
     def get_flat_features(self, resi=None):
         features = [s.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features) \
@@ -315,6 +315,22 @@ class ProteinVoxelizer(Structure):
     def get_features_for_atom(self, atom, only_aa=False, only_atom=False,
       non_geom_features=False, use_deepsite_features=False, warn_if_buried=False):
         """Calculate FEATUREs"""
+#         from molmimic.parsers.Consurf import run_consurf
+#         if not hasattr(self, "_consurf"):
+#             self._consurf = run_consurf(self, self.pdb, self.chain)
+#             print(self._consurf.keys())
+#             assert 0, self._consurf.keys()
+        
+        from molmimic.parsers.eppic import run_eppic
+        if not hasattr(self, "_eppic"):
+            self._eppic = run_eppic(self.pdb, self.chain)
+            
+#         if not hasattr(self, "_infocontent"):
+#             from Bio.Align import AlignInfo
+#             from Bio.Align import MultipleSeqAlignment
+#             self._align = MultipleSeqAlignment("~/SageMaker/cdd/fasta/cd00096.FASTA")
+#             self._infocontent = AlignInfo(self._align).information_content()
+            
         if isinstance(atom, PDB.Atom.DisorderedAtom):
             #All altlocs have been removed so onlt one remains
             atom = atom.disordered_get_list()[0]
@@ -322,9 +338,30 @@ class ProteinVoxelizer(Structure):
         try:
             features = self.atom_features.loc[atom.serial_number].values
             is_buried = bool(features[35])
-
-            if use_deepsite_features:
+            
+            
+#             from Bio.SubsMat import MatrixInfo as matlist
+#             matrix = matlist.blosum62
+#             next(pairwise2.align.globaldx("KEVLA", "EVL", matrix))
                 
+            try:
+                con = np.array([self._eppic[atom.get_parent().get_id()]>0.6]).astype(float)
+            except Exception as e:
+                assert 0, (atom.get_parent().get_id(), self._eppic.keys(), e)
+                raise
+            
+            if only_aa and use_deepsite_features:
+                feats = np.concatenate((
+                    features[40:61],
+                    features[64:70],
+                    features[21:23],
+                    con #features[-1:]
+                ))
+                if warn_if_buried:
+                    return feats, is_buried
+                else:
+                    return feats
+            if use_deepsite_features:
                 feats = np.concatenate((
                     features[64:70],
                     features[21:23],
@@ -356,6 +393,7 @@ class ProteinVoxelizer(Structure):
                 else:
                     return feats
             else:
+                print("ALL FEATS")
                 if warn_if_buried:
                     return features, is_buried
                 else:
@@ -395,10 +433,10 @@ class ProteinVoxelizer(Structure):
         neighbors = self.voxel_tree.query_ball_point(center, r=dist)
         return [self.voxel_tree.data[idx] for idx in neighbors]
 
-    def rotate(self, num=1):
-        for r, theta, phi, z in super().rotate(num=num):
+    def rotate(self, rvs=None, num=1):
+        for r, M in super().rotate(rvs=rvs, num=num):
             self.set_voxel_size(self.voxel_size)
-            yield r, theta, phi, z
+            yield r, M
 
 
     def set_voxel_size(self, voxel_size=None):

@@ -145,9 +145,13 @@ def run_consurf(struct, pdb, chain, work_dir=None, download=False):
     store = IOStore.get("aws:us-east-1:molmimic-consurf")
 
     consurf_result = {}
-    if store.exists(consurf_db_key):
+    
+    if os.path.isfile(consurf_db_file):
+        pass
+    elif store.exists(consurf_db_key):
         store.read_input_file(consurf_db_key, consurf_db_file)
     else:
+        print("No consurf file", consurf_db_key)
         if download:
             consurf_db_file = download_consurf(pdb, chain)
             if not consurf_db_file:
@@ -166,7 +170,9 @@ def run_consurf(struct, pdb, chain, work_dir=None, download=False):
 
     parsing = False
     with open(consurf_db_file) as f:
-        for line in f:
+        yes = False
+        for i, line in enumerate(f):
+            consurf_result[i] = line
             if not parsing and line.strip().startswith("(normalized)"):
                 parsing = True
                 continue
@@ -194,4 +200,6 @@ def run_consurf(struct, pdb, chain, work_dir=None, download=False):
                 # if residue is not None:
                 #     for a in residue:
                 #         consurf_result[a.get_id()] = score
+        assert yes
     return consurf_result
+

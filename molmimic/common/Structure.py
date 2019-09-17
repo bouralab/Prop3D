@@ -27,6 +27,8 @@ def number_of_features(only_aa=False, only_atom=False, non_geom_features=False,
             return 13
         elif only_atom:
             return 5
+        elif only_aa and use_deepsite_features:
+            return 21+9
         elif only_aa:
             return 21
         elif use_deepsite_features:
@@ -37,6 +39,18 @@ def number_of_features(only_aa=False, only_atom=False, non_geom_features=False,
 def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=False, course_grained=False):
     if only_atom:
         return ["C", "N", "O", "S", "Unk_element"]
+    elif only_aa and use_deepsite_features:
+        return PDB.Polypeptide.aa3+[ #DeepSite features
+            "hydrophobic_atom",
+            "aromatic_atom",
+            "hbond_acceptor",
+            "hbond_donor",
+            "metal",
+            "is_hydrogen",
+            "is_pos",
+            "is_neg",
+            "is_conserved"
+        ]
     if only_aa:
         return PDB.Polypeptide.aa3
     if use_deepsite_features:
@@ -290,15 +304,22 @@ class Structure(object):
         coords = flip_around_axis(coords, axis=flip_axis)
         self.update_coords(coords)
 
-    def rotate(self, num=1):
+    def rotate(self, rvs=None, num=1):
         """Rotate structure in randomly in place"""
         for r in range(num):
-            M, theta, phi, z = rotation_matrix(random=True)
+            if rvs is None:
+                M, theta, phi, z = rotation_matrix(random=True)
+                #print(M, theta, phi, z)
+            else:
+                M=rvs
             self.shift_coords_to_origin()
+            old_coords = self.get_coords()
             coords = np.dot(self.get_coords(), M)
             self.update_coords(coords)
+            assert not np.array_equal(old_coords, self.get_coords()), M
             self.shift_coords_to_volume_center()
-            yield r, theta, phi, z
+            assert not np.array_equal(coords, self.get_coords()), M
+            yield r, M
 
     def update_coords(self, coords):
         for atom, coord in zip(self.structure.get_atoms(), coords):
@@ -341,13 +362,14 @@ def flip_around_axis(coords, axis = (0.2, 0.2, 0.2)):
             coords[:,col] = np.negative(coords[:,col])
     return coords
 
-def rotation_matrix(random = False, theta = 0, phi = 0, z = 0):
+def rotation_matrix(random = False, theta = 0, phi = 0, z = 0, uniform=True):
     'Creates a rotation matrix'
     # Adapted from: http://blog.lostinmyterminal.com/python/2015/05/12/random-rotation-matrix.html
     # Initialization
     if random == True:
         randnums = np.random.uniform(size=(3,))
         theta, phi, z = randnums
+        
     theta = theta * 2.0*np.pi  # Rotation about the pole (Z).
     phi = phi * 2.0*np.pi  # For direction of pole deflection.
     z = z * 2.0  # For magnitude of pole deflection.
