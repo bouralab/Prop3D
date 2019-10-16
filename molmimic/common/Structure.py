@@ -32,7 +32,7 @@ def number_of_features(only_aa=False, only_atom=False, non_geom_features=False,
         elif only_aa:
             return 21
         elif use_deepsite_features:
-            return 9
+            return 8
         else:
             return 75
 
@@ -60,7 +60,6 @@ def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=Fals
             "hbond_acceptor",
             "hbond_donor",
             "metal",
-            "is_hydrogen",
             "is_pos",
             "is_neg",
             "is_conserved"
@@ -117,8 +116,7 @@ def get_residue_feature_names():
 
 class Structure(object):
     def __init__(self, path, cath_domain, input_format="pdb",
-                 feature_mode="r", features_path=None, cath_format=True,
-                 residue_feature_mode="r"):
+                 feature_mode="r", features_path=None, residue_feature_mode="r"):
         self.path = path
         if not os.path.isfile(self.path):
             raise InvalidPDB("Cannot find file {}".format(self.path))
@@ -137,14 +135,14 @@ class Structure(object):
             raise RuntimeError("Invalid PDB parser (pdb, mmcif, mmtf)")
 
         try:
-            self.structure = parser.get_structure(pdb, self.path)
+            self.structure = parser.get_structure(cath_domain, self.path)
         except KeyError:
             #Invalid mmcif file
             raise InvalidPDB("Invalid PDB file: {} (path={})".format(pdb, self.path))
 
-        self.cath_domain = self.sdi = cath_doman
-        self.pdb = cath_doman[:4]
-        self.chain = cath_doman[4]
+        self.cath_domain = self.sdi = cath_domain
+        self.pdb = cath_domain[:4]
+        self.chain = cath_domain[4]
         self.domNo = cath_domain[5:]
 
         try:
@@ -155,36 +153,25 @@ class Structure(object):
         if len(all_chains) > 1:
             raise InvalidPDB("Only accepts PDBs with 1 chain in {} {}".format(pdb, self.path))
 
-        if cath_format:
-            self.id = "{}{}{:02d}".format(self.pdb, self.chain, int(self.domNo))
-        else:
-            self.id = "{}_{}_sdi{}_d{}".format(self.pdb, self.chain, self.sdi,
-                self.domNo)
-
-        self.n_residues = max(r.get_id()[1] for r in self.structure.get_residues())
-        self.n_atoms = max(a.serial_number for a in self.structure.get_atoms())
+        self.id = "{}{}{:02d}".format(self.pdb, self.chain, int(self.domNo))
+#         self.n_residues = max(r.get_id()[1] for r in self.structure.get_residues())
+#         self.n_atoms = max(a.serial_number for a in self.structure.get_atoms())
         self.n_residue_features = number_of_features(course_grained=True)
         self.n_atom_features = number_of_features(course_grained=False)
 
         self.features_path = os.environ.get("MOLMIMIC_FEATURES", features_path)
 
         if features_path.endswith("_atom.h5"):
-            self.features_path = os.path.dirname(features_path)
-            self.atom_features_file = features_file
-            self.residue_features_file = os.path.join(self.features_path,
-            self.pdb.lower()[1:3], "{}_residue.h5".format(self.id))
+            self.atom_features_file = features_path
+            self.residue_features_file = "{}_residue.h5".format(features_path.rsplit("_",1)[0])
         elif features_path.endswith("_residue.h5"):
-            self.features_path = os.path.dirname(features_path)
             self.residue_features_file = features_file
-            self.atom_features_file = os.path.join(self.features_path,
-            self.pdb.lower()[1:3], "{}_atom.h5".format(self.id))
+            self.atom_features_file = "{}_atom.h5".format(features_path.rsplit("_",1)[0])
         else:
-            self.atom_features_file = os.path.join(self.features_path,
-            self.pdb.lower()[1:3], "{}_atom.h5".format(self.id))
-            self.residue_features_file = os.path.join(self.features_path,
-            self.pdb.lower()[1:3], "{}_residue.h5".format(self.id))
+            self.atom_features_file = os.path.join(self.features_path, "{}_atom.h5".format(self.id))
+            self.residue_features_file = os.path.join(self.features_path, "{}_residue.h5".format(self.id))
 
-        if not os.path.isdir(os.path.dirname(self.atom_features_file)):
+        if feature_mode[0]=="w" and not os.path.isdir(os.path.dirname(self.atom_features_file)):
             os.makedirs(os.path.dirname(self.atom_features_file))
 
         if False and feature_mode == "r" and not os.path.isfile(self.atom_features_file):
@@ -341,6 +328,10 @@ class Structure(object):
             atom.set_coord(coord)
         self.mean_coord = None
         self.mean_coord_updated = False
+    
+    def update_bfactors(self, b_factors):
+        for atom, b in zip(self.structure.get_atoms(), b_factors):
+            atom.set_set_bfactor(b)
 
     def _remove_altloc(self, atom):
         if isinstance(atom, PDB.Atom.Atom):

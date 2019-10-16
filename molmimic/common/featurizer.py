@@ -58,7 +58,7 @@ atom_feature_names = {
         "eppic_is_conserved",
         "is_conserved"]
 }
-atom_feature_names_flat = [col_name for _, col_names for atom_feature_names.items() for col_name in col_names]
+atom_feature_names_flat = [col_name for _, col_names in atom_feature_names.items() for col_name in col_names]
 
 residue_feature_names = {
     "get_charge_and_electrostatics": [
@@ -80,7 +80,7 @@ residue_feature_names = {
         "eppic_is_conserved",
         "is_conserved"]
 }
-residue_feature_names_flat = [col_name for _, col_names for residue_feature_names.items() for col_name in col_names]
+residue_feature_names_flat = [col_name for _, col_names in residue_feature_names.items() for col_name in col_names]
 
 
 class ProteinFeaturizer(Structure):
