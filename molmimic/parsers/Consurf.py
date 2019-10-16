@@ -29,9 +29,10 @@ def download_consurf_scores(pdb, chain, n_tries=3, consurf_path=None):
         try:
             r = requests.get(url)
             break
-        except requests.exceptions.ConnectionError:
-            pass
-        except requests.exceptions.HTTPError:
+        except requests.exceptions.ConnectionError as e:
+            RealtimeLogger.info("ConSurf Error {}: {}".format(type(e), e))
+        except requests.exceptions.HTTPError as e:
+            RealtimeLogger.info("ConSurf Error {}: {}".format(type(e), e))
             return None
 
     if not os.path.exists(os.path.dirname(consurf_db_file)):
@@ -91,9 +92,9 @@ def parse_consurf_line(line, pdb_id=None, consurf_path=None, download_all=False,
                 print("-----Saving", os.path.join(pdb[1:3].upper(), pc))
                 store.write_output_file(consurf_f, os.path.join(pdb[1:3].upper(), pc+".scores"))
 
-        os.remove(consurf_f)
+        return consurf_f
 
-def download_consurf(pdb=None, chain=None, consurf_path=None):
+def download_consurf(pdb=None, chain=None, consurf_path=None, download_all=False):
     if consurf_path is None:
         consurf_path = os.getcwd()
 
@@ -102,15 +103,21 @@ def download_consurf(pdb=None, chain=None, consurf_path=None):
         if chain != " ": pdb_id += "_"+chain
         consurf_db_file = os.path.join(consurf_path, pdb[1:3].upper(), pdb_id)
         download_all = False
-    elif (pdb, chain).count(None) == 2:
-        download_all = True
+    else:
+        #download_all = True
         pdb_id = None
 
     store = IOStore.get("aws:us-east-1:molmimic-consurf")
     pdb_list = os.path.join(consurf_path, "pdbaa_list.nr")
 
-    done_consurf = [os.path.splitext(os.path.basename(k))[0] for k in \
-        store.list_input_directory() if k != "pdbaa_list.nr"]
+    # done_consurf = [os.path.splitext(os.path.basename(k))[0] for k in \
+    #     store.list_input_directory() if k != "pdbaa_list.nr"]
+
+    if download_all:
+        done_consurf = [os.path.splitext(os.path.basename(k))[0] for k in \
+            store.list_input_directory() if k != "pdbaa_list.nr"]
+    else:
+        done_consurf = []
 
     if not store.exists("pdbaa_list.nr"):
         r = requests.get("http://bental.tau.ac.il/new_ConSurfDB/ConSurfDB_list_feature.zip")
@@ -126,13 +133,28 @@ def download_consurf(pdb=None, chain=None, consurf_path=None):
         store.read_input_file("pdbaa_list.nr", pdb_list)
 
     with open(pdb_list) as f:
-        Parallel(n_jobs=-1)(delayed(parse_consurf_line)(line, pdb_id=pdb_id, \
-            consurf_path=consurf_path, download_all=download_all, \
-            done_consurf=done_consurf) for line in f)
+        if download_all:
+            consurf_f = None
+            Parallel(n_jobs=-1)(delayed(parse_consurf_line)(line, pdb_id=pdb_id, \
+                consurf_path=consurf_path, download_all=download_all, \
+                done_consurf=done_consurf) for line in f)
+        else:
+            for line in f:
+                if pdb_id in line:
+                    consurf_f = parse_consurf_line(line, pdb_id=pdb_id, consurf_path=consurf_path,
+                        download_all=False, done_consurf=done_consurf)
+                    break
+            else:
+                return
 
-    os.remove(pdb_list)
+    try:
+        os.remove(pdb_list)
+    except OSError:
+        pass
 
-def run_consurf(struct, pdb, chain, work_dir=None, download=False):
+    return consurf_f
+
+def run_consurf(pdb, chain, work_dir=None, download=True):
     if work_dir is None:
         work_dir = os.getcwd()
 
@@ -145,7 +167,10 @@ def run_consurf(struct, pdb, chain, work_dir=None, download=False):
     store = IOStore.get("aws:us-east-1:molmimic-consurf")
 
     consurf_result = {}
-    if store.exists(consurf_db_key):
+
+    if os.path.isfile(consurf_db_file):
+        pass
+    elif store.exists(consurf_db_key):
         store.read_input_file(consurf_db_key, consurf_db_file)
     else:
         if download:
@@ -166,7 +191,8 @@ def run_consurf(struct, pdb, chain, work_dir=None, download=False):
 
     parsing = False
     with open(consurf_db_file) as f:
-        for line in f:
+        for i, line in enumerate(f):
+            consurf_result[i] = line
             if not parsing and line.strip().startswith("(normalized)"):
                 parsing = True
                 continue
@@ -188,10 +214,4 @@ def run_consurf(struct, pdb, chain, work_dir=None, download=False):
                     break
 
                 consurf_result[resseq] = score
-
-                # residue = struct.get_residue_from_resseq(resseq)
-                #
-                # if residue is not None:
-                #     for a in residue:
-                #         consurf_result[a.get_id()] = score
     return consurf_result

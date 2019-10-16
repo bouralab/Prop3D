@@ -21,24 +21,50 @@ def number_of_features(only_aa=False, only_atom=False, non_geom_features=False,
         elif only_aa:
             return 21
         else:
-            return 45
+            return 47
     else:
         if non_geom_features:
             return 13
         elif only_atom:
             return 5
+        elif only_aa and use_deepsite_features:
+            return 21+9
         elif only_aa:
             return 21
         elif use_deepsite_features:
             return 9
         else:
-            return 73
+            return 75
 
 def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=False, course_grained=False):
     if only_atom:
         return ["C", "N", "O", "S", "Unk_element"]
+    elif only_aa and use_deepsite_features:
+        return PDB.Polypeptide.aa3+[ #DeepSite features
+            "hydrophobic_atom",
+            "aromatic_atom",
+            "hbond_acceptor",
+            "hbond_donor",
+            "metal",
+            "is_hydrogen",
+            "is_pos",
+            "is_neg",
+            "is_conserved"
+        ]
     if only_aa:
         return PDB.Polypeptide.aa3
+    if use_deepsite_features:
+        return [ #DeepSite features
+            "hydrophobic_atom",
+            "aromatic_atom",
+            "hbond_acceptor",
+            "hbond_donor",
+            "metal",
+            "is_hydrogen",
+            "is_pos",
+            "is_neg",
+            "is_conserved"
+        ]
     feature_names = [
         "C", "CT", "CA", "N", "N2", "N3", "NA", "O", "O2", "OH", "S", "SH", "Unk_atom",
         "C_elem", "N_elem", "O_elem", "S_elem", "Unk_element",
@@ -59,8 +85,11 @@ def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=Fals
         "is_hydrogen",
     ]
     feature_names += [
-        "conservation_normalized",
-        "conservation_scale",
+        "consurf_conservation_normalized",
+        "consurf_conservation_scale",
+        "consurf_is_conserved",
+        "eppic_conservation",
+        "eppic_is_conserved",
         "is_conserved"
     ]
 
@@ -75,14 +104,21 @@ def get_residue_feature_names():
         "residue_asa", "residue_buried", "residue_exposed"]
     feature_names += PDB.Polypeptide.aa3
     feature_names += [
-        "Unk_residue", "is_helix", "is_sheet", "Unk_SS",
-        "conservation_normalized", "conservation_scale", "is_conserved"
+        "Unk_residue", "is_helix", "is_sheet", "Unk_SS"]
+    feature_names += [
+        "consurf_conservation_normalized",
+        "consurf_conservation_scale",
+        "consurf_is_conserved",
+        "eppic_conservation",
+        "eppic_is_conserved",
+        "is_conserved"
     ]
     return feature_names
 
 class Structure(object):
-    def __init__(self, path, pdb, chain, sdi, domNo, input_format="pdb",
-      feature_mode="r", features_path=None, cath_format=True):
+    def __init__(self, path, cath_domain, input_format="pdb",
+                 feature_mode="r", features_path=None, cath_format=True,
+                 residue_feature_mode="r"):
         self.path = path
         if not os.path.isfile(self.path):
             raise InvalidPDB("Cannot find file {}".format(self.path))
@@ -106,10 +142,10 @@ class Structure(object):
             #Invalid mmcif file
             raise InvalidPDB("Invalid PDB file: {} (path={})".format(pdb, self.path))
 
-        self.pdb = pdb
-        self.chain = chain
-        self.sdi = sdi
-        self.domNo = domNo
+        self.cath_domain = self.sdi = cath_doman
+        self.pdb = cath_doman[:4]
+        self.chain = cath_doman[4]
+        self.domNo = cath_domain[5:]
 
         try:
             all_chains = list(self.structure[0].get_chains())
@@ -132,42 +168,55 @@ class Structure(object):
 
         self.features_path = os.environ.get("MOLMIMIC_FEATURES", features_path)
 
-        self.residue_features_file = os.path.join(features_path,
+        if features_path.endswith("_atom.h5"):
+            self.features_path = os.path.dirname(features_path)
+            self.atom_features_file = features_file
+            self.residue_features_file = os.path.join(self.features_path,
             self.pdb.lower()[1:3], "{}_residue.h5".format(self.id))
-
-        self.atom_features_file = os.path.join(features_path,
+        elif features_path.endswith("_residue.h5"):
+            self.features_path = os.path.dirname(features_path)
+            self.residue_features_file = features_file
+            self.atom_features_file = os.path.join(self.features_path,
             self.pdb.lower()[1:3], "{}_atom.h5".format(self.id))
+        else:
+            self.atom_features_file = os.path.join(self.features_path,
+            self.pdb.lower()[1:3], "{}_atom.h5".format(self.id))
+            self.residue_features_file = os.path.join(self.features_path,
+            self.pdb.lower()[1:3], "{}_residue.h5".format(self.id))
 
         if not os.path.isdir(os.path.dirname(self.atom_features_file)):
             os.makedirs(os.path.dirname(self.atom_features_file))
 
-        if feature_mode == "r" and not os.path.isfile(self.atom_features_file):
+        if False and feature_mode == "r" and not os.path.isfile(self.atom_features_file):
             self.atom_feature_mode = "w+"
         else:
             self.atom_feature_mode = feature_mode
 
-        if feature_mode == "r" and not os.path.isfile(self.residue_features_file):
+        if False and feature_mode == "r" and not os.path.isfile(self.residue_features_file):
             self.residue_feature_mode = "w+"
         else:
-            self.residue_feature_mode = feature_mode
+            self.residue_feature_mode = residue_feature_mode
 
         # self.residue_features = np.memmap(self.residue_features_file,
         #     dtype=np.float, mode=self.residue_feature_mode, shape=(self.n_residues, self.n_residue_features))
         # self.atom_features = np.memmap(self.atom_features_file,
         #     dtype=np.float, mode=self.atom_feature_mode, shape=(self.n_atoms, self.n_atom_features))
 
+        atom_index = [self._remove_altloc(a).serial_number for a in self.structure.get_atoms()]
         if self.atom_feature_mode == "r":
-            self.atom_features = pd.read_hdf(self.atom_features_file, "table")
+            self.atom_features = pd.read_hdf(self.atom_features_file, "table", mode="r")
+            #self.atom_features = self.atom_features.reset_index()
+            #self.atom_features = self.atom_features.reindex(index=atom_index)
         else:
-            atom_index = [a.serial_number for a in self.structure.get_atoms()]
-            self.atom_features = pd.DataFrame(columns=get_feature_names(),
+            self.atom_features = pd.DataFrame(0., columns=get_feature_names(),
                 index=atom_index)
 
         if self.residue_feature_mode == "r":
-            self.residue_features = pd.read_hdf(self.residue_features_file, "table")
+            self.residue_features = pd.read_hdf(self.residue_features_file, "table", mode="r")
         else:
-            residue_index = [r.get_id() for r in self.structure.get_residues()]
-            self.residue_features = pd.DataFrame(columns=get_residue_feature_names(),
+            residue_index = [self._remove_inscodes(r).get_id() for r in \
+                self.structure.get_residues()]
+            self.residue_features = pd.DataFrame(0., columns=get_residue_feature_names(),
                 index=residue_index)
 
     def get_atoms(self, include_hetatms=False, exclude_atoms=None):
@@ -270,21 +319,44 @@ class Structure(object):
         coords = flip_around_axis(coords, axis=flip_axis)
         self.update_coords(coords)
 
-    def rotate(self, num=1):
+    def rotate(self, rvs=None, num=1):
         """Rotate structure in randomly in place"""
         for r in range(num):
-            M, theta, phi, z = rotation_matrix(random=True)
+            if rvs is None:
+                M, theta, phi, z = rotation_matrix(random=True)
+                #print(M, theta, phi, z)
+            else:
+                M=rvs
             self.shift_coords_to_origin()
+            old_coords = self.get_coords()
             coords = np.dot(self.get_coords(), M)
             self.update_coords(coords)
+            assert not np.array_equal(old_coords, self.get_coords()), M
             self.shift_coords_to_volume_center()
-            yield r, theta, phi, z
+            assert not np.array_equal(coords, self.get_coords()), M
+            yield r, M
 
     def update_coords(self, coords):
         for atom, coord in zip(self.structure.get_atoms(), coords):
             atom.set_coord(coord)
         self.mean_coord = None
         self.mean_coord_updated = False
+
+    def _remove_altloc(self, atom):
+        if isinstance(atom, PDB.Atom.Atom):
+            return atom
+        elif isinstance(atom, PDB.Atom.DisorderedAtom):
+            return atom.disordered_get_list()[0]
+        else:
+            raise RuntimeError("Invalid atom type")
+
+    def _remove_inscodes(self, residue):
+        if isinstance(residue, PDB.Residue.Residue):
+            return residue
+        elif isinstance(residue, PDB.Residue.DisorderedResidue):
+            return residue.disordered_get_list()[0]
+        else:
+            raise RuntimeError("Invalid residue type")
 
     def calculate_neighbors(self, d_cutoff=100.0, level="R"):
         """
@@ -321,13 +393,14 @@ def flip_around_axis(coords, axis = (0.2, 0.2, 0.2)):
             coords[:,col] = np.negative(coords[:,col])
     return coords
 
-def rotation_matrix(random = False, theta = 0, phi = 0, z = 0):
+def rotation_matrix(random = False, theta = 0, phi = 0, z = 0, uniform=True):
     'Creates a rotation matrix'
     # Adapted from: http://blog.lostinmyterminal.com/python/2015/05/12/random-rotation-matrix.html
     # Initialization
     if random == True:
         randnums = np.random.uniform(size=(3,))
         theta, phi, z = randnums
+
     theta = theta * 2.0*np.pi  # Rotation about the pole (Z).
     phi = phi * 2.0*np.pi  # For direction of pole deflection.
     z = z * 2.0  # For magnitude of pole deflection.

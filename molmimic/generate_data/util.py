@@ -66,9 +66,12 @@ def SubprocessChain(commands, output):
         raise RuntimeError
     return final_proc.communicate()
 
-def get_file(job, prefix, path_or_fileStoreID, work_dir=None):
+def get_file(job, prefix, path_or_fileStoreID, work_dir=None, return_type=False):
     if isinstance(path_or_fileStoreID, str) and os.path.isfile(path_or_fileStoreID):
-        return path_or_fileStoreID
+        if return_type:
+            return path_or_fileStoreID, "path"
+        else:
+            return path_or_fileStoreID
     else:
         work_dir = work_dir or job.fileStore.getLocalTempDir()
         new_file = os.path.join(work_dir, prefix)
@@ -84,10 +87,14 @@ def get_file(job, prefix, path_or_fileStoreID, work_dir=None):
         else:
             raise RuntimeError("Invalid path_or_fileStoreID {} {}".format(type(path_or_fileStoreID), path_or_fileStoreID))
 
-        return new_file
+        if return_type:
+            return new_file, "fileStoreID"
+        else:
+            return new_file
 
-def filter_hdf(hdf_path, dataset, column=None, value=None, columns=None, **query):
-    assert len(query) > 0 or (column is not None and value is not None)
+def filter_hdf(hdf_path, dataset, column=None, value=None, columns=None,
+  drop_duplicates=False, **query):
+    #assert len(query) > 0 or (column is not None and value is not None)
     if len(query) == 0 and (column is not None and value is not None):
         if not isinstance(column, (list, tuple)) or not isinstance(value, (list, tuple)):
             where = "{}={}".format(column, value)
@@ -95,16 +102,23 @@ def filter_hdf(hdf_path, dataset, column=None, value=None, columns=None, **query
             where = ["{}={}".format(c, v) for c, v in zip(column, value)]
         else:
             raise RuntimeError("Cols and values must match")
-    else:
+    elif len(query) > 0:
         where = ["{}={}".format(c,v) for c, v in list(query.items())]
+    else:
+        where = None
+
     try:
         df = pd.read_hdf(str(hdf_path), dataset, where=where, columns=columns)
         if df.shape[0] == 0: raise KeyError
-    except (KeyError, ValueError, SyntaxError):
-        df = filter_hdf_chunks(hdf_path, dataset, column=column, value=value, columns=columns, **query)
+        if drop_duplicates:
+            df = df.drop_duplicates()
+    except (KeyError, ValueError, SyntaxError, OSError):
+        df = filter_hdf_chunks(hdf_path, dataset, column=column, value=value,
+            columns=columns, drop_duplicates=drop_duplicates, **query)
     return df
 
-def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, chunksize=500, **query):
+def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None,
+  chunksize=500, drop_duplicates=False, **query):
     df = None
     for _df in pd.read_hdf(str(hdf_path), dataset, chunksize=chunksize):
         if len(query) > 0:
@@ -118,7 +132,7 @@ def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, 
                         expression = _exp
                     else:
                         expression &= _exp
-                filtered_df = [expression]
+                filtered_df = _df[expression]
         elif column is not None and value is not None:
             if not isinstance(column, (list, tuple)) and not isinstance(value, (list, tuple)):
                 filtered_df = _df[_df[column]==value].copy()
@@ -129,9 +143,14 @@ def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None, 
         else:
             filtered_df = _df.copy()
         if filtered_df.shape[0]>0:
+            RealtimeLogger.info("Read rows {}".format(filtered_df))
             if columns is not None:
                 filtered_df = filtered_df[columns]
+            if drop_duplicates:
+                filtered_df = filtered_df.drop_duplicates()
             df = pd.concat((df, filtered_df), axis=0) if df is not None else filtered_df
+            if drop_duplicates:
+                df = df.drop_duplicates()
             del _df
             _df = None
     if df is None:
@@ -474,6 +493,19 @@ def tidy(pdb_file, replace=False, new_file=None):
     else:
         return _new_file
 
+def delocc_pdb(pdb_file, updated_pdb=None):
+    if updated_pdb is None:
+        updated_pdb = "{}.delocc.pdb".format(os.path.splitext(pdb_file)[0])
+
+    with open(pdb_file) as f, open(updated_pdb, "w") as updated:
+        for line in f:
+            if line.startswith("ATOM") or line.startswith("HETATM"):
+                updated.write(line[:16]+" "+line[17:])
+            else:
+                updated.write(line)
+
+    return updated_pdb
+
 def remove_ter_lines(pdb_file, updated_pdb=None):
     if updated_pdb is None:
         updated_pdb = "{}.untidy.pdb".format(os.path.splitext(pdb_file)[0])
@@ -546,3 +578,35 @@ def s3_download_pdb(pdb, work_dir=None, remove=False):
             pass
 
     return pdb_file, format
+
+def reset_ip():
+    import requests
+    import boto.ec2
+
+    conn = boto.ec2.connect_to_region("us-east-1")
+
+    try:
+        response = requests.get('http://169.254.169.254/latest/meta-data/instance-id')
+    except ConnectionError:
+        return
+
+    instance_id = response.text
+
+    reservations = conn.get_all_instances(filters={'instance-id' : instance_id})
+    instance = reservations[0].instances[0]
+
+    old_address = instance.ip_address
+
+
+    RealtimeLogger.info("Changing {} IP from {}".format(instance_id, old_address))
+
+
+    conn.disassociate_address(old_address)
+
+    new_address = conn.allocate_address().public_ip
+
+    RealtimeLogger.info("Changing {} IP from {} to {}".format(instance_id, old_address, new_address))
+
+    conn.associate_address(instance_id, new_address)
+
+    RealtimeLogger.info("Changed {} IP from {} to {}".format(instance_id, old_address, new_address))

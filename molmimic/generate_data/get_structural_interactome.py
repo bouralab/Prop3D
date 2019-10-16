@@ -20,6 +20,14 @@ from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
 
 from toil.realtimeLogger import RealtimeLogger
 
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', None)
+
+try:
+    FileNotFoundError
+except NameError:
+    FileNotFoundError = OSError
+
 def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileStoreID, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
     out_store = IOStore.get("aws:us-east-1:molmimic-interfaces-2")
@@ -30,6 +38,9 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
 
     ibis_path = get_file(job, "IBIS_obs.h5", ibisFileStoreID)
     row = filter_hdf(ibis_path, "ObsInt", "obs_int_id", int_id)
+
+    #Remove GI since they are
+    #row = row.drop(columns={"mol_gi"})
 
     row["mol_superfam_acc"] = row["mol_superfam_acc"].fillna("").str.encode("ascii")
     row["int_superfam_acc"] = row["int_superfam_acc"].fillna("").str.encode("ascii")
@@ -52,15 +63,20 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
         del face2
 
         try:
+            RealtimeLogger.info("Get SDI {}".formet(row))
             st_domain_mol = filter_hdf(str(mmdb_path), "StructuralDomains", "sdi", row.iloc[0]['mol_sdi_id'])
+            RealtimeLogger.info("MOL ROW {}".format(st_domain_mol))
             st_domain_mol = st_domain_mol.rename(columns={"sdi":"mol_sdi_id",
                 "domNo": "mol_domNo", "gi": "mol_gi", "pdbId": "mol_pdb",
                 "chnLett": "mol_chain", "from": "mol_sdi_from", "to": "mol_sdi_to",
                 "num_residues": "mol_nres", "whole_chain": "mol_whole_chain"})
             st_domain_mol = st_domain_mol.drop(columns=["mol_sdi_from", "mol_sdi_to"])
+            st_domain_mol["mol_gi"] = st_domain_mol["mol_gi"].astype(float)
             st_domain_mol = st_domain_mol.drop_duplicates()
-            row = pd.merge(row, st_domain_mol, how="left", on=["mol_sdi_id", "mol_gi"])
+            RealtimeLogger.info("MOL ROW {}".format(st_domain_mol))
+            row = pd.merge(row, st_domain_mol, how="left", on=["mol_sdi_id"])
             del st_domain_mol
+            RealtimeLogger.info("MOL ROW {}".format(row))
 
             st_domain_int = filter_hdf(str(mmdb_path), "StructuralDomains", "sdi", row.iloc[0]['int_sdi_id'])
             st_domain_int = st_domain_int.rename(columns={"sdi":"int_sdi_id",
@@ -71,6 +87,7 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
             st_domain_int = st_domain_int.drop_duplicates()
             row = pd.merge(row, st_domain_int, how="left", on=["int_sdi_id", "int_gi"])
             del st_domain_int
+            RealtimeLogger.info("MOL_INT ROW {}".format(row.iloc[0]))
         except TypeError as e:
             #SDI's doesn't exists, must be obsolete
             RealtimeLogger.info("Done row {}".format(e))
@@ -106,6 +123,18 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
             RealtimeLogger.info("Failed converting res names {}".format(updated_resi))
             return None
 
+        RealtimeLogger.info("ROW {}".format(row.iloc[0]))
+
+        row["mol_res"] = row["mol_res"].fillna("").astype(str)
+        row["int_res"] = row["int_res"].fillna("").astype(str)
+        row["int_domNo"] = row["int_domNo"].fillna(0).astype(int)
+        row["int_nres"] = row["int_nres"].fillna(0).astype(int)
+        row["int_sdi_id"] = row["int_sdi_id"].fillna(-1).astype(int)
+        row["int_whole_chain"] = row["int_whole_chain"].fillna(0).astype(int)
+        row["mol_sdi_id"] = row["mol_sdi_id"].fillna(-1).astype(int)
+
+        RealtimeLogger.info("ROW {}".format(row.iloc[0]))
+
         path = "{}.h5".format(int_id)
         row.to_hdf(path, "table", table=True, format="table", complib="bzip2", complevel=9, min_itemsize=1024)
         out_store.write_output_file(path, "{}/_obsrows/{}".format(sfam_id, path))
@@ -139,7 +168,7 @@ def process_observed_interaction(job, int_id, sfam_id, ibisFileStoreID, pdbFileS
             pass
 
 
-def merge_interactome_rows(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, update=False, cores=8, preemptable=True):
+def merge_interactome_rows(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, update=False, cores=4, preemptable=True): #8
     work_dir = job.fileStore.getLocalTempDir()
     store = IOStore.get("aws:us-east-1:molmimic-interfaces-2")
 
@@ -147,12 +176,13 @@ def merge_interactome_rows(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, upd
 
     status =  "observed"
     new_cols = ["mol_res", "int_res"]
-    resi_prefix = "{}.observed_interactome".format(int(sfam_id))
+    resi_prefix = "{}.observed_interactome".format(sfam_id)
     data_cols = ["obs_int_id", "mol_sdi", "int_sdi"]
 
     resi_path = os.path.join(work_dir, resi_prefix)
 
-    store.download_input_directory("{}/_obsrows/".format(sfam_id), work_dir)
+    store.download_input_directory("{}/_obsrows/".format(sfam_id), work_dir,
+        postfix=".h5")
 
     import dask
     import dask.dataframe as dd
@@ -169,9 +199,68 @@ def merge_interactome_rows(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, upd
     all_rows = glob.glob(str(os.path.join(work_dir, "*.h5")))
     ddf = dd.read_hdf(all_rows, "table")
     ddf = ddf.repartition(npartitions=cores-1)
-    ddf.to_hdf(resi_path, "table", format="table", table=True, complevel=9,
-        data_columns=data_cols, complib="bzip2", min_itemsize=1024)
 
+    ddf["int_domNo"] = ddf["int_domNo"].fillna(0).astype(int)
+    ddf["int_nres"] = ddf["int_nres"].fillna(0).astype(int)
+    ddf["int_sdi_id"] = ddf["int_sdi_id"].fillna(-1).astype(int)
+    ddf["int_whole_chain"] = ddf["int_whole_chain"].fillna(0).astype(int)
+    ddf["mol_sdi_id"] = ddf["mol_sdi_id"].fillna(-1).astype(int)
+
+
+    RealtimeLogger.info("Starting merge for {}".format(sfam_id))
+    try:
+        os.remove(resi_path)
+    except (OSError, FileNotFoundError):
+        pass
+    try:
+        ddf.to_hdf(resi_path, "table", format="table", table=True, complevel=9,
+            data_columns=data_cols, complib="bzip2", min_itemsize=1024)
+    except ValueError:
+        try:
+            os.remove(resi_path)
+        except (OSError, FileNotFoundError):
+            pass
+        old_df = None
+        old_dtypes = None
+        for i, f in enumerate(all_rows):
+            df = pd.read_hdf(f, "table", mode="r")
+            RealtimeLogger.info("DF is {}".format(df.iloc[0]))
+            df["int_domNo"] = df["int_domNo"].fillna(0).astype(int)
+            df["int_nres"] = df["int_nres"].fillna(0).astype(int)
+            df["int_sdi_id"] = df["int_sdi_id"].fillna(-1).astype(int)
+            df["int_whole_chain"] = df["int_whole_chain"].fillna(0).astype(int)
+            df["mol_sdi_id"] = df["mol_sdi_id"].fillna(-1).astype(int)
+            RealtimeLogger.info("DF2 is {}".format(df.iloc[0]))
+            try:
+                if i==0:
+                    df.to_hdf(resi_path, "table", format="table", table=True,
+                        data_columns=data_cols, complevel=9, complib="bzip2",
+                        min_itemsize=1024)
+                else:
+                    df.to_hdf(resi_path, "table", mode="a", append=True,
+                        format="table", table=True, data_columns=data_cols,
+                        complevel=9, complib="bzip2", min_itemsize=1024)
+            except ValueError as e:
+                import traceback
+                tb = traceback.format_exc()
+                RealtimeLogger.info("FAILED merging rows for {} {}".format(sfam_id, tb))
+                RealtimeLogger.info("PREV COLS {}".format(old_dtypes))
+                RealtimeLogger.info("NEW  COLS {}".format(df[["int_domNo","int_nres","int_sdi_id","int_whole_chain","mol_sdi_id"]].dtypes))
+                RealtimeLogger.info("PREV failed rows {}".format(
+                    old_df[["int_domNo","int_nres","int_sdi_id","int_whole_chain","mol_sdi_id"]]))
+                RealtimeLogger.info("NEW failed rows {}".format(
+                    df[["int_domNo","int_nres","int_sdi_id","int_whole_chain","mol_sdi_id"]]))
+                RealtimeLogger.info("CONCAT {}".format(pd.concat((old_df,
+                    df[["int_domNo","int_nres","int_sdi_id","int_whole_chain","mol_sdi_id"]]
+                ), axis=0)))
+                raise
+            old_df = df[["int_domNo","int_nres","int_sdi_id","int_whole_chain","mol_sdi_id"]]
+            old_dtypes = df[["int_domNo","int_nres","int_sdi_id","int_whole_chain","mol_sdi_id"]].dtypes
+            #del df
+
+
+
+    RealtimeLogger.info("Finished merge for {}".format(sfam_id))
     #Combine residues into dataframe
     # possible_errors = []
     # nrows = None
@@ -206,7 +295,7 @@ def merge_interactome_rows(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, upd
 
     if os.path.isfile(resi_path):
         #Upload to S3
-        out_store.write_output_file(resi_path, os.path.join(str(sfam_id), resi_prefix))
+        store.write_output_file(resi_path, os.path.join(str(sfam_id), resi_prefix))
         files_to_remove.append(resi_path)
 
         if update:
@@ -222,7 +311,7 @@ def merge_interactome_rows(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, upd
         with open(fail_file, "w") as f:
             pass
 
-        out_store.write_output_file(fail_file, "{}/{}.failed".format(sfam_id, resi_prefix))
+        store.write_output_file(fail_file, "{}/{}.failed".format(sfam_id, resi_prefix))
 
         files_to_remove.append(fail_file)
 
@@ -234,7 +323,7 @@ def merge_interactome_rows(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, upd
 
     #job.addFollowOnJobFn(cleanup_sfam, sfam_id, pdbFileStoreID, ibisObsFileStoreID)
 
-def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, further_parallelize=False, preemptable=True):
+def get_observed_structural_interactome(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, further_parallelize=True, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
     out_store = IOStore.get("aws:us-east-1:molmimic-interfaces-2")
 
@@ -289,7 +378,7 @@ def cleanup(job, preemptable=True):
     for key in failed-finished:
         in_store.remove_file(key)
 
-def cleanup_sfam(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, further_parallelize=False, preemptable=True):
+def cleanup_sfam(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, further_parallelize=True, preemptable=True):
     work_dir = job.fileStore.getLocalTempDir()
     store = IOStore.get("aws:us-east-1:molmimic-interfaces-2")
 
@@ -328,9 +417,9 @@ def cleanup_sfam(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, further_paral
         new_key = "{sfam_id}/_obsrows/to_update.h5".format(sfam_id=sfam_id)
         store.write_output_file(str(obs_int_file)+".fixed", new_key)
 
-        skip_ids = set(obs_int["obs_int_id"].astype(int))
+        skip_ids_file = set(obs_int["obs_int_id"].astype(int))
     else:
-        skip_ids = set()
+        skip_ids_file = set()
 
     def only_int(s):
         try:
@@ -339,13 +428,23 @@ def cleanup_sfam(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, further_paral
             return None
 
     done_rows = set(only_int(os.path.splitext(os.path.basename(k))[0]) for k in store.list_input_directory(
-        "{sfam_id}/_obsrows/".format(sfam_id=sfam_id)))
+        "{sfam_id}/_obsrows/".format(sfam_id=sfam_id)) if k.endswith("h5") and \
+        not k.endswith("to_update.h5"))
 
-    skip_ids = list(skip_ids-done_rows)
+    skip_ids = skip_ids_file.union(done_rows)
+
+    RealtimeLogger.info("RUNNING sfam {}: {}+{}={}".format(sfam_id, len(skip_ids_file),
+        len(done_rows), len(skip_ids)))
+    #RealtimeLogger.info("SKIP ROWS: {}".format(skip_ids))
 
     ibis_path = get_file(job, "IBIS_obs.h5", ibisObsFileStoreID)
-    all_int_ids = filter_hdf(ibis_path, "ObsInt", "mol_superfam_id", sfam_id, columns=["obs_int_id"])["obs_int_id"]
-    rerun_int_ids = all_int_ids[~all_int_ids.isin(skip_ids)]
+    all_int_ids = set(filter_hdf(ibis_path, "ObsInt", "mol_superfam_id", sfam_id,
+        columns=["obs_int_id"])["obs_int_id"])
+    rerun_int_ids = list(all_int_ids-skip_ids)
+
+    RealtimeLogger.info("RUNNING sfam {}: {}/{} interactions".format(sfam_id,
+        len(rerun_int_ids), len(all_int_ids)))
+    RealtimeLogger.info("RUNNING ROWS: {}".format(rerun_int_ids))
 
     if len(rerun_int_ids) > 0:
         if further_parallelize:
@@ -358,7 +457,6 @@ def cleanup_sfam(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, further_paral
                     raise
                 except:
                     pass
-        job.addFollowOnJobFn(merge_interactome_rows, sfam_id, pdbFileStoreID, ibisObsFileStoreID)
     else:
         done_file = os.path.join(work_dir, "DONE")
         with open(done_file, "w") as f:
@@ -368,6 +466,10 @@ def cleanup_sfam(job, sfam_id, pdbFileStoreID, ibisObsFileStoreID, further_paral
             os.remove(done_file)
         except OSError:
             pass
+
+    if len(skip_ids_file)+len(done_rows)>=len(all_int_ids):
+        job.addFollowOnJobFn(merge_interactome_rows, sfam_id, pdbFileStoreID,
+            ibisObsFileStoreID, True)
 
     for f in (obs_int_file, str(obs_int_file)+".fixed", "IBIS_obs.h5", 'DONE'):
         try:
@@ -450,7 +552,7 @@ def start_toil(job, update=False, pdbFileStoreID=None, preemptable=True):
     ibisObsFileStoreID = job.fileStore.writeGlobalFile(ibis_obs_path)
 
     #Read in superfamilies
-    pdb = filter_hdf_chunks(str(ibis_obs_path), "ObsInt", columns=["mol_superfam_id"]).drop_duplicates()
+    #pdb = filter_hdf_chunks(str(ibis_obs_path), "ObsInt", columns=["mol_superfam_id"]).drop_duplicates()
 
     if not update:
         #Choose which superfamilies to run, skip those already present
@@ -465,7 +567,8 @@ def start_toil(job, update=False, pdbFileStoreID=None, preemptable=True):
         map_job(job, get_observed_structural_interactome, sfams, pdbFileStoreID, ibisObsFileStoreID)
     else:
         RealtimeLogger.info("Running UPDATE")
-        map_job(job, cleanup_sfam, pdb["mol_superfam_id"], pdbFileStoreID, ibisObsFileStoreID)
+        sfams = [279669] #pdb["mol_superfam_id"]
+        map_job(job, cleanup_sfam, sfams, pdbFileStoreID, ibisObsFileStoreID)
 
     #Cleanup
     job.addFollowOnJobFn(cleanup)

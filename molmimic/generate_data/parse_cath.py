@@ -13,10 +13,11 @@ import shutil
 import requests
 import pandas as pd
 #from joblib import Parallel, delayed
+from botocore.exceptions import ClientError
 
 from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.job_utils import map_job
-from molmimic.generate_data.util import get_file
+from molmimic.generate_data.util import get_file, filter_hdf, filter_hdf_chunks
 
 from toil.realtimeLogger import RealtimeLogger
 
@@ -33,7 +34,7 @@ cath_desc = {
     "source": str,
     "cathcode": str,
     "class": int,
-    "architechture": int,
+    "architecture": int,
     "topology": int,
     "homology": int,
     "class_name": str,
@@ -53,9 +54,36 @@ cath_desc = {
     "sseqs": str
 }
 
-def download_cath_domain(current_domain, work_dir=None):
-    if work_dir is None:
+def download_sfam(job, sfam_id, cathFileStoreID, further_parallelize=False):
+    work_dir = job.fileStore.getLocalTempDir()
+    get_file(job, "cath.h5", cathFileStoreID)
+
+    cath_domains = set(filter_hdf("cath.h5", "table", drop_duplicates=True,
+        columns=["cath_domain"], cathcode=sfam_id)["cath_domains"])
+
+    cath_store = IOStore.get("aws:us-east-1:molmimic-cath-structure")
+    done_domains = set(os.path.basename(k)[:-4] for k in cath_store.list_input_directory(
+        sfam_id.replace(".", "/")) if k.endswith(".pdb"))
+
+    cath_domains -= done_domains
+
+    if further_parallelize:
+        map_job(job, calculate_features, cath_domains)
+    else:
+        for cath_domain in cath_domains:
+            try:
+                download_cath_domain(job, cath_domain, work_dir=work_dir)
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except:
+                continue
+
+def download_cath_domain(job, current_domain, work_dir=None):
+    if work_dir is None and job is None:
         work_dir = os.getcwd()
+    elif job is not None:
+        work_dir = job.fileStore.getLocalTempDir()
+
     cath_store = IOStore.get("aws:us-east-1:molmimic-cath-structure")
     cath_key = "{class}/{architechture}/{topology}/{homology}/{cath_domain}.pdb".format(**current_domain)
     if not cath_store.exists(cath_store):
@@ -113,7 +141,7 @@ def parse_cath_chunk(job, chunk_info, cath_file, chunk_size=100):
                 continue
             if parsing and line.startswith("//"):
                 nseg = 0
-                download_cath_domain(current_domain, work_dir)
+                download_cath_domain(job, current_domain, work_dir)
                 continue
             if parsing:
                 field, value = line[:10].rstrip(), line[10:]
@@ -228,9 +256,30 @@ def create_small_description_file(job):
 
     in_store.write_output_file(small_desc_file, os.path.basename(small_desc_file))
 
-def start_toil(job):
+def start_toil(job, download_all=False):
     work_dir = job.fileStore.getLocalTempDir()
     in_store = IOStore.get("aws:us-east-1:molmimic-cath")
+
+    if download_all:
+        sdoms_file = os.path.join(work_dir, "cath-domain-description-file.h5")
+        try:
+            in_store.read_input_file(os.path.basename(sdoms_file), sdoms_file)
+        except ClientError:
+            raise RuntimeError("Must run cath parser before this!")
+
+        cathFileStoreID = job.fileStore.writeGlobalFile(sdoms_file)
+
+        cathcodes = filter_hdf_chunks(sdoms_file, "table", columns=["cathcode"],
+            drop_duplicates=True)["cathcode"]
+
+        map_job(job, download_sfam, cathcodes, cathFileStoreID)
+
+        try:
+            os.remove(sdoms_file)
+        except OSError:
+            pass
+
+        return
 
     sdoms_file = os.path.join(work_dir, "cath-domain-description-file.txt")
     in_store.read_input_file("cath-domain-description-file.txt", sdoms_file)
@@ -272,6 +321,8 @@ if __name__ == "__main__":
     from toil.job import Job
 
     parser = Job.Runner.getDefaultArgumentParser()
+    parser.add_argument("--download-all")
+
     options = parser.parse_args()
     options.logLevel = "DEBUG"
     options.clean = "always"
@@ -280,7 +331,7 @@ if __name__ == "__main__":
     detector = logging.StreamHandler()
     logging.getLogger().addHandler(detector)
 
-    job = Job.wrapJobFn(start_toil)
+    job = Job.wrapJobFn(start_toil, options.download_all)
     with Toil(options) as toil:
         toil.start(job)
 

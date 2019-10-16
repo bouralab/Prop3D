@@ -10,12 +10,14 @@ from Bio.PDB.NeighborSearch import NeighborSearch
 
 from molmimic.common.Structure import Structure, number_of_features
 from molmimic.common.ProteinTables import vdw_radii, vdw_aa_radii, surface_areas
+from molmimic.common.featurizer import atom_feature_names, residue_feature_names
 
 class ProteinVoxelizer(Structure):
-    def __init__(self, path, pdb, chain, sdi, domNo, input_format="pdb",
-      volume=264, voxel_size=1.0, rotate=True, features_path=None):
-        super().__init__(path, pdb, chain, sdi, domNo,
-            input_format=input_format, feature_mode="r", features_path=features_path)
+    def __init__(self, path, cath_domain, input_format="pdb",
+      volume=264, voxel_size=1.0, rotate=True, features_path=None,
+      residue_feature_mode=None, use_features=None):
+        super().__init__(path, cath_domain,
+            input_format=input_format, feature_mode="r", features_path=features_path, residue_feature_mode=residue_feature_mode)
 
         self.mean_coord = np.zeros(3)
         self.mean_coord_updated = False
@@ -25,10 +27,12 @@ class ProteinVoxelizer(Structure):
         self.voxel_tree = None
         self.atom_tree = None
 
-        if not rotate:
+        self.use_features = use_features
+
+        if rotate is None:
             self.shift_coords_to_volume_center()
         else:
-            next(self.rotate())
+            next(self.rotate(rotate))
 
     def get_flat_features(self, resi=None):
         features = [s.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features) \
@@ -70,9 +74,9 @@ class ProteinVoxelizer(Structure):
             undersample=undersample)
 
     def map_atoms_to_voxel_space(self, binding_site_residues=None,
-      include_full_protein=False, only_aa=False, only_atom=False,
-      use_deepsite_features=False, non_geom_features=False, undersample=False,
-      only_surface=True, autoencoder=False):
+      include_full_protein=True, only_aa=False, only_atom=False,
+      use_deepsite_features=False, non_geom_features=False,
+      only_surface=True, autoencoder=False, return_voxel_map=False, nClasses=2):
         """Map atoms to sparse voxel space.
 
         Parameters
@@ -98,49 +102,17 @@ class ProteinVoxelizer(Structure):
             "Only binding_site_residues or autoencoder can be set"
         if binding_site_residues is not None:
             if not include_full_protein:
-                atoms = sorted((a for r in binding_site_residues for a in r), key=lambda a: a.get_serial_number())
+                atoms = sorted((a for r in binding_site_residues for a in r),
+                    key=lambda a: a.get_serial_number())
                 atoms = list(self.filter_atoms(atoms))
                 binding_site_atoms = [a.get_serial_number() for a in atoms]
                 non_binding_site_atoms = []
+                nAtoms = len(atoms)
             else:
                 atoms = list(self.get_atoms(include_hetatms=True))
                 nAtoms = len(atoms)
                 binding_site_atoms = [a.get_serial_number() for r in binding_site_residues for a in r]
-
-                if undersample:
-                    non_binding_site_residues = []
-                    for r in self.structure.get_residues():
-                        if r in binding_site_residues: continue
-
-                        if only_surface and bool(self.precalc_features[r.get_list()[0].serial_number-1][33]):
-                            continue
-
-                        non_binding_site_residues.append(r.get_id()[1])
-
-                    try:
-                        non_binding_site_residues = np.random.choice(non_binding_site_residues, len(binding_site_residues))
-                        non_binding_site_atoms = []
-                        for r in non_binding_site_residues:
-                            try:
-                                r = self.structure[0][self.chain][r]
-                            except KeyError:
-                                continue
-                            for a in r:
-                                non_binding_site_atoms.append(a.get_serial_number())
-                    except ValueError as e:
-                        print(e)
-                        #Might give over balance
-                        non_binding_site_atoms = []
-                else:
-                    non_binding_site_atoms = []
-
-                    # non_binding_site_atoms = [a.get_serial_number() for a in atoms if a.get_serial_number() not in binding_site_atoms]
-                    # try:
-                    #     non_binding_site_atoms = np.random.choice(non_binding_site_atoms, len(binding_site_atoms))
-                    # except ValueError:
-                    #     #Might give over balance
-                    #     non_binding_site_atoms = []
-
+                non_binding_site_atoms = []
                 atoms = list(atoms)
 
         else:
@@ -160,15 +132,29 @@ class ProteinVoxelizer(Structure):
         data_voxels = defaultdict(lambda: np.zeros(nFeatures))
         truth_voxels = {}
 
+        voxel_map = {}
+
         skipped = 0
+        skipped_inside = []
+
+        if nClasses == 2:
+            true_value_ = np.array([0.,1.])
+            neg_value_ = np.array([1.,0.])
+        elif nClasses == 1:
+            true_value_ = np.array([1.])
+            neg_value_ = np.array([0.])
+        elif nClasses == "sfams":
+            pass
+
         for atom in atoms:
+            atom = self._remove_altloc(atom)
+
             if autoencoder:
                 truth = True
-            elif binding_site_residues is not None:
+            elif binding_site_residues is None:
                 truth = False
             else:
                 truth = atom.get_serial_number() in binding_site_atoms
-
 
             if not truth and undersample and atom.get_serial_number() not in non_binding_site_atoms:
                 skipped += 1
@@ -178,11 +164,15 @@ class ProteinVoxelizer(Structure):
                 features, is_buried = self.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features, warn_if_buried=True)
                 if not truth and is_buried:
                     skipped += 1
+                    skipped_inside.append((atom, features, is_buried))
                     continue
             else:
                 features = self.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features)
 
-            truth_value = np.array([0.,1.]) if truth else np.array([1.,0.])
+            features = features.astype(float)
+
+            truth_value = true_value_.copy() if truth else neg_value_.copy()
+
             for atom_grid in self.get_grid_coords_for_atom_by_kdtree(atom):
                 atom_grid = tuple(atom_grid.tolist())
                 try:
@@ -192,20 +182,29 @@ class ProteinVoxelizer(Structure):
                     print(nFeatures, data_voxels[atom_grid].shape, features.shape)
                     raise
                 truth_voxels[atom_grid] = truth_value
+                voxel_map[atom_grid] = atom.get_parent().get_id()
+
+
+        #assert len(list(data_voxels)) > 0, (self.pdb, self.chain, self.sdi, data_voxels, list(data_voxels), np.array(list(data_voxels)), skipped, nAtoms, skipped_inside)
+
+        outputs = None
 
         try:
             if binding_site_residues is None and not autoencoder:
-                return np.array(list(data_voxels)), np.array(list(data_voxels.values()))
+                outputs = [np.array(list(data_voxels)), np.array(list(data_voxels.values()))]
             else:
-                data = np.array(list(data_voxels.values()))
+                data = np.array(list(data_voxels.values())) #Always in same order as put in
                 if autoencoder:
                     truth = data
                 else:
                     truth = np.array([truth_voxels[grid] for grid in data_voxels])
-                return np.array(list(data_voxels)), data, truth
+                outputs = [np.array(list(data_voxels)), data, truth]
         except Exception as e:
             print(e)
             raise
+
+        outputs.append(np.array(list(voxel_map.values())) if return_voxel_map else None)
+        return outputs
 
     def map_residues_to_voxel_space(self, binding_site_residues=None, include_full_protein=False, non_geom_features=True, only_aa=False, use_deepsite_features=False, undersample=False):
         if binding_site_residues is not None:
@@ -289,46 +288,94 @@ class ProteinVoxelizer(Structure):
     def get_features_for_atom(self, atom, only_aa=False, only_atom=False,
       non_geom_features=False, use_deepsite_features=False, warn_if_buried=False):
         """Calculate FEATUREs"""
+#         from molmimic.parsers.Consurf import run_consurf
+#         if not hasattr(self, "_consurf"):
+#             self._consurf = run_consurf(self, self.pdb, self.chain)
+#             print(self._consurf.keys())
+#             assert 0, self._consurf.keys()
+
+        # from molmimic.parsers.eppic import run_eppic
+        # if not hasattr(self, "_eppic"):
+        #     self._eppic = run_eppic(self.pdb, self.chain)
+
+#         if not hasattr(self, "_infocontent"):
+#             from Bio.Align import AlignInfo
+#             from Bio.Align import MultipleSeqAlignment
+#             self._align = MultipleSeqAlignment("~/SageMaker/cdd/fasta/cd00096.FASTA")
+#             self._infocontent = AlignInfo(self._align).information_content()
+
         if isinstance(atom, PDB.Atom.DisorderedAtom):
             #All altlocs have been removed so onlt one remains
             atom = atom.disordered_get_list()[0]
 
         try:
-            features = self.atom_features[atom.serial_number-1]
-            is_buried = bool(features[35])
+            features = self.atom_features.loc[atom.serial_number]
+            is_buried = bool(features["atom_is_buried"])
+
+
+#             from Bio.SubsMat import MatrixInfo as matlist
+#             matrix = matlist.blosum62
+#             next(pairwise2.align.globaldx("KEVLA", "EVL", matrix))
+
+            # try:
+            #     con = np.array([self._eppic[atom.get_parent().get_id()]>0.6]).astype(float)
+            # except Exception as e:
+            #     assert 0, (atom.get_parent().get_id(), self._eppic.keys(), e)
+            #     raise
+
+            if only_aa and use_deepsite_features:
+                feats = features[
+                    atom_feature_names["get_residue"] + \
+                    atom_feature_names["get_deepsite_features"] + \
+                    atom_feature_names["get_charge_and_electrostatics"][1:3] +\
+                    atom_feature_names["get_evolutionary_conservation_score"][-1:]]
+
+                if warn_if_buried:
+                    return feats, is_buried
+                else:
+                    return feats
 
             if use_deepsite_features:
-                feats = np.concatenate((
-                    features[64:70],
-                    features[20:22],
-                    features[72:]))
+                feats = features[
+                    atom_feature_names["get_deepsite_features"] + \
+                    atom_feature_names["get_charge_and_electrostatics"][1:3] +\
+                    atom_feature_names["get_evolutionary_conservation_score"][-1:]]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
                     return feats
+
             if only_atom:
-                feats = features[13:18]
+                feats = features[atom_feature_names["get_atom_type"]]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
                     return feats
+
             elif only_aa:
-                feats = features[40:61]
+                feats = features[atom_feature_names["get_residue"]]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
                     return feats
             elif non_geom_features:
-                feats = np.concatenate((
-                    features[13:18],
-                    features[19:23],
-                    features[30:33], #1]))
-                    np.array([float(is_buried)])))
+                feats = features[
+                    atom_feature_names["get_element_type"] + \
+                    atom_feature_names["get_charge_and_electrostatics"] +\
+                    atom_feature_names["get_hydrophobicity"]] +\
+                    [float(is_buried)]]
+                if warn_if_buried:
+                    return feats, is_buried
+                else:
+                    return feats
+            elif self.use_features is not None:
+                feats = features[self.use_feats]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
                     return feats
             else:
+                print("ALL FEATS")
                 if warn_if_buried:
                     return features, is_buried
                 else:
@@ -368,10 +415,10 @@ class ProteinVoxelizer(Structure):
         neighbors = self.voxel_tree.query_ball_point(center, r=dist)
         return [self.voxel_tree.data[idx] for idx in neighbors]
 
-    def rotate(self, num=1):
-        for r, theta, phi, z in super().rotate(num=num):
+    def rotate(self, rvs=None, num=1):
+        for r, M in super().rotate(rvs=rvs, num=num):
             self.set_voxel_size(self.voxel_size)
-            yield r, theta, phi, z
+            yield r, M
 
 
     def set_voxel_size(self, voxel_size=None):

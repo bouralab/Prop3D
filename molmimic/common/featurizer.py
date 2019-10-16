@@ -11,11 +11,12 @@ warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
 
 from toil.realtimeLogger import RealtimeLogger
 
-from molmimic.util import InvalidPDB, natural_keys, silence_stdout, silence_stderr
+from molmimic.generate_data.util import InvalidPDB, natural_keys, silence_stdout, silence_stderr
 from molmimic.parsers.FreeSASA import run_freesasa_biopython
 from molmimic.parsers.Electrostatics import run_pdb2pqr_APBS
 from molmimic.parsers.CX import run_cx
 from molmimic.parsers.Consurf import run_consurf
+from molmimic.parsers.eppic import run_eppic
 from molmimic.parsers.DSSP import run_dssp
 from molmimic.parsers.PDBQT import get_autodock_features
 
@@ -23,190 +24,325 @@ from molmimic.common.Structure import Structure, number_of_features, \
     get_feature_names, angle_between, get_dihedral
 from molmimic.common.ProteinTables import surface_areas, hydrophobicity_scales
 
+atom_feature_names = {
+    "get_atom_type": [
+        "H", "HD", "HS", "C", "A", "N", "NA", "NS", "OA", "OS", "F",
+        "MG", "P", "SA", "S", "CL", "CA", "MN", "FE", "ZN", "BR", "I", "Unk_atom"],
+    "get_element_type": [
+        "C_elem", "N_elem", "O_elem", "S_elem", "H_elem", "F_elem",
+        "MG_elem", "P_elem", "S_elem", "CL_elem", "CA_elem", "MN_elem",
+        "FE_elem", "ZN_elem", "BR_elem", "I_elem", "Unk_elem"],
+    "get_vdw": ["vdw_volume"],
+    "get_charge_and_electrostatics": [
+        "charge", "neg_charge", "pos_charge", "neutral_charge",
+        "electrostatic_potential", "is_electropositive", "is_electronegative"],
+    "get_concavity": ["cx", "is_concave", "is_convex", "is_concave_and_convex"],
+    "get_hydrophobicity": [
+        "hydrophobicity", "is_hydrophbic", "is_hydrophilic", "hydrophobicity_is_0"],
+    "get_accessible_surface_area": [
+        "atom_asa", "atom_is_buried", "atom_exposed",
+        "residue_asa", "residue_buried", "residue_exposed"],
+    "get_residue": PDB.Polypeptide.aa3+["Unk_residue"],
+    "get_ss": ["is_helix", "is_sheet", "Unk_SS"],
+    "get_deepsite_features": [ #DeepSite features
+        "hydrophobic_atom",
+        "aromatic_atom",
+        "hbond_acceptor",
+        "hbond_donor",
+        "metal"],
+    "get_evolutionary_conservation_score": [
+        "consurf_conservation_normalized",
+        "consurf_conservation_scale",
+        "consurf_is_conserved",
+        "eppic_conservation",
+        "eppic_is_conserved",
+        "is_conserved"]
+}
+atom_feature_names_flat = [col_name for _, col_names for atom_feature_names.items() for col_name in col_names]
+
+residue_feature_names = {
+    "get_charge_and_electrostatics": [
+        "charge", "neg_charge", "pos_charge", "neutral_charge",
+        "electrostatic_potential", "is_electropositive", "is_electronegative"],
+    "get_concavity": [
+        "cx", "is_concave", "is_convex", "is_concave_and_convex"],
+    "get_hydrophobicity": [
+        "hydrophobicity", "is_hydrophbic", "is_hydrophilic", "hydrophobicity_is_0"],
+    "get_accessible_surface_area": [
+        "residue_asa", "residue_buried", "residue_exposed"],
+    "get_residue": PDB.Polypeptide.aa3+["Unk_residue"],
+    "get_ss": ["is_helix", "is_sheet", "Unk_SS"],
+    "get_evolutionary_conservation_score": [
+        "consurf_conservation_normalized",
+        "consurf_conservation_scale",
+        "consurf_is_conserved",
+        "eppic_conservation",
+        "eppic_is_conserved",
+        "is_conserved"]
+}
+residue_feature_names_flat = [col_name for _, col_names for residue_feature_names.items() for col_name in col_names]
+
+
 class ProteinFeaturizer(Structure):
-    def __init__(self, path, pdb, chain, sdi, domNo, job, work_dir,
-      input_format="pdb", force_feature_calculation=False):
-        super(ProteinFeaturizer, self).__init__(path, pdb, chain, sdi, domNo,
-            input_format=input_format, feature_mode="w+" if force_feature_calculation else "r",
+    def __init__(self, path, cath_domain, job, work_dir,
+      input_format="pdb", force_feature_calculation=False, update_features=None):
+        feature_mode = "w+" if force_feature_calculation else "r"
+        super(ProteinFeaturizer, self).__init__(
+            path, cath_domain,
+            input_format=input_format,
+            feature_mode=feature_mode,
+            residue_feature_mode=feature_mode,
             features_path=work_dir)
         self.job = job
         self.work_dir = work_dir
+        self.update_features = update_features
 
     def calculate_flat_features(self, course_grained=False, only_aa=False, only_atom=False,
       non_geom_features=False, use_deepsite_features=False):
         if course_grained:
-            features = [self.calculate_features_for_residue(r, only_aa=only_aa,
+            features = [self.calculate_features_for_residue(
+                self._remove_inscodes(r), only_aa=only_aa,
                 non_geom_features=non_geom_features,
                 use_deepsite_features=use_deepsite_features) \
                 for r in self.structure.get_residues()]
-            if self.residue_feature_mode == "w+":
+            if self.residue_feature_mode == "w+" or self.update_features is not None:
                 self.write_features(course_grained=True)
             return features, self.residue_features_file
         else:
-            features = [self.calculate_features_for_atom(atom, only_aa=only_aa,
+            features = [self.calculate_features_for_atom(
+                self._remove_altloc(atom), only_aa=only_aa,
                 only_atom=only_atom, non_geom_features=non_geom_features,
                 use_deepsite_features=use_deepsite_features) \
                 for atom in self.structure.get_atoms()]
-            if self.atom_feature_mode == "w+":
+            if self.atom_feature_mode == "w+" or self.update_features is not None:
                 self.write_features()
             return features, self.atom_features_file
 
     def write_features(self, course_grained=False):
         if course_grained:
+            self.residue_features = self.residue_features.astype(np.float64)
+            self.residue_features = self.residue_features.drop(columns=
+                [col for col in self.residue_features if c not in \
+                residue_feature_names_flat])
             self.residue_features.to_hdf(self.residue_features_file, "table")
         else:
+            self.atom_features = self.atom_features.astype(np.float64)
+            self.atom_features = self.atom_features.drop(columns=
+                [col for col in self.atom_features if c not in \
+                atom_feature_names_flat])
             self.atom_features.to_hdf(self.atom_features_file, "table")
-            #self.atom_features.flush()
 
     def get_features_per_atom(residue_list):
         """Get features for eah atom, but not organized in grid"""
-        features = [self.get_features_for_atom(a) for r in residue_list for a in r]
+        features = [self.get_features_for_atom(self._remove_altloc(a)) for r in residue_list for a in r]
         return features
 
     def get_features_per_residue(self, residue_list):
-        features = [self.get_features_for_residue(a) for r in residue_list]
+        features = [self.get_features_for_residue(self._remove_inscodes(r)) for r in residue_list]
         return features
 
     def calculate_features_for_atom(self, atom, only_aa=False, only_atom=False,
       non_geom_features=False, use_deepsite_features=False, warn_if_buried=False):
+        if self.update_features is not None:
+            for feat_type, feat_names in atom_feature_names.items():
+                if feat_type in self.update_features:
+                    getattr(self, feat_type)(atom)
+                else:
+                    use_feats = [feat_name in self.update_features for feat_name \
+                        in feat_names]
+                    if any(use_feats):
+                        getattr(self, feat_type)(atom)
+            if warn_if_buried:
+                if "is_buried" not in self.atom_features.columns:
+                    is_burried = self.get_accessible_surface_area(atom, save=False)
+                else:
+                    is_buried = self.atom_features.loc[atom.serial_number, "is_buried"]
+                return self.atom_features, bool(is_buried["is_buried"])
+            else:
+                return self.atom_features
+
         if use_deepsite_features:
-            features = self.get_deepsite_features(atom)
+            self.get_deepsite_features(atom)
             if warn_if_buried:
-                is_burried = self.get_accessible_surface_area(atom)[-2]
+                is_burried = self.get_accessible_surface_area(atom, save=False)
         elif only_atom:
-            features = self.get_element_type(atom)
+            self.get_element_type(atom)
             if warn_if_buried:
-                is_buried = self.get_accessible_surface_area(atom)[-2]
+                is_buried = self.get_accessible_surface_area(atom, save=False)
         elif only_aa:
-            features = self.get_residue(atom)
+            self.get_residue(atom)
             if warn_if_buried:
-                is_buried = self.get_accessible_surface_area(atom)[-2]
+                is_buried = self.get_accessible_surface_area(atom, save=False)
         elif non_geom_features:
-            features = np.zeros(13)
-            features[0:5] = self.get_element_type(atom)
-            features[5:9] = self.get_charge_and_electrostatics(atom)
-            features[9:13] = self.get_hydrophobicity(atom)
-            is_buried = self.get_accessible_surface_area(atom)[-2]
+            self.get_element_type(atom)
+            self.get_charge_and_electrostatics(atom)
+            self.get_hydrophobicity(atom)
+            if warn_if_buried:
+                is_buried = self.get_accessible_surface_area(atom, save=False)
         else:
-            features = np.empty(self.n_atom_features)
-
-            features[0:13]  = self.get_atom_type(atom)
-            features[13:18] = self.get_element_type(atom)
-            features[18:19] = self.get_vdw(atom)
-            features[19:26] = self.get_charge_and_electrostatics(atom)
-            features[26:30] = self.get_concavity(atom)
-            features[30:34] = self.get_hydrophobicity(atom)
-            features[34:40] = self.get_accessible_surface_area(atom)
-            features[40:61] = self.get_residue(atom)
-            features[61:64] = self.get_ss(atom)
-            features[64:70] = self.get_deepsite_features(atom, calc_charge=False,
+            self.get_atom_type(atom)
+            self.get_element_type(atom)
+            self.get_vdw(atom)
+            self.get_charge_and_electrostatics(atom)
+            self.get_concavity(atom)
+            self.get_hydrophobicity(atom)
+            self.get_accessible_surface_area(atom)
+            self.get_residue(atom)
+            self.get_ss(atom)
+            self.get_deepsite_features(atom, calc_charge=False,
                 calc_conservation=False)
-            features[70:73] = self.get_evolutionary_conservation_score(atom)
+            self.get_evolutionary_conservation_score(atom)
 
-            is_buried = bool(features[35])
+            is_buried = self.atom_features.loc[atom.serial_number, "atom_is_buried"]
 
-        RealtimeLogger.info("Finished atom {} {}".format(atom, atom.serial_number))
-        RealtimeLogger.info("Feats {}".format(features))
-        RealtimeLogger.info("Feats shape {}".format(features.shape))
-        RealtimeLogger.info("atom_features shape {}".format(self.atom_features.shape))
+        # RealtimeLogger.info("Finished atom {} {}".format(atom, atom.serial_number))
+        # RealtimeLogger.info("Feats {}".format(features))
+        # RealtimeLogger.info("Feats shape {}".format(features.shape))
+        # RealtimeLogger.info("atom_features shape {}".format(self.atom_features.shape))
 
-        #self.atom_features[atom.serial_number-1,:] = features
-        self.atom_features.loc[atom.serial_number, :] = features
+        #self.atom_features.loc[atom.serial_number, :] = features
 
-        RealtimeLogger.info("atom_features is {}".format(self.atom_features))
+        #RealtimeLogger.info("atom_features is {}".format(self.atom_features))
 
         if warn_if_buried:
-            return features, is_buried
+            return self.atom_features, bool(is_buried["atom_is_buried"])
         else:
-            return features
+            return self.atom_features
 
     def calculate_features_for_residue(self, residue, only_aa=False, non_geom_features=False,
-      use_deepsite_features=False):
+      use_deepsite_features=False, warn_if_buried=False):
         """Calculate FEATUREs"""
-        if non_geom_features:
-            features = np.concatenate((
-                self.get_residue(residue),
-                self.get_charge_and_electrostatics(residue),
-                self.get_hydrophobicity(residue),
-                self.get_evolutionary_conservation_score(residue)), axis=None)
-        elif only_aa:
-            features = self.get_residue(residue)
-        else:
-            features = np.concatenate((
-                self.get_charge_and_electrostatics(residue),
-                self.get_concavity(residue),
-                self.get_hydrophobicity(residue),
-                self.get_accessible_surface_area(residue),
-                self.get_residue(residue),
-                self.get_ss(residue),
-                self.get_evolutionary_conservation_score(residue)), axis=None)
+        if self.update_features is not None:
+            for feat_type, feat_names in residue_feature_names.items():
+                if feat_type in self.update_features:
+                    getattr(self, feat_type)(atom)
+                else:
+                    use_feats = [feat_name in self.update_features for feat_name \
+                        in feat_names]
+                    if any(use_feats):
+                        getattr(self, feat_type)(atom)
+            if warn_if_buried:
+                if "is_buried" not in self.residue_features.columns:
+                    is_burried = self.get_accessible_surface_area(residue, save=False)
+                else:
+                    is_buried = self.residue_features.loc[residue.get_id(), "is_buried"]
+                return self.residue_features, bool(is_buried["is_buried"])
+            else:
+                return self.atom_features
 
-        #self.residue_features[residue.get_id()[1]-1,:] = features
-        self.residue_features.loc[residue.get_id(), :] = features
+        if non_geom_features:
+            self.get_residue(residue)
+            self.get_charge_and_electrostatics(residue)
+            self.get_hydrophobicity(residue)
+            self.get_evolutionary_conservation_score(residue)
+            if warn_if_buried:
+                is_buried = self.get_accessible_surface_area(residue, save=False)
+        elif only_aa:
+            self.get_residue(residue)
+            if warn_if_buried:
+                is_buried = self.get_accessible_surface_area(residue, save=False)
+        else:
+            self.get_charge_and_electrostatics(residue)
+            self.get_concavity(residue)
+            self.get_hydrophobicity(residue)
+            self.get_accessible_surface_area(residue)
+            self.get_residue(residue)
+            self.get_ss(residue)
+            self.get_evolutionary_conservation_score(residue)
+            is_buried = self.residue_features.loc[[residue.get_id()], "residue_buried"]
+
+        if warn_if_buried:
+            return self.residue_features, bool(is_buried["residue_buried"])
+        else:
+            return self.residue_features
 
     def get_atom_type(self, atom):
-        """
-        ATOM_TYPE_IS_C
-        ATOM_TYPE_IS_CT
-        ATOM_TYPE_IS_CA
-        ATOM_TYPE_IS_N
-        ATOM_TYPE_IS_N2
-        ATOM_TYPE_IS_N3
-        ATOM_TYPE_IS_NA
-        ATOM_TYPE_IS_O
-        ATOM_TYPE_IS_O2
-        ATOM_TYPE_IS_OH
-        ATOM_TYPE_IS_S
-        ATOM_TYPE_IS_SH
-        ATOM_TYPE_IS_OTHER"""
-        atom_types = ["C", "CT", "CA", "N", "N2", "N3", "NA", "O", "O2", "OH", "S", "SH"]
-        atom_type = np.zeros(13)
+        """Get Autodock atom type"""
+
+        if not hasattr(self, "_autodock"):
+            self._autodock = get_autodock_features(self.path, work_dir=self.work_dir, job=self.job)
+
         try:
-            index = atom_types.index(atom.get_name().strip())
-            atom_type[index] = 1.
-        except ValueError:
-            atom_type[12] = 1.
-        return atom_type
+            atom_type, h_bond_donor = self._autodock[atom.serial_number]
+        except KeyError:
+            atom_type = "Unk_atom"
+
+        if atom_type == "  ":
+            atom_type = "Unk_atom"
+
+        try:
+            self.atom_features.loc[atom.serial_number, atom.get_name().strip()] = 1.
+        except KeyError:
+            self.atom_features.loc[atom.serial_number, "Unk_atom"] = 1.
+
+        return self.atom_features.loc[atom.serial_number,
+            atom_feature_names["get_atom_type"]]
 
     def get_element_type(self, atom):
-        """ELEMENT_IS_ANY
-        ELEMENT_IS_C
-        ELEMENT_IS_N
-        ELEMENT_IS_O
-        ELEMENT_IS_S
-        ELEMENT_IS_OTHER"""
         elems = "CNOS"
-        elem_type = np.zeros(5)
-        try:
-            index = elems.index(atom.element)
-            elem_type[index] = 1.
-        except ValueError:
-            elem_type[4] = 1.
-        return elem_type
+        elem_col = "{}_elem".format(atom.element)
 
-    def get_charge_and_electrostatics(self, atom_or_residue):
+        if elem_col in atom_feature_names["get_element_type"]:
+            self.atom_features.loc[atom.serial_number, elem_col] = 1.
+        else:
+            self.atom_features.loc[atom.serial_number, "Unk_elem"] = 1.
+
+        return self.atom_features.loc[atom.serial_number,
+            atom_feature_names["get_element_type"]]
+
+    def get_charge_and_electrostatics(self, atom_or_residue, only_charge=False,
+      only_bool=False):
+        if self.update_features is not None:
+            if "electrostatic_potential" not in self.update_features and \
+              "is_electropositive" not in self.update_features and \
+              "is_electronegative" not in self.update_features:
+                 only_charge = True
+
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             atom = atom_or_residue
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
             residue = atom_or_residue
-            atoms = [self.get_charge_and_electrostatics(a) for a in residue]
-            charge_value = np.sum([a[0] for a in atoms])
-            electrostatic_pot_value = np.sum([a[4] for a in atoms])
-            charge = np.zeros(7)
-            charge[0] = charge_value
-            charge[1] = float(charge_value < 0)
-            charge[2] = float(charge_value > 0)
-            charge[3] = float(charge_value == 0)
-            charge[4] = electrostatic_pot_value
-            charge[5] = float(electrostatic_pot_value < 0)
-            charge[6] = float(electrostatic_pot_value > 0)
-            return charge
+            atoms = pd.concat([self.get_charge_and_electrostatics(
+                self._remove_altloc(a)) for a in residue], axis=0)
+            charge_value = atoms["charge"].sum()
+            electrostatic_pot_value = atoms["electrostatic_potential"].sum()
+
+            charge = [
+                charge_value,
+                float(charge_value < 0),
+                float(charge_value > 0),
+                float(charge_value == 0)]
+            cols = residue_feature_names["get_charge_and_electrostatics"][:4]
+            if not only_charge:
+                charge += [
+                    electrostatic_pot_value,
+                    float(electrostatic_pot_value < 0),
+                    float(electrostatic_pot_value > 0)]
+                cols += residue_feature_names["get_charge_and_electrostatics"][4:]
+
+            if only_bool:
+                charge = charge[1:3]
+                cols = cols[1:3]
+                if not only_charge:
+                    charge += charge[5:7]
+                    cols += charge[5:7]
+
+            idx = [residue.get_id()]
+            self.residue_features.loc[idx, cols] = charge
+            return self.residue_features.loc[idx, cols]
         else:
             raise RuntimeError("Input must be Atom or Residue: {}".format(type(atom_or_residue)))
 
         if not hasattr(self, "_pqr"):
-            self._pqr = run_pdb2pqr_APBS(self.path, pdb2pqr_whitespace=True,
-                work_dir=self.work_dir, job=self.job)
+            try:
+                self._pqr = run_pdb2pqr_APBS(self.path, pdb2pqr_whitespace=True,
+                    work_dir=self.work_dir, job=self.job, only_charge=only_charge)
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except Exception as e:
+                self._pqr = {}
+                RealtimeLogger.info("ELECTROSTATICS failed ({}): {}".format(type(e), e))
+
         atom_id = atom.get_full_id()[3:5]
 
         if atom_id[1][1] != " ":
@@ -218,30 +354,51 @@ class ProteinFeaturizer(Structure):
         except KeyError:
             charge_value, electrostatic_pot_value = np.NaN, np.NaN
 
-        charge = np.zeros(7)
-        charge[0] = charge_value
+        charge = [
+            charge_value,
+            float(charge_value < 0),
+            float(charge_value > 0),
+            float(charge_value == 0)]
+        cols = atom_feature_names["get_charge_and_electrostatics"][:4]
+        if not only_charge:
+            charge += [
+                electrostatic_pot_value,
+                float(electrostatic_pot_value < 0),
+                float(electrostatic_pot_value > 0)]
+            cols += atom_feature_names["get_charge_and_electrostatics"][4:]
 
-        charge[1] = float(charge_value < 0)
-        charge[2] = float(charge_value > 0)
-        charge[3] = float(charge_value == 0)
-        charge[4] = electrostatic_pot_value
-        charge[5] = float(electrostatic_pot_value < 0)
-        charge[6] = float(electrostatic_pot_value > 0)
-        return charge
+        if only_bool:
+            charge = charge[1:3]
+            cols = cols[1:3]
+            if not only_charge:
+                charge += charge[5:7]
+                cols += charge[5:7]
+
+        charge = np.array(charge)
+        idx = atom.serial_number
+        self.atom_features.loc[idx, cols] = charge
+
+        return self.atom_features.loc[idx, cols]
 
     def get_concavity(self, atom_or_residue):
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             atom = atom_or_residue
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
             residue = atom_or_residue
-            concavity_value = np.mean([self.get_concavity(a)[0] for a in residue])
+            concavity_value = pd.concat([self.get_concavity(
+                self._remove_altloc(a)) for a in residue], axis=0)["cx"].mean()
             #concave, convex, or both
-            concavity = np.zeros(4)
-            concavity[0] = concavity_value
-            concavity[1] = float(concavity_value <= 2)
-            concavity[2] = float(concavity_value > 5)
-            concavity[3] = float(2 < concavity_value <= 5)
-            return concavity
+            concavity = np.array([
+                concavity_value,
+                float(concavity_value <= 2),
+                float(concavity_value > 5),
+                float(2 < concavity_value <= 5)])
+
+            idx = [residue.get_id()]
+            cols = residue_feature_names["get_concavity"]
+            self.residue_features.loc[idx, cols] = concavity
+
+            return self.residue_features.loc[idx, cols]
         else:
             raise RuntimeErorr("Input must be Atom or Residue")
 
@@ -250,40 +407,117 @@ class ProteinFeaturizer(Structure):
 
         concavity_value = self._cx.get(atom.serial_number, np.NaN)
         #concave, convex, or both
-        concavity = np.zeros(4)
-        concavity[0] = concavity_value
-        concavity[1] = float(concavity_value <= 2)
-        concavity[2] = float(concavity_value > 5)
-        concavity[3] = float(2 < concavity_value <= 5)
-        return concavity
+        concavity = np.array([
+            concavity_value,
+            float(concavity_value <= 2),
+            float(concavity_value > 5),
+            float(2 < concavity_value <= 5)])
+
+        idx = atom.serial_number
+        cols = atom_feature_names["get_concavity"]
+        self.atom_features.loc[idx, cols] = concavity
+
+        return self.atom_features.loc[idx, cols]
 
     def get_hydrophobicity(self, atom_or_residue, scale="kd"):
         assert scale in list(hydrophobicity_scales.keys())
         if isinstance(atom_or_residue, PDB.Atom.Atom):
+            atom = atom_or_residue
             residue = atom_or_residue.get_parent()
+            use_atom = True
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
             residue = atom_or_residue
+            use_atom = False
         else:
             raise RuntimeErorr("Input must be Atom or Residue")
 
-        hydrophobicity = np.zeros(4)
         try:
             resname = PDB.Polypeptide.three_to_one(residue.get_resname())
-
             hydrophobicity_value = hydrophobicity_scales[scale][resname]
-            hydrophobicity[0] = hydrophobicity_value
-            hydrophobicity[1] = float(hydrophobicity_value < 0)
-            hydrophobicity[2] = float(hydrophobicity_value > 0)
-            hydrophobicity[3] = float(hydrophobicity_value == 0)
         except KeyError:
-            hydrophobicity[0] = np.NaN
-            hydrophobicity[1] = np.NaN
-            hydrophobicity[2] = np.NaN
-            hydrophobicity[3] = np.NaN
+            hydrophobicity_value = np.nan
 
-        return hydrophobicity
+        hydrophobicity = np.array([
+            hydrophobicity_value,
+            float(hydrophobicity_value < 0),
+            float(hydrophobicity_value > 0),
+            float(hydrophobicity_value == 0)])
 
-    def get_accessible_surface_area(self, atom_or_residue):
+        if use_atom:
+            idx = atom.serial_number
+            cols = atom_feature_names["get_hydrophobicity"]
+            self.atom_features.loc[idx, cols] = hydrophobicity
+            return self.atom_features.loc[idx, cols]
+        else:
+            idx = [residue.get_id()]
+            cols = residue_feature_names["get_hydrophobicity"]
+            self.residue_features.loc[idx, cols] = hydrophobicity
+            return self.residue_features.loc[idx, cols]
+
+    def get_accessible_surface_area(self, atom_or_residue, save=True):
+        """Returns the ASA value from freesasa (if inout is Atom) and the DSSP
+        value (if input is Atom or Residue)
+
+        Returns
+        -------
+        If input is residue a 3-vector is returned, otherwise a 4-vector is returned
+        """
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            return pd.concat((
+                self.get_accessible_surface_area_atom(atom_or_residue, save=save),
+                self.get_accessible_surface_area_residue(atom_or_residue, save=save)),
+                axis=0)
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            return self.get_accessible_surface_area_residue(atom_or_residue, save=save)
+        else:
+            raise RuntimeError("Input must be Atom or Residue")
+
+    def get_accessible_surface_area_atom(self, atom_or_residue, save=True):
+        """Returns the ASA value from freesasa (if inout is Atom) and the DSSP
+        value (if input is Atom or Residue)
+
+        Returns
+        -------
+        If input is residue a 3-vector is returned, otherwise a 4-vector is returned
+        """
+        if not isinstance(atom_or_residue, PDB.Atom.Atom):
+            raise RuntimeErorr("Input must be Atom")
+
+        atom = atom_or_residue
+        residue = atom_or_residue.get_parent()
+
+        if not hasattr(self, "_sasa"):
+            self._sasa = run_freesasa_biopython(self.path)
+
+        sasa, sasa_struct = self._sasa
+
+        total_area = surface_areas.get(atom.element.title(), 1.0)
+        try:
+            selection = "sele, chain {} and resi {} and name {}".format(self.chain, atom.get_parent().get_id()[1], atom.get_id()[0])
+            with silence_stdout(), silence_stderr():
+                selections = freesasa.selectArea([selection], sasa_struct, sasa)
+                atom_area = selections["sele"]
+            fraction = atom_area/total_area
+        except (KeyError, AssertionError, AttributeError, TypeError):
+            raise
+            atom_area = np.NaN
+            fraction = np.NaN
+
+        asa = np.array([
+            atom_area,
+            float(fraction <= 0.2), #buried
+            float(fraction > 0.2) #exposed
+        ])
+        idx = atom.serial_number
+        cols = atom_feature_names["get_accessible_surface_area"][:3]
+
+        if save:
+            self.atom_features.loc[idx, cols] = asa
+            return self.atom_features.loc[idx, cols]
+        else:
+            return pd.Series(asa, index=cols)
+
+    def get_accessible_surface_area_residue(self, atom_or_residue, save=True):
         """Returns the ASA value from freesasa (if inout is Atom) and the DSSP
         value (if input is Atom or Residue)
 
@@ -299,62 +533,49 @@ class ProteinFeaturizer(Structure):
             is_atom = False
             residue = atom_or_residue
         else:
-            raise RuntimeErorr("Input must be Atom or Residue")
-
-        if not hasattr(self, "_sasa"):
-            self._sasa = run_freesasa_biopython(self.path)
-
-        sasa, sasa_struct = self._sasa
-
-        if is_atom:
-            total_area = surface_areas.get(atom.element.title(), 1.0)
-            try:
-                selection = "sele, chain {} and resi {} and name {}".format(self.chain, atom.get_parent().get_id()[1], atom.get_id()[0])
-                with silence_stdout(), silence_stderr():
-                    selections = freesasa.selectArea([selection], sasa_struct, sasa)
-                    atom_area = selections["sele"]
-                fraction = atom_area/total_area
-            except (KeyError, AssertionError, AttributeError, TypeError):
-                raise
-                atom_area = np.NaN
-                fraction = np.NaN
+            raise RuntimeError("Input must be Atom or Residue")
 
         if not hasattr(self, "_dssp"):
             self._dssp = run_dssp(self.structure, self.path,
                 work_dir=self.work_dir, job=self.job)
 
         try:
-            residue_area = self._dssp[residue.get_full_id()[2:]][3]
-        except (KeyError, AssertionError, AttributeError, TypeError):
+            residue_area = float(self._dssp[residue.get_full_id()[2:]][3])
+        except (KeyError, AssertionError, AttributeError, TypeError, ValueError):
             try:
                 #Remove HETATMs
-                residue_area = self._dssp[(residue.get_full_id()[2], (' ', residue.get_full_id()[3][1], ' '))][3]
-                if residue_area == "NA":
-                    residue_area = np.NaN
-            except (KeyError, AssertionError, AttributeError, TypeError):
+                residue_area = float(self._dssp[(residue.get_full_id()[2], (' ', residue.get_full_id()[3][1], ' '))][3])
+            except (KeyError, AssertionError, AttributeError, TypeError, ValueError):
                 residue_area = np.NaN
 
-        if is_atom:
-            asa = np.zeros(6)
-            asa[0] = atom_area
-            asa[1] = float(fraction <= 0.2) #buried
-            asa[2] = float(fraction > 0.2) #exposed
-            asa[3] = residue_area
-            asa[4] = float(residue_area < 0.2)
-            asa[5] = float(residue_area >= 0.2)
-        else:
-            asa = np.zeros(3)
-            asa[0] = residue_area
-            asa[1] = float(residue_area < 0.2)
-            asa[2] = float(residue_area >= 0.2)
+        asa = np.array([
+            residue_area,
+            float(residue_area < 0.2),
+            float(residue_area >= 0.2)])
 
-        return asa
+        if is_atom:
+            idx = atom.serial_number
+            cols = atom_feature_names["get_accessible_surface_area"][3:]
+            self.atom_features.loc[idx, cols] = asa
+            if save:
+                return self.atom_features.loc[idx, cols]
+            else:
+                return pd.Series(asa, index=cols)
+        else:
+            idx = [residue.get_id()]
+            cols = residue_feature_names["get_accessible_surface_area"]
+            self.residue_features.loc[idx, cols] = asa
+            if save:
+                return self.residue_features.loc[idx, cols]
+            else:
+                return pd.Series(asa, index=cols)
 
     def get_residue(self, atom_or_residue):
         """
         """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             is_atom = True
+            atom = atom_or_residue
             residue = atom_or_residue.get_parent()
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
             is_atom = False
@@ -362,17 +583,30 @@ class ProteinFeaturizer(Structure):
         else:
             raise RuntimeErorr("Input must be Atom or Residue")
 
-        residues = [0.]*(len(PDB.Polypeptide.aa1)+1) #one hot residue
+        # residues = [0.]*(len(PDB.Polypeptide.aa1)+1) #one hot residue
+        #
+        # try:
+        #     residues[PDB.Polypeptide.three_to_index(residue.get_resname())] = 1.
+        # except (ValueError, KeyError) as e:
+        #     residues[-1] = 1.
+        # return np.array(residues)
 
-        try:
-            residues[PDB.Polypeptide.three_to_index(residue.get_resname())] = 1.
-        except (ValueError, KeyError) as e:
-            residues[-1] = 1.
-        return np.array(residues)
+        col = residue.get_resname() if residue.get_resname() in PDB.Polypeptide.aa3 \
+            else "Unk_element"
+
+        if is_atom:
+            self.atom_features.loc[atom.serial_number, col] = 1.
+            return self.atom_features.loc[atom.serial_number,
+                atom_feature_names["get_residue"]]
+        else:
+            self.residue_features.loc[[residue.get_id()], col] = 1.
+            return self.residue_features.loc[[residue.get_id()],
+                residue_feature_names["get_residue"]]
 
     def get_ss(self, atom_or_residue):
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             is_atom = True
+            atom = atom_or_residue
             residue = atom_or_residue.get_parent()
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
             is_atom = False
@@ -393,11 +627,21 @@ class ProteinFeaturizer(Structure):
             except (KeyError, AssertionError, AttributeError, TypeError):
                 atom_ss = "X"
 
-        ss = np.zeros(3)
-        ss[0] = float(atom_ss in "GHIT")
-        ss[1] = float(atom_ss in "BE")
-        ss[2] = float(atom_ss not in "GHITBE")
-        return ss
+        ss = np.array([
+            float(atom_ss in "GHIT"),
+            float(atom_ss in "BE"),
+            float(atom_ss not in "GHITBE")])
+
+        if is_atom:
+            idx = atom.serial_number
+            cols = atom_feature_names["get_ss"]
+            self.atom_features.loc[idx, cols] = ss
+            return self.atom_features.loc[idx, cols]
+        else:
+            idx = [residue.get_id()]
+            cols = residue_feature_names["get_ss"]
+            self.residue_features.loc[idx, cols] = ss
+            return self.residue_features.loc[idx, cols]
 
     def get_deepsite_features(self, atom, calc_charge=True, calc_conservation=True):
         """Use DeepSites rules for autodock atom types
@@ -406,56 +650,68 @@ class ProteinFeaturizer(Structure):
             self._autodock = get_autodock_features(self.path, work_dir=self.work_dir, job=self.job)
 
         try:
-            element = self._autodock[atom.serial_number]
+            atom_type, h_bond_donor = self._autodock[atom.serial_number]
         except KeyError:
-            element = "  "
+            atom_type = "  "
 
-        nFeatures = 6
-        if calc_charge:
-            nFeatures += 2
-        if calc_conservation:
-            nFeatures += 1
-        features = np.zeros(nFeatures, dtype=bool)
+        idx = atom.serial_number
+        cols = atom_feature_names["get_deepsite_features"]
 
-        #hydrophobic
-        features[0] = (element == 'C') | (element == 'A')
+        features = np.array([ #zeros(nFeatures, dtype=bool)
+            #hydrophobic
+            (atom_type == 'C') | (atom_type == 'A'),
+            #aromatic
+            atom_type == 'A',
+            #hbond_acceptor
+            (atom_type == 'NA') | (atom_type == 'NS') | (atom_type == 'OA') | \
+            (atom_type == 'OS') | (atom_type == 'SA'),
+            #hbond_donor
+            (atom_type == 'HS') | (atom_type == 'HD'),
+            #metal
+            (atom_type == 'MG') | (atom_type == 'ZN') | (atom_type == 'MN') | \
+            (atom_type == 'CA') | (atom_type == 'FE')], dtype=float)
 
-        #aromatic
-        features[1] = element == 'A'
-
-        #hbond_acceptor
-        features[2] = (element == 'NA') | (element == 'NS') | (element == 'OA') | \
-                      (element == 'OS') | (element == 'SA')
-
-        #hbond_donor
-        features[3] = (element != 'HS') | (element != 'HD')
-
-        #metal
-        features[4] = (element == 'MG') | (element == 'ZN') | (element == 'MN') | \
-                      (element == 'CA') | (element == 'FE')
-
-        #occupancies / excluded volume
-        features[5] = (element != 'H') & (element != 'HS') & (element != 'HD')
+        self.atom_features.loc[idx, cols] = features
 
         if calc_charge:
-            #positive_ionizable
-            charge = self.get_charge(atom)[0]
-            features[6] = charge > 0
-
-            #negative_ionizable
-            features[7] = charge < 0
+            charge = self.get_charge_and_electrostatics(atom, only_charge=True, only_bool=True)
+            cols += charge.columns.tolist()
 
         if calc_conservation:
-            features[nFeatures-1] = self.get_evolutionary_conservation_score(atom)[-1]
+            cons = self.get_evolutionary_conservation_score(atom, only_bool=True)
+            cols += cons.columns.tolist()
 
-        return features.astype(float)
+        return self.atom_features.loc[idx, cols]
 
-    def get_evolutionary_conservation_score(self, atom_or_residue):
-        if not hasattr(self, "_consurf"):
-            self._consurf = run_consurf(self, self.pdb, self.chain)
+    def get_evolutionary_conservation_score(self, atom_or_residue, consurf=True,
+      eppic=True, only_bool=False):
+        if self.update_features is not None:
+            if "is_conserved" in self.update_features:
+                consurf = eppic = True
+            else:
+                if "consurf_conservation_normalized" in self.update_features or \
+                  "consurf_conservation_scale" in self.update_features or \
+                  "consurf_is_conserved" in self.update_features:
+                    consurf = True
+                else:
+                    consurf = False
+
+                if "eppic_conservation" in self.update_features or \
+                  "eppic_is_conserved" in self.update_features:
+                    eppic = True
+                else:
+                    eppic = False
+
+        if consurf and not hasattr(self, "_consurf"):
+            self._consurf = run_consurf(self.pdb, self.chain, work_dir=self.work_dir)
+
+        if eppic and not hasattr(self, "_eppic"):
+            self._eppic = run_eppic(self.pdb, self.chain, work_dir=self.work_dir)
+            #RealtimeLogger.info("EPPIC is {}".format(self._eppic))
 
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             is_atom = True
+            atom = atom_or_residue
             residue = atom_or_residue.get_parent()
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
             is_atom = False
@@ -463,17 +719,68 @@ class ProteinFeaturizer(Structure):
         else:
             raise RuntimeError("Input must be Atom or Residue")
 
-        try:
-            normalized_score, conservation_score = self._consurf[residue.get_id()]
-        except KeyError:
-            normalized_score, conservation_score = np.NaN, np.NaN
+        idx = residue.get_id()
 
-        features = np.zeros(3)
-        features[0] = normalized_score
-        features[1] = conservation_score
-        features[2] = float(conservation_score>=6)
+        consurf_cols = []
+        consurf_is_conserved = 0
+        if consurf:
+            try:
+                consurf_normalized_score, consurf_conservation_score = \
+                    self._consurf[residue.get_id()]
+            except KeyError as e:
+                consurf_normalized_score = consurf_conservation_score = np.NaN
 
-        return features
+            consurf_cols = ["consurf_conservation_normalized",
+                "consurf_conservation_scale", "consurf_is_conserved"]
+            consurf_is_conserved = float(consurf_conservation_score>=6)
+            consurf_value = np.array([
+                consurf_normalized_score, consurf_conservation_score,
+                consurf_is_conserved
+            ])
+
+            if not only_bool:
+                if is_atom:
+                    idx = atom.serial_number
+                    self.atom_features.loc[idx, consurf_cols] = consurf_value
+                else:
+                    idx = [residue.get_id()]
+                    self.residue_features.loc[idx, consurf_cols] = consurf_value
+
+        eppic_cols = []
+        eppic_is_conserved = 0
+        if eppic:
+            try:
+                eppic_conservation = self._eppic[residue.get_id()]
+            except Exception as e:
+                eppic_conservation = np.NaN
+                RealtimeLogger.info("EPPIC key not found {} {}".format(e, self._eppic.keys()))
+
+            eppic_cols = ["eppic_conservation", "eppic_is_conserved"]
+            eppic_is_conserved = float(eppic_conservation<0.5)
+            eppic_value = np.array([eppic_conservation, eppic_is_conserved])
+
+            if not only_bool:
+                if is_atom:
+                    idx = atom.serial_number
+                    self.atom_features.loc[idx, eppic_cols] = eppic_value
+                else:
+                    idx = residue.get_id()
+                    self.residue_features.loc[idx, eppic_cols] = eppic_value
+
+        if is_atom:
+            idx = atom.serial_number
+            is_conserved = float(self.atom_features.loc[idx, ["consurf_is_conserved",
+                "eppic_is_conserved"]].sum() > 0) if not only_bool else \
+                float(consurf_is_conserved+eppic_is_conserved > 0)
+            self.atom_features.loc[idx, "is_conserved"] = is_conserved
+            return self.atom_features.loc[idx, consurf_cols+eppic_cols+["is_conserved"]]
+        else:
+            idx = [residue.get_id()]
+            is_conserved = self.residue_features.loc[idx, ["consurf_is_conserved",
+                "eppic_is_conserved"]].sum() > 0 if not only_bool else \
+                float(consurf_is_conserved+eppic_is_conserved > 0)
+            self.residue_features.loc[idx, "is_conserved"] = is_conserved
+            return self.residue_features.loc[idx, consurf_cols+eppic_cols+["is_conserved"]]
 
     def calculate_graph(self, d_cutoff=100.):
         import networkx as nx
@@ -487,8 +794,8 @@ class ProteinFeaturizer(Structure):
         return edge_file
 
     def get_edge_features(self, r1, r2):
-        r1_pos = np.array([a.get_coord() for a in r1]).mean(axis=0)
-        r2_pos = np.array([a.get_coord() for a in r2]).mean(axis=0)
+        r1_pos = np.array([self._remove_altloc(a).get_coord() for a in r1]).mean(axis=0)
+        r2_pos = np.array([self._remove_altloc(a).get_coord() for a in r2]).mean(axis=0)
 
         distance = np.linalg.norm(r1_pos-r2_pos)
         angle = angle_between(r1_pos, r2_pos)
@@ -496,20 +803,24 @@ class ProteinFeaturizer(Structure):
         #Add in features from gregarious paper
         #Left handed or right handed: direction of cross product
 
-        a = np.array(r1["O"].get_coord())-np.array(r1["N"].get_coord())
-        b = np.array(r2["O"].get_coord())-np.array(r2["N"].get_coord())
+        if "O" in r1 and "N" in r1 and "O" in r2 and "N" in r2:
+            a = np.array(r1["O"].get_coord())-np.array(r1["N"].get_coord())
+            b = np.array(r2["O"].get_coord())-np.array(r2["N"].get_coord())
 
-        omega = angle_between(a, b)
+            omega = angle_between(a, b)
 
-        c_a, c_b = np.array(r1["O"].get_coord()), np.array(r2["O"].get_coord())
-        mid_a = np.array([r1["O"].get_coord(), r1["N"].get_coord()]).mean(axis=0)
-        mid_b = np.array([r2["O"].get_coord(), r2["N"].get_coord()]).mean(axis=0)
+            c_a, c_b = np.array(r1["O"].get_coord()), np.array(r2["O"].get_coord())
+            mid_a = np.array([r1["O"].get_coord(), r1["N"].get_coord()]).mean(axis=0)
+            mid_b = np.array([r2["O"].get_coord(), r2["N"].get_coord()]).mean(axis=0)
 
-        theta = get_dihedral(c_a, mid_a, mid_b, c_b)
+            theta = get_dihedral(c_a, mid_a, mid_b, c_b)
 
-        c = mid_b-mid_a
+            c = mid_b-mid_a
 
-        scalar_triple_product = c*np.cross(a,b)
+            scalar_triple_product = c*np.cross(a,b)
+        else:
+            omega = np.nan
+            theta = np.nan
 
         #chirality = int(theta > 0)
 

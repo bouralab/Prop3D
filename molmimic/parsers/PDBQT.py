@@ -12,6 +12,38 @@ try:
 except ImportError:
     apiDockerCall = None
 
+atom_type_h_bond_donor = {
+    "H":  False, # Non H-bonding Hydrogen
+    "HD": False, # Donor 1 H-bond Hydrogen
+    "HS": False, # Donor S Spherical Hydrogen
+    "C":  False, # Non H-bonding Aliphatic Carbon
+    "A":  False, # Non H-bonding Aromatic Carbon
+    "N":  False, # Non H-bonding Nitrogen
+    "NA": True,  # Acceptor 1 H-bond Nitrogen
+    "NS": True,  # Acceptor S Spherical Nitrogen
+    "OA": True,  # Acceptor 2 H-bonds Oxygen
+    "OS": True,  # Acceptor S Spherical Oxygen
+    "F":  False, # Non H-bonding Fluorine
+    "Mg": False, # Non H-bonding Magnesium
+    "MG": False, # Non H-bonding Magnesium
+    "P":  False, # Non H-bonding Phosphorus
+    "SA": True,  # Acceptor 2 H-bonds Sulphur
+    "S":  False, # Non H-bonding Sulphur
+    "Cl": False, # Non H-bonding Chlorine
+    "CL": False, # Non H-bonding Chlorine
+    "Ca": False, # Non H-bonding Calcium
+    "CA": False, # Non H-bonding Calcium
+    "Mn": False, # Non H-bonding Manganese
+    "MN": False, # Non H-bonding Manganese
+    "Fe": False, # Non H-bonding Iron
+    "FE": False, # Non H-bonding Iron
+    "Zn": False, # Non H-bonding Zinc
+    "ZN": False, # Non H-bonding Zinc
+    "Br": False, # Non H-bonding Bromine
+    "BR": False, # Non H-bonding Bromine
+    "I":  False # Non H-bonding Iodine
+}
+
 def run_open_babel(in_format, in_file, out_format, out_file, work_dir=None, docker=True, job=None):
     """Run APBS. Calculates correct size using Psize and defualt from Chimera
     """
@@ -49,8 +81,9 @@ def get_autodock_features_from_pdbqt(pdbqt_file):
         for line in f:
             if line.startswith("ATOM") or line.startswith("HETATM"):
                 atom_serial = int(line[6:11])
-                autodock_type = line[77:79].strip()
-                autodock_features[atom_serial] = autodock_type
+                autodock_type = line[77:79].strip().upper()
+                h_bond_donor = atom_type_h_bond_donor.get(autodock_type, False)
+                autodock_features[atom_serial] = (autodock_type, h_bond_donor)
     return autodock_features
 
 def run_pdbqt_python(pdb_path):

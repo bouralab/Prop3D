@@ -1,8 +1,10 @@
 import os, sys
 import subprocess
 import shutil
+from itertools import cycle
 
 from joblib import Memory
+from docker.errors import ImageNotFound, ContainerError
 
 from molmimic.generate_data.util import silence_stdout, silence_stderr, \
     get_all_chains, extract_chains, SubprocessChain, PDB_TOOLS
@@ -62,7 +64,8 @@ quit
     out=output_prefix
     )
 
-def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=True, job=None):
+def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None,
+  docker=True, job=None, attempts=3):
     """Run APBS. Calculates correct size using Psize and defualt from Chimera
     """
     if work_dir is None:
@@ -106,10 +109,15 @@ def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=
             output_prefix = os.path.join(work_dir, output_prefix)
         except (SystemExit, KeyboardInterrupt):
             raise
-        except:
+        except ImageNotFound:
+            if attempts > 0:
+                return run_apbs(pqr_file, input_file=input_file, keep_input=keep_input,
+                    work_dir=work_dir, docker=docker, job=job, attempts=attempts-1)
             raise
-            return run_apbs(full_pqr_file, input_file=input_file_name,
-                keep_input=keep_input, work_dir=work_dir, docker=False)
+        # except:
+        #     raise
+        #     return run_apbs(full_pqr_file, input_file=input_file_name,
+        #         keep_input=keep_input, work_dir=work_dir, docker=False)
 
     else:
         input_file = os.path.join(work_dir, "{}.apbs_input".format(file_prefix))
@@ -132,7 +140,8 @@ def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None, docker=
     return out_file
 
 def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None,
-  remove_ter_lines=True, tidy=False, chain=True, work_dir=None, docker=True, job=None):
+  remove_ter_lines=True, tidy=False, chain=True, work_dir=None, docker=True,
+  job=None, attempts=3):
     if work_dir is None:
         work_dir = os.getcwd()
 
@@ -163,8 +172,23 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None,
             pqr_file = os.path.join(work_dir, pqr_file)
         except (SystemExit, KeyboardInterrupt):
             raise
-        except:
+        except ValueError as e:
+            if str(e).startswith("This PDB file is missing too many"):
+                return None
             raise
+        except ContainerError as e:
+            if "ValueError: This PDB file is missing too many" in str(e):
+                return None
+            raise
+        except ImageNotFound:
+            if attempts > 0:
+                return run_pdb2pqr(pdb_file, whitespace=whitespace, ff=ff,
+                    parameters=parameters, remove_ter_lines=remove_ter_lines,
+                    tidy=tidy, chain=chain, work_dir=work_dir, docker=docker,
+                    job=job, attempts=attempts-1)
+            raise
+        #except:
+            #raise
             #return run_pdb2pqr(pdb_file, whitespace=whitespace, ff=ff,
             #    parameters=parameters, work_dir=work_dir, docker=False)
 
@@ -178,8 +202,12 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None,
                 subprocess.call(command)
         except (SystemExit, KeyboardInterrupt):
             raise
-        except Exception as e:
+        except ValueError as e:
+            if str(e).startswith("This PDB file is missing too many"):
+                return None
             raise
+        #except Exception as e:
+            #raise
             #raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
 
     if tidy:
@@ -200,7 +228,7 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None,
 @memory.cache
 def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
   pdb2pqr_parameters=None, apbs_input_file=None, apbs_keep_input=False,
-  work_dir=None, docker=True, job=None, clean=True):
+  work_dir=None, docker=True, job=None, clean=True, only_charge=False):
     """Run PDB2PQR and APBS to get charge and electrostatics for each atom
 
     Parameters
@@ -222,13 +250,21 @@ def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
         ff=pdb2pqr_ff, parameters=pdb2pqr_parameters, work_dir=work_dir,
         docker=docker, job=job)
 
+    if pqr_path is None:
+        return {}
+
     assert os.path.isfile(pqr_path)
 
-    atom_pot_file = run_apbs(pqr_path, input_file=apbs_input_file,
-        keep_input=apbs_keep_input, work_dir=work_dir, docker=docker, job=job)
+    if not only_charge:
+        atom_pot_file = run_apbs(pqr_path, input_file=apbs_input_file,
+            keep_input=apbs_keep_input, work_dir=work_dir, docker=docker, job=job)
+        atom_pot = open(atom_pot_file)
+    else:
+        #Set all atom potentials to NaN
+        atom_pot = cycle([np.nan])
 
     result = {}
-    with open(pqr_path) as pqr, open(atom_pot_file) as atom_pot:
+    with open(pqr_path) as pqr:
         #Skip first 4 rows of atompot file
         for _ in range(4):
             next(atom_pot)
@@ -268,8 +304,19 @@ def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
             key = (residue_id, (atomName.strip(), ' '))
             result[key] = (float(charge), electrostatic_potential)
 
+    if not only_charge:
+        atom_pot.close()
+        if clean:
+            try:
+                os.remove(atom_pot_file)
+            except OSError:
+                pass
+    del atom_pot
+
     if clean:
-        os.remove(pqr_path)
-        os.remove(atom_pot_file)
+        try:
+            os.remove(pqr_path)
+        except OSError:
+            pass
 
     return result

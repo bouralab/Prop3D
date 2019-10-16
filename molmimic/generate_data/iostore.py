@@ -43,8 +43,6 @@ try:
     import boto3
     import botocore
     have_s3 = True
-    # os.environ["AWS_SECRET_KEY"] = "AKIAJCI3AJKBTBRO6RJA"
-    # os.environ["AWS_SECURITY_TOKEN"] = "XB81NeUZsPRHLhMkViFSB4BRAnB0vd1J2U2doXte"
 except ImportError:
     have_s3 = False
     pass
@@ -742,6 +740,8 @@ class S3IOStore(IOStore):
 
         # Download the file contents.
         self.s3.download_file(self.bucket_name, os.path.join(self.name_prefix, input_path), local_path)
+
+        return local_path
 
     @backoff
     def list_input_directory(self, input_path=None, recursive=False,

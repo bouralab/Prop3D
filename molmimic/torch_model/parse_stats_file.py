@@ -42,12 +42,16 @@ def parse_stats_file(stats_file):
     stats = defaultdict(dict)
     for line in stats_file:
         if line.strip() == "": continue
-        if line.startswith("epoch"):
-            epoch = int(line.split(" ", 2)[1])
-            line = line.split("] ", 1)[1]
-
+        if line.startswith("Train"):
+            #epoch = int(line.split(" ", 2)[1])
+            start, line = line.split("] ", 1)
+            epoch, batch = start[8:].split("][", 1)
+            batch = int(batch.split("/",1)[0])
+            epoch = (int(epoch), batch)
+            print(epoch)
+        
         fields = line.strip().split()
-
+        print(fields)
         if fields[0].startswith("Acc"):
             stats[epoch][fields[0]] = float(fields[1][:-1])
             stats[epoch][fields[2]] = float(fields[3][:-1])
@@ -64,6 +68,7 @@ def parse_stats_file(stats_file):
 
 def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=None, metrics=None, start_epoch=0, end_epoch=None, step_epoch=1, merge_min=False, combine=False):
     stats = [parse_stats_file(f) for f in stats_files]
+    print(stats)
 
     if stats_file2 is not None:
         stats2 = [parse_stats_file(f) for f in stats_file2]
@@ -101,7 +106,7 @@ def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=No
     if metrics is None:
         metrics = list(stats[0][0].keys())
 
-    num_epochs = max(stats[0].keys())+1
+    num_epochs = max(stats[0].keys())[0]+1
 
     x = list(range(len(stats_files)))
     #use_raw_color = len(names)<=2**len(names[0])
@@ -136,10 +141,12 @@ def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=No
                 start += 1
         else:
             for i, stat in enumerate(stats):
+                #for i, ((epoch, batch), val) in enumerate(stats.items()):
                 #y = [stat[epoch][metric] for epoch in epochs]
                 y=[]
-                for epoch in epochs:
-                    y.append(stat[epoch][metric])
+                for epoch, val in sorted(stat.items()):
+                    print(val)
+                    y.append(val) #stat[epoch][metric])
                 if False and use_raw_color:
                     ax.plot(y, label=names[i].format(meter=format_meter_name(metric)), color=[int(x) for x in names[i]])
                 else:
