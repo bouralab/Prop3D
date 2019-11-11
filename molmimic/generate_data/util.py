@@ -12,7 +12,7 @@ from toil.realtimeLogger import RealtimeLogger
 
 import pandas as pd
 import numpy as np
-import toil.fileStore
+import toil
 
 from joblib import Memory
 memory = Memory("/tmp", verbose=0)
@@ -76,8 +76,8 @@ def get_file(job, prefix, path_or_fileStoreID, work_dir=None, return_type=False)
         work_dir = work_dir or job.fileStore.getLocalTempDir()
         new_file = os.path.join(work_dir, prefix)
 
-        if isinstance(path_or_fileStoreID, (toil.fileStore.FileID, str)):
-            with job.fileStore.readGlobalFileStream(path_or_fileStoreID) as fs, open(new_file, "w") as nf:
+        if isinstance(path_or_fileStoreID, (toil.fileStores.FileID, str)):
+            with job.fileStore.readGlobalFileStream(path_or_fileStoreID) as fs, open(new_file, "wb") as nf:
                 for line in fs:
                     nf.write(line)
         elif hasattr(path_or_fileStoreID, "read_input_file"):

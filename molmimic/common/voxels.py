@@ -361,9 +361,9 @@ class ProteinVoxelizer(Structure):
             elif non_geom_features:
                 feats = features[
                     atom_feature_names["get_element_type"] + \
-                    atom_feature_names["get_charge_and_electrostatics"] +\
-                    atom_feature_names["get_hydrophobicity"]] +\
-                    [float(is_buried)]]
+                    atom_feature_names["get_charge_and_electrostatics"] + \
+                    atom_feature_names["get_hydrophobicity"] + \
+                    [float(is_buried)] ]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
@@ -419,7 +419,6 @@ class ProteinVoxelizer(Structure):
         for r, M in super().rotate(rvs=rvs, num=num):
             self.set_voxel_size(self.voxel_size)
             yield r, M
-
 
     def set_voxel_size(self, voxel_size=None):
         self.voxel_size = voxel_size or 1.0

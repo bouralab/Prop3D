@@ -2,6 +2,7 @@
 #By John Vivian January 13 2018
 
 import os
+from math import ceil
 import tarfile
 from contextlib import closing
 from molmimic.generate_data.iostore import IOStore
@@ -32,7 +33,7 @@ def cleanup_ids(job, ids_to_delete):
     [job.fileStore.deleteGlobalFile(x) for x in ids_to_delete if x is not None]
 
 
-def map_job(job, func, inputs, *args):
+def map_job(job, func, inputs, *args, **kwds):
     """
     Spawns a tree of jobs to avoid overloading the number of jobs spawned by a single parent.
     This function is appropriate to use when batching samples greater than 1,000.
@@ -45,13 +46,13 @@ def map_job(job, func, inputs, *args):
     # num_partitions isn't exposed as an argument in order to be transparent to the user.
     # The value for num_partitions is a tested value
     num_partitions = 100
-    partition_size = len(inputs) / num_partitions
+    partition_size = int(ceil(len(inputs)/num_partitions))
     if partition_size > 1:
         for partition in partitions(inputs, partition_size):
-            job.addChildJobFn(map_job, func, partition, *args)
+            job.addChildJobFn(map_job, func, partition, *args, **kwds)
     else:
         for sample in inputs:
-            job.addChildJobFn(func, sample, *args)
+            job.addChildJobFn(func, sample, *args, **kwds)
 
 def map_job_rv(job, func, inputs, *args):
     """

@@ -24,7 +24,11 @@ https://github.com/BD2KGenomics/toil-lib
 
 
 import sys, os, os.path, json, collections, logging, logging.handlers
-import socketserver, struct, socket, threading, tarfile, shutil
+try:
+    import socketserver
+except ImportError:
+    import SocketServer #Python 2.7
+import struct, socket, threading, tarfile, shutil
 import tempfile
 import functools
 import random

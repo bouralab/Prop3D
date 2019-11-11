@@ -7,6 +7,12 @@ from functools import partial
 
 import requests
 import numpy as np
+import pandas as pd
+
+try:
+    from pandas.lib import infer_dtype
+except ImportError:
+    from pandas.api.types import infer_dtype
 
 from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.util import natural_keys, reset_ip
@@ -15,12 +21,22 @@ from toil.realtimeLogger import RealtimeLogger
 
 from joblib import Parallel, delayed
 
-def download_eppic(*key, service="sequences", work_dir=None):
+def stringify(df):
+    """Make sure all columns with pdb in name are strings (e.g. pdbCode, ...PdbRes...)"""
+    for col in (c for c in df.columns if "pdb" in c.lower() or "type" in c.lower()):
+        df[col] = df[col].astype(str)
+    return df
+
+def download_eppic(*key, **kwds):
+    service = kwds.get("service", "sequences")
+    work_dir = kwds.get("work_dir")
+
     if work_dir is None:
         work_dir = os.getcwd()
 
     service_key = "/".join(k.lower() if isinstance(k, str) else str(k) for k in key)
-    url = "http://www.eppic-web.org/rest/api/v3/job/{}/{}".format(service_key, key)
+    url = "http://www.eppic-web.org/rest/api/v3/job/{}/{}".format(service, service_key)
+    RealtimeLogger.info("Downloading {}".format(url))
 
     key = "{}/{}.json".format(service, service_key)
     fname = os.path.join(work_dir, "{}.json".format(service_key.replace("/", "-")))
@@ -33,7 +49,7 @@ def download_eppic(*key, service="sequences", work_dir=None):
         RealtimeLogger.info("EPPIC Error {}: {}".format(type(e), e))
         return None
 
-    store = IOStore.get("aws:us-east-1:molmimic-eppic")
+    store = IOStore.get("aws:us-east-1:molmimic-eppic-service")
     store.write_output_file(fname, key)
 
     with open(fname) as f:
@@ -41,35 +57,41 @@ def download_eppic(*key, service="sequences", work_dir=None):
 
     return fname
 
-def run_eppic(*key, service="sequence", work_dir=None, download=True, attempts=2):
+def run_eppic(*key, **kwds):
+    service = kwds.get("service", "sequences")
+    work_dir = kwds.get("work_dir")
+    download = kwds.get("download", True)
+    attempts = kwds.get("attempts", 2)
+
     if work_dir is None:
         work_dir = os.getcwd()
 
     service_key = "/".join(k.lower() if isinstance(k, str) else str(k) for k in key)
-    url = "http://www.eppic-web.org/rest/api/v3/job/{}/{}".format(service_key, key)
+    url = "http://www.eppic-web.org/rest/api/v3/job/{}/{}".format(service, service_key)
+    RealtimeLogger.info("Downloading {}".format(url))
     eppic_key = "{}/{}.json".format(service, service_key)
-    eppic_file = os.path.join(work_dir, "{}.json".format(service_key.replace("/", "-")))
+    eppic_file = os.path.join(work_dir, "{}-{}.json".format(service,
+        service_key.replace("/", "-")))
 
-    store = IOStore.get("aws:us-east-1:molmimic-eppic")
+    store = IOStore.get("aws:us-east-1:molmimic-eppic-service")
 
     if os.path.isfile(eppic_file):
         RealtimeLogger.info("EPPIC read from file")
         should_remove = False
-    elif store.exists(eppic_db_key):
+    elif store.exists(eppic_key):
         RealtimeLogger.info("EPPIC get from store")
         store.read_input_file(eppic_key, eppic_file)
         should_remove = True
     else:
         should_remove = True
         if download:
-            RealtimeLogger.info("DOWNLOAD EPPIC")
             eppic_file = download_eppic(*key, service=service, work_dir=work_dir)
             if not eppic_file:
                 RealtimeLogger.info("DOWNLOAD EPPIC -- FAILED")
                 #Error no EPPIC file
                 return {"file":None, "key":eppic_key, "should_remove":False, "data":None}
         else:
-            RealtimeLogger.info("DOWNLOAD EPPIC -- NOT")
+            RealtimeLogger.info("DOWNLOAD EPPIC -- NO DOWNLOAD")
             return {"file":None, "key":eppic_key, "should_remove":False, "data":None}
 
     try:
@@ -95,7 +117,7 @@ def run_eppic(*key, service="sequence", work_dir=None, download=True, attempts=2
         raise
     except ValueError as e:
         rerun = False
-        with open(eppic_db_file) as f:
+        with open(eppic_file) as f:
             for line in f:
                 RealtimeLogger.info("EPPIC Failed {}".format(line))
                 if "<html>" in line or "<head>" in line:
@@ -125,8 +147,6 @@ def run_eppic(*key, service="sequence", work_dir=None, download=True, attempts=2
     except Exception as e:
         RealtimeLogger.info("EPPIC Failed parsing json ({}): {}".format(type(e), e))
         return {"file":None, "key":eppic_key, "should_remove":False, "data":None}
-
-    eppic["key"] = eppic_key
 
     if should_remove:
         try:
@@ -173,6 +193,10 @@ def get_interfaces(pdb, bio=False, work_dir=None, download=True, attempts=2):
         download=download, attempts=attempts)
 
     interfaces = pd.DataFrame(result["data"])
+
+    if interfaces.empty:
+        return None
+
     interfaces = interfaces.assign(interfaceType=
         interfaces["interfaceScores"].apply(lambda x:
             [score["callName"] for score in x["interfaceScore"] \
@@ -181,19 +205,47 @@ def get_interfaces(pdb, bio=False, work_dir=None, download=True, attempts=2):
     if bio:
         interfaces = interfaces[interfaces["interfaceType"]=="bio"]
 
-    return interfaces
+    return stringify(interfaces)
 
 def get_interface_residues(pdb, interfaceId, work_dir=None, download=True, attempts=2):
-    result = run_eppic(pdb, interfaceId, service="interfaces", work_dir=work_dir,
-        download=download, attempts=attempts)
+    result = run_eppic(pdb, interfaceId, service="interfaceResidues",
+        work_dir=work_dir, download=download, attempts=attempts)
 
-    return pd.DataFrame(result["data"])
+    return stringify(pd.DataFrame(result["data"]))
 
 def get_contacts(pdb, interfaceId, work_dir=None, download=True, attempts=2):
     result = run_eppic(pdb, interfaceId, service="contacts", work_dir=work_dir,
         download=download, attempts=attempts)
 
-    return result["data"]
+    return stringify(pd.DataFrame(result["data"]))
+
+def get_sequences(pdb, work_dir=None, download=True, attempts=2):
+    result = run_eppic(pdb, service="sequences", work_dir=work_dir,
+        download=download, attempts=attempts)
+
+    return stringify(pd.DataFrame(result["data"]))
+
+def get_residue_info(pdb, chain=None, work_dir=None, download=True, attempts=2):
+    seq = get_sequences(pdb, work_dir=work_dir, download=download, attempts=attempts)
+    seq = seq.drop(seq.columns.difference(['memberChains','residueInfos']), 1)
+
+    if seq.empty:
+        return None
+
+    if chain is not None:
+        seq = seq[seq["memberChains"].str.contains(chain)]
+
+    result = None
+    for seq_chains in seq.itertuples():
+        seq_chain_clustered = pd.DataFrame(seq_chains.residueInfos).dropna()
+        for chain in seq_chains.memberChains.split(","):
+            seq_chain = seq_chain_clustered.assign(chain=chain)
+            if result is None:
+                result = seq_chain
+            else:
+                result = pd.concat((result, seq_chain), axis=0)
+
+    return stringify(result)
 
 def get_blast_db(job):
     work_dir = job.fileStore.getLocalTempDir()

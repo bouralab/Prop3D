@@ -23,6 +23,41 @@ from toil.realtimeLogger import RealtimeLogger
 
 #dask.config.set(pool=Pool(20))
 
+def run_cath_hierarchy(job, func, cathcode, cathFileStoreID, **kwds):
+    work_dir = job.fileStore.getLocalTempDir()
+    further_parallelize = kwds.get("further_parallelize", True)
+    level = kwds.get("level", 4)
+
+    cath_path = get_file(job, "cath.h5", cathFileStoreID, work_dir=work_dir)
+
+    cath_names = ["class", "architechture", "topology", "homology"]
+    cathcode = dict(zip(cath_names, cathcode))
+    cath_names = cath_names[:len(cathcode)+1]
+
+    cathcodes = filter_hdf_chunks(
+        cath_path,
+        "table",
+        columns=cath_names,
+        drop_duplicates=True,
+        **cathcode)[cath_names]
+
+    RealtimeLogger.info("cathcode {} {} {}".format(cathcode, cath_names, cathcodes.columns))
+
+    if len(cathcodes.columns) < level:
+        map_job(job, func, cathcodes.values, cathFileStoreID, **kwds)
+        RealtimeLogger.info("Running {} {}s".format(len(cathcodes), cathcodes.columns[-1]))
+    else:
+        sfams = (cathcodes.astype(int).astype(str)+"/").sum(axis=1).str[:-1].tolist()
+        RealtimeLogger.info("Running sfam {}".format(cathcode))
+        kwds.pop("further_parallelize")
+        kwds.pop("level")
+        map_job(job, func, sfams, update_features, **kwds)
+
+    try:
+        os.remove(cath_path)
+    except (FileNotFoundError, OSError):
+        pass
+
 cath_desc = {
     "cath_domain":str,
     "pdb":str,

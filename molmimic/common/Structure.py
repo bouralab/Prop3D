@@ -136,24 +136,24 @@ class Structure(object):
         else:
             raise RuntimeError("Invalid PDB parser (pdb, mmcif, mmtf)")
 
+        self.cath_domain = self.sdi = cath_domain
+        self.pdb = cath_domain[:4]
+        self.chain = cath_domain[4]
+        self.domNo = cath_domain[5:]
+
         try:
-            self.structure = parser.get_structure(pdb, self.path)
+            self.structure = parser.get_structure(self.cath_domain, self.path)
         except KeyError:
             #Invalid mmcif file
-            raise InvalidPDB("Invalid PDB file: {} (path={})".format(pdb, self.path))
-
-        self.cath_domain = self.sdi = cath_doman
-        self.pdb = cath_doman[:4]
-        self.chain = cath_doman[4]
-        self.domNo = cath_domain[5:]
+            raise InvalidPDB("Invalid PDB file: {} (path={})".format(self.cath_domain, self.path))
 
         try:
             all_chains = list(self.structure[0].get_chains())
         except (KeyError, StopIteration):
-            raise InvalidPDB("Error get chains for {} {}".format(pdb, self.path))
+            raise InvalidPDB("Error get chains for {} {}".format(self.cath_domain, self.path))
 
         if len(all_chains) > 1:
-            raise InvalidPDB("Only accepts PDBs with 1 chain in {} {}".format(pdb, self.path))
+            raise InvalidPDB("Only accepts PDBs with 1 chain in {} {}".format(self.cath_domain, self.path))
 
         if cath_format:
             self.id = "{}{}{:02d}".format(self.pdb, self.chain, int(self.domNo))
@@ -172,20 +172,20 @@ class Structure(object):
             self.features_path = os.path.dirname(features_path)
             self.atom_features_file = features_file
             self.residue_features_file = os.path.join(self.features_path,
-            self.pdb.lower()[1:3], "{}_residue.h5".format(self.id))
+                "{}_residue.h5".format(self.id))
         elif features_path.endswith("_residue.h5"):
             self.features_path = os.path.dirname(features_path)
             self.residue_features_file = features_file
             self.atom_features_file = os.path.join(self.features_path,
-            self.pdb.lower()[1:3], "{}_atom.h5".format(self.id))
+                "{}_atom.h5".format(self.id))
         else:
             self.atom_features_file = os.path.join(self.features_path,
-            self.pdb.lower()[1:3], "{}_atom.h5".format(self.id))
+                "{}_atom.h5".format(self.id))
             self.residue_features_file = os.path.join(self.features_path,
-            self.pdb.lower()[1:3], "{}_residue.h5".format(self.id))
+                "{}_residue.h5".format(self.id))
 
-        if not os.path.isdir(os.path.dirname(self.atom_features_file)):
-            os.makedirs(os.path.dirname(self.atom_features_file))
+        if not os.path.isdir(os.path.dirname(os.path.abspath(self.atom_features_file))):
+            os.makedirs(os.path.abspath(os.path.dirname(self.atom_features_file)))
 
         if False and feature_mode == "r" and not os.path.isfile(self.atom_features_file):
             self.atom_feature_mode = "w+"
