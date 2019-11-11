@@ -129,7 +129,7 @@ class ProteinVoxelizer(Structure):
             use_deepsite_features=use_deepsite_features,
             course_grained=False)
 
-        data_voxels = defaultdict(lambda: np.zeros(nFeatures))
+        data_voxels = defaultdict(lambda: np.zeros(nFeatures if self.use_features is None else len(self.use_features)))
         truth_voxels = {}
 
         voxel_map = {}
@@ -361,9 +361,9 @@ class ProteinVoxelizer(Structure):
             elif non_geom_features:
                 feats = features[
                     atom_feature_names["get_element_type"] + \
-                    atom_feature_names["get_charge_and_electrostatics"] + \
-                    atom_feature_names["get_hydrophobicity"] + \
-                    [float(is_buried)] ]
+                    atom_feature_names["get_charge_and_electrostatics"] +\
+                    atom_feature_names["get_hydrophobicity"] +\
+                    [float(is_buried)]]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
@@ -445,17 +445,73 @@ def voxels_to_unknown_structure(coords, data, bucket_size=10):
     assert bucket_size > 1
     assert self.coords.shape[1] == 3
     kdt = KDTree(coords, bucket_size)
-    neighbors = kdt.neighbor_search(2.75)
-    for neighbor in neighbors:
+    neighbors_max = kdt.neighbor_search(1.55) #2.75
+    neighbors_min = kdt.neighbor_search(1.53) #1.3
+
+    neighbors_min = [sorted((n1.index1, n2.index2)) for n in neighbors_min]
+
+    neighbor_atoms = defaultdict(list)
+
+    for neighbor in neighbors_max:
         i1 = neighbor.index1
         i2 = neighbor.index2
-        voxel_1 = data[i1]
-        voxel_2 = data[i2]
 
-        atomtype_1 = voxel_1[13:18]
-        atomtype_2 = voxel_2[13:18]
+        if sorted((i1, i2)) in neighbors_min:
+            continue
+
+        voxel1 = data[i1]
+        voxel2 = data[i2]
+
+        atom1_isC = voxel1["hydrophobic"] and not voxel1["aromatic"]
+        atom2_isC = voxel2["hydrophobic"] and not voxel2["aromatic"]
+
+        if atom1_isC and atom2_isC:
+            #Could a CA, CB, or CG?
+            pass
+
+        if atomtype_1 == "C" and atomtype_2 == "C":
+            pass
 
     #Refold using rosetta CA-CA??
+
+def voxels_to_structure_from_starting_structure(coords, data, starting_structure, starting_data, features=None, diff=True, prefix=None, work_dir=None):
+    reconstructed_features = []
+    for atom in starting_structure.get_atoms():
+        atom = self._remove_altloc(atom)
+
+        atom_orig_feats = []
+        atom_reconstructed_feats = []
+        for atom_grid in self.get_grid_coords_for_atom_by_kdtree(atom):
+            idx = starting_data.index(atom_grid)
+            atom_orig_feats.append(starting_data[idx])
+            atom_reconstructed_feats.append(coords[atom_grid])
+
+        atom_orig_feats = np.avarage(np.concatenate(atom_orig_feats))
+        atom_reconstructed_feats = np.avarage(np.concatenate(atom_reconstructed_feats))
+
+        reconstructed_features_ = atom_reconstructed_feats-atom_orig_feats if diff else atom_reconstructed_feats
+        reconstructed_features.append(reconstructed_features_)
+
+    reconstructed_features = np.concatenate(reconstructed_features, axis=0)
+
+    if features is None:
+        features = range(starting_data.shape[1])
+
+    if prefix is None:
+        prefix = "reconstructed_{}".format(starting_structure.cathdomain)
+
+    if work_dir is None:
+        work_dir = os.getcwd()
+
+    outfiles = []
+
+    for i, feature in enumerate(features):
+        starting_structure.update_bfactors(features[:, i])
+        outfile = os.path.join(work_dir, "{}_{}.pdb".format(prefix, feature))
+        starting_structure.write_pdb(outfile)
+        outfiles.append(outfile)
+
+    return outfiles
 
 if __name__ == "__main__":
   import sys
