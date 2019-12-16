@@ -323,7 +323,11 @@ class ProteinVoxelizer(Structure):
             #     assert 0, (atom.get_parent().get_id(), self._eppic.keys(), e)
             #     raise
 
-            if only_aa and use_deepsite_features:
+            if self.use_features is not None:
+                #Only use hand-selected features
+                feats = features[self.use_features]
+
+            elif only_aa and use_deepsite_features:
                 feats = features[
                     atom_feature_names["get_residue"] + \
                     atom_feature_names["get_deepsite_features"] + \
@@ -389,8 +393,11 @@ class ProteinVoxelizer(Structure):
       use_deepsite_features=False):
         """Calculate FEATUREs"""
         try:
-            features = self.residue_features[residue.get_id()[1]-1]
-            if non_geom_features:
+            features = self.residue_features[residue.get_id()]
+            if self.use_features is not None:
+                #Only use hand-selected features
+                feats = features[self.use_features]
+            elif non_geom_features:
                 return np.concatenate((
                     features[15:36],
                     features[0:4],
