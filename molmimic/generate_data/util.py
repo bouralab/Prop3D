@@ -143,7 +143,6 @@ def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None,
         else:
             filtered_df = _df.copy()
         if filtered_df.shape[0]>0:
-            RealtimeLogger.info("Read rows {}".format(filtered_df))
             if columns is not None:
                 filtered_df = filtered_df[columns]
             if drop_duplicates:

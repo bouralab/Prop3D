@@ -3,6 +3,7 @@ import os
 import re
 import glob
 from collections import defaultdict
+from itertools import groupby
 from multiprocessing.pool import Pool
 
 import logging
@@ -17,7 +18,7 @@ from botocore.exceptions import ClientError
 
 from molmimic.generate_data.iostore import IOStore
 from molmimic.generate_data.job_utils import map_job
-from molmimic.generate_data.util import get_file, filter_hdf, filter_hdf_chunks
+from molmimic.generate_data.util import get_file, filter_hdf, filter_hdf_chunks, get_atom_lines
 
 from toil.realtimeLogger import RealtimeLogger
 
@@ -89,45 +90,103 @@ cath_desc = {
     "sseqs": str
 }
 
-def download_sfam(job, sfam_id, cathFileStoreID, further_parallelize=False):
+def download_sfam(job, sfam_id, cathFileStoreID, download_all=False, check=False, skip_ids=None, further_parallelize=True):
     work_dir = job.fileStore.getLocalTempDir()
-    get_file(job, "cath.h5", cathFileStoreID)
+    cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
 
-    cath_domains = set(filter_hdf("cath.h5", "table", drop_duplicates=True,
-        columns=["cath_domain"], cathcode=sfam_id)["cath_domains"])
+    RealtimeLogger.info("Filter CATH")
+    cath_domains = filter_hdf(cath_file, "table", drop_duplicates=True,
+        columns=["cath_domain"], cathcode=sfam_id)["cath_domain"]
+    RealtimeLogger.info("Filtered CATH")
+    RealtimeLogger.info("Filtered CATH {}".format(len(cath_domains)))
+    #RealtimeLogger.info("CATH DOMAIN: {}".format(cath_domains))
 
     cath_store = IOStore.get("aws:us-east-1:molmimic-cath-structure")
-    done_domains = set(os.path.basename(k)[:-4] for k in cath_store.list_input_directory(
-        sfam_id.replace(".", "/")) if k.endswith(".pdb"))
 
-    cath_domains -= done_domains
+    if not check:
+        done_domains = set(os.path.basename(k)[:-4] for k in \
+            cath_store.list_input_directory(sfam_id.replace(".", "/")) \
+            if k.endswith(".pdb"))
+        cath_domains = cath_domains[~cath_domains.isin(done_domains)]
+
+    if skip_ids is not None and isinstance(skip_ids, dict) and sfam_id in skip_ids:
+        cath_domains = cath_domains[~cath_domains.isin(skip_ids[sfam_id])]
+
+    RealtimeLogger.info("Start dl {}".format(len(cath_domains)))
+
+    cath_domains = cath_domains.iloc[:1]
 
     if further_parallelize:
-        map_job(job, calculate_features, cath_domains)
+        map_job(job, download_cath_domain, cath_domains, sfam_id, check)
     else:
         for cath_domain in cath_domains:
+            RealtimeLogger.info("Running {}".format(cath_domain))
             try:
-                download_cath_domain(job, cath_domain, work_dir=work_dir)
+                download_cath_domain(job, cath_domain, sfam_id, check=check, work_dir=work_dir)
             except (SystemExit, KeyboardInterrupt):
                 raise
             except:
+                import traceback
+                tb = traceback.format_exc()
+                fail_file = os.path.join(work_dir, "{}.fail".format(cath_domain))
+                fail_key = "{}/{}.fail".format(sfam_id.replace(".", "/"), cath_domain)
+                with open(fail_file, "w") as fh:
+                    fh.write(tb)
+                cath_store.write_output_file(fail_file, fail_file)
+                try:
+                    os.remove(fail_file)
+                except OSError:
+                    pass
+                RealtimeLogger.info("Failed running CATH DOMAIN {}/{}:".format(
+                    sfam_id, cath_domain))
+                RealtimeLogger.info(tb)
                 continue
 
-def download_cath_domain(job, current_domain, work_dir=None):
+def is_valid_pdb(domain_file, cath_key=None, cath_store=None):
+    if cath_store is not None:
+        cath_store.read_input_file(cath_key, domain_file)
+
+    for line in get_atom_lines(domain_file):
+        valid_pdb = True
+        break
+    else:
+        valid_pdb = False
+
+    if cath_store is not None:
+        try:
+            os.remove(domain_file)
+        except OSError:
+            pass
+
+    return valid_pdb
+
+def download_cath_domain(job, cath_domain, sfam_id, check=False, work_dir=None):
     if work_dir is None and job is None:
         work_dir = os.getcwd()
     elif job is not None:
         work_dir = job.fileStore.getLocalTempDir()
 
+    RealtimeLogger.info("RUNNING {}/{}".format(sfam_id, cath_domain))
+
     cath_store = IOStore.get("aws:us-east-1:molmimic-cath-structure")
-    cath_key = "{class}/{architechture}/{topology}/{homology}/{cath_domain}.pdb".format(**current_domain)
-    if not cath_store.exists(cath_store):
+    cath_key = "{sfam_id}/{cath_domain}.pdb".format(
+        sfam_id=sfam_id.replace(".", "/"),
+        cath_domain=cath_domain)
+    domain_file = os.path.join(work_dir, "{}.pdb".format(cath_domain))
+
+    if check and cath_store.exists(cath_store):
+        if is_valid_pdb(domain_file, cath_key, cath_store):
+            return
+
+    if check or not cath_store.exists(cath_store):
         url = "https://www.cathdb.info/version/v4_2_0/api/rest/id/{}.pdb".format(
-            current_domain["cath_domain"])
-        domain_file = os.path.join(work_dir, "{}.pdb".format(current_domain["cath_domain"]))
+            cath_domain)
         with requests.get(url, stream=True) as r, open(domain_file, 'wb') as f:
             shutil.copyfileobj(r.raw, f)
-        cath_store.write_output_file(domain_file, cath_key)
+
+        if check and is_valid_pdb(domain_file):
+            cath_store.write_output_file(domain_file, cath_key)
+
         try:
             os.remove(domain_file)
         except OSError:
@@ -291,28 +350,20 @@ def create_small_description_file(job):
 
     in_store.write_output_file(small_desc_file, os.path.basename(small_desc_file))
 
-def start_toil(job, download_all=False):
+def start_toil(job, cathFileID, download_all=False, check=False, skip_ids=None):
     work_dir = job.fileStore.getLocalTempDir()
     in_store = IOStore.get("aws:us-east-1:molmimic-cath")
 
     if download_all:
-        sdoms_file = os.path.join(work_dir, "cath-domain-description-file.h5")
-        try:
-            in_store.read_input_file(os.path.basename(sdoms_file), sdoms_file)
-        except ClientError:
-            raise RuntimeError("Must run cath parser before this!")
+        RealtimeLogger.info("Downlaod all, Check? {}".format(check))
+        cath_file = job.fileStore.readGlobalFile(cathFileID, cache=True)
 
-        cathFileStoreID = job.fileStore.writeGlobalFile(sdoms_file)
-
-        cathcodes = filter_hdf_chunks(sdoms_file, "table", columns=["cathcode"],
+        cathcodes = filter_hdf_chunks(cath_file, "table", columns=["cathcode"],
             drop_duplicates=True)["cathcode"]
 
-        map_job(job, download_sfam, cathcodes, cathFileStoreID)
+        #cathcodes = ["1.10.530.40"]
 
-        try:
-            os.remove(sdoms_file)
-        except OSError:
-            pass
+        map_job(job, download_sfam, cathcodes, cathFileID, download_all, check, skip_ids)
 
         return
 
@@ -356,19 +407,36 @@ if __name__ == "__main__":
     from toil.job import Job
 
     parser = Job.Runner.getDefaultArgumentParser()
-    parser.add_argument("--download-all")
+    parser.add_argument("--download-all", default=False, action="store_true")
+    parser.add_argument("--check", default=False, action="store_true")
+    parser.add_argument("--skip-ids", default=None)
 
     options = parser.parse_args()
-    options.logLevel = "DEBUG"
+    options.logLevel = "INFO"
     options.clean = "always"
     options.targetTime = 1
+
+    if options.skip_ids is not None:
+        with open(options.skip_ids) as fh:
+            options.skip_ids = {sfam_id.replace("/", "."): list(pdb_keys) \
+                for sfam_id, pdb_keys in groupby(sorted(fh), \
+                key=lambda k: k.rsplit("/", 1)[0])}
+
 
     detector = logging.StreamHandler()
     logging.getLogger().addHandler(detector)
 
-    job = Job.wrapJobFn(start_toil, options.download_all)
-    with Toil(options) as toil:
-        toil.start(job)
+    if options.download_all and not os.path.isfile("cath.h5"):
+        in_store = IOStore.get("aws:us-east-1:molmimic-cath")
+        in_store.read_input_file("cath-domain-description-file-small.h5", "cath.h5")
+
+    with Toil(options) as workflow:
+        if options.download_all:
+            cathFileURL = 'file://' + os.path.abspath("cath.h5")
+            cathFileID = workflow.importFile(cathFileURL)
+        else:
+            cathFileID = None
+        workflow.start(Job.wrapJobFn(start_toil, cathFileID, options.download_all, False, options.skip_ids))
 
 
 # if __name__ == "__main__":

@@ -107,7 +107,7 @@ def calculate_features(job, pdb_or_key, update_features=None, work_dir=None):
 
             out_store.write_output_file(atom_features, key+"_atom.h5")
             out_store.write_output_file(residue_features, key+"_residue.h5")
-            out_store.write_output_file(graph_features, key+"_edges.h5")
+            out_store.write_output_file(graph_features, key+"_edges.txt.gz")
 
             for f in (pdb_path, atom_features, residue_features, graph_features):
                 try:
