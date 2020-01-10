@@ -326,6 +326,10 @@ class ProteinVoxelizer(Structure):
             if self.use_features is not None:
                 #Only use hand-selected features
                 feats = features[self.use_features]
+                if warn_if_buried:
+                    return feats, is_buried
+                else:
+                    return feats
 
             elif only_aa and use_deepsite_features:
                 feats = features[
