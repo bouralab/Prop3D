@@ -24,7 +24,7 @@ from molmimic.generate_data.util import iter_unique_superfams, get_file, \
 from molmimic.generate_data.job_utils import map_job, map_job_rv, map_job_rv_list
 from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
 #from molmimic.generate_data.parse_cath import run_cath_hierarchy
-from molmimic.parsers.eppic import get_interfaces, get_interface_residues, get_contacts, get_residue_info
+from molmimic.parsers.eppic import EPPICApi
 
 from toil.realtimeLogger import RealtimeLogger
 
@@ -35,6 +35,8 @@ logging.getLogger('urllib3').setLevel(logging.WARNING)
 #
 # pd.set_option('display.max_columns', None)
 # pd.set_option('display.max_rows', None)
+
+# Helper fubtions for pandas apply
 
 def collapse_binding_site(df):
     columns = ["pdb", "interfaceId", "firstChain", "secondChain"]
@@ -62,101 +64,6 @@ def collapse_binding_site(df):
     })), axis=0)
 
     return binding_site
-
-def get_binding_sites(contacts):
-    """Collapse interactions to one binding site per line"""
-
-    if "secondCathDomainClosest1" in contacts.columns:
-        #Domain:Loop Interactions
-        columns = ["firstCathDomain", "secondCathDomainClosest1"]
-        order = [
-            "pdb", "interfaceId", "reverse", "firstCathCode", "firstCathDomain",
-            "firstChain", "firstResi", "firstResn", "secondCathCodeClosest1",
-            "secondCathDomainClosest1", "secondCathDomainDistance1","secondChain",
-            "secondResi", "secondResn"
-        ]
-    elif "firstCathDomainClosest1" in contacts.columns:
-        #Loop:Domain Interactions
-        columns = ["firstCathDomainClosest1", "secondCathDomain"]
-        order = [
-            "pdb", "interfaceId", "reverse", "firstCathCodeClosest1", "firstCathDomainClosest1",
-            "firstCathDomainDistanceClosest1","firstChain", "firstResi", "firstResn",
-            "secondCathCode", "secondCathDomain", "secondChain", "secondResi", "secondResn"
-        ]
-    else:
-        #Domain:Domain Interactions
-        columns = ["firstCathDomain", "secondCathDomain"]
-        order = [
-            "pdb", "interfaceId", "reverse", "firstCathCode", "firstCathDomain",
-            "firstChain", "firstResi", "firstResn", "secondCathCode",
-            "secondCathDomain", "secondChain", "secondResi", "secondResn"
-        ]
-
-    binding_sites = contacts.groupby(columns, as_index=False)
-    binding_sites = binding_sites.apply(collapse_binding_site).reset_index(drop=True)
-    binding_sites = binding_sites.assign(reverse=False)
-
-    #Duplicate binding sites by swaping first and second chain
-    binding_sites2 = binding_sites.copy()
-    binding_sites2 = binding_sites2.rename(columns=
-        {c:c.replace("first", "second") if c[0]=="f" else c.replace("second", "first") \
-         for c in binding_sites2.columns if "first" in c or "second" in c})
-    binding_sites2["reverse"] = True
-    binding_sites = binding_sites.append(binding_sites2).reset_index(drop=True)
-
-    #Reorder collapsed DDI columns
-    binding_sites = binding_sites[order]
-
-    return binding_sites
-
-def update_contact_columns(df, side):
-    resSide = ["first", "second"]
-
-    if "pdb_x" in df.columns:
-        df = df.rename(columns={"pdb_x":"pdb"}).drop(columns=["pdb_y"])
-
-    contacts = df.drop(columns={
-        'asa', 'bsa', 'bsaPercentage', 'residueNumber', 'residueType', 'side'})
-
-    if "pdbCode" in contacts.columns and "pdb" in contacts.columns:
-        contacts = contacts.drop(columns=["pdb"])
-
-    contacts = contacts.rename(columns={
-        "pdbResidueNumber":resSide[side]+"PdbResNumber",
-        "entropyScore":resSide[side]+"EntropyScore",
-        "region":resSide[side]+"Region",
-        "chain":resSide[side]+"Chain",
-        "cath_domain":resSide[side]+"CathDomain",
-        "cathcode":resSide[side]+"CathCode",
-        "uid_x":"contactUid",
-        "uid_y":"firstUid",
-        "uid":"secondUid",
-        "pdbCode":"pdb",
-        "interfaceId_x":"interfaceId"})
-
-    #Reorder columns
-    cols = [
-        'contactUid', 'pdb', 'interfaceId',
-        'firstResNumber', 'firstPdbResNumber', 'firstResType', 'firstChain',
-        'firstCathDomain', 'firstCathCode']
-    if "secondResNumber" in contacts.columns and "secondCathCode" in contacts.columns:
-        cols += [
-            'secondResNumber', 'secondPdbResNumber', 'secondResType', 'secondChain',
-            'secondCathDomain', 'secondCathCode',
-        ]
-    else:
-        cols += ['secondResNumber', 'secondResType', 'secondBurial']
-
-    cols += ['firstBurial', 'firstEntropyScore', 'firstRegion', 'firstUid']
-
-    if "secondResNumber" in contacts.columns and "secondCathCode" in contacts.columns:
-        cols += ['secondEntropyScore', 'secondRegion', 'secondUid']
-
-    cols += ['isClash', 'isDisulfide', 'minDistance', 'numAtoms', 'numHBonds']
-
-    contacts = contacts[cols]
-
-    return contacts
 
 def get_top_cath_domains_to_loop_contacts(df_):
     df_ = df_.sort_values("distance")
@@ -210,47 +117,45 @@ def get_top_cath_domains_to_loop_contacts(df_):
 
     return contact_info
 
-def write_output_files(df, output_type, work_dir, store):
-    write_pdb_output_files(df, output_type, work_dir, store)
-    write_cath_output_files(df, output_type, work_dir, store)
+class OutputWriter(object):
+    def __init__(self, work_dir, store):
+        self.work_dir = work_dir
+        self.store = store
 
-def write_pdb_output_files(df, output_type, work_dir, store):
-    pdb, interfaceId = list(df.iloc[0][["pdb", "interfaceId"]])
-    key = "pdb/{}/{}_{}.h5".format(pdb, interfaceId, output_type)
-    file = os.path.join(work_dir, key.replace("/", "_"))
-    df.to_hdf(file, "table", format="table", table=True, complevel=9,
-        complib="bzip2", min_itemsize=1024)
-    store.write_output_file(file, key)
+    def write(self, df, output_type):
+        self.write_pdb(df, output_type)
+        self.write_cath(df, output_type)
 
-    try:
-        os.remove(file)
-    except OSError:
-        pass
-
-def write_cath_output_files(df, output_type, work_dir, store):
-    pdb, interfaceId = list(df.iloc[0][["pdb", "interfaceId"]])
-    for (cathcode, cath_domain), cath_df in df.groupby(
-      ["firstCathCode", "firstCathDomain"], as_index=False):
-        key = "cath/{}/{}_{}_{}.h5".format(cathcode.replace(".", "/"), cath_domain,
-            interfaceId, output_type)
-        file = os.path.join(work_dir, key.replace("/", "_"))
-        cath_df.to_hdf(file, "table", format="table", table=True, complevel=9,
+    def write_pdb(self, df, output_type):
+        pdb, interfaceId = list(df.iloc[0][["pdb", "interfaceId"]])
+        key = "pdb/{}/{}_{}.h5".format(pdb, interfaceId, output_type)
+        file = os.path.join(self.work_dir, key.replace("/", "_"))
+        df.to_hdf(file, "table", format="table", table=True, complevel=9,
             complib="bzip2", min_itemsize=1024)
-        store.write_output_file(file, key)
+        self.store.write_output_file(file, key)
+
         try:
             os.remove(file)
         except OSError:
             pass
 
-def process_pdb(job, pdbId, cathFileStoreID, manual_status=True, work_dir=None):
-    work_dir = job.fileStore.getLocalTempDir()
+    def write_cath(self, df, output_type):
+        pdb, interfaceId = list(df.iloc[0][["pdb", "interfaceId"]])
+        for (cathcode, cath_domain), cath_df in df.groupby(
+          ["firstCathCode", "firstCathDomain"], as_index=False):
+            key = "cath/{}/{}_{}_{}.h5".format(cathcode.replace(".", "/"), cath_domain,
+                interfaceId, output_type)
+            file = os.path.join(self.work_dir, key.replace("/", "_"))
+            cath_df.to_hdf(file, "table", format="table", table=True, complevel=9,
+                complib="bzip2", min_itemsize=1024)
+            self.store.write_output_file(file, key)
+            try:
+                os.remove(file)
+            except OSError:
+                pass
 
-    store = IOStore.get("aws:us-east-1:molmimic-eppic-interfaces")
-
-    status_key = "pdb/{}/status.json".format(pdbId)
-    status_file = os.path.join(work_dir, "{}_status.json".format(pdbId))
-
-    status_template = {
+class Status(dict):
+    TEMPLATE = {
         "ddi": None,
         "ddi_residues": None,
         "lli": None,
@@ -259,131 +164,171 @@ def process_pdb(job, pdbId, cathFileStoreID, manual_status=True, work_dir=None):
         "dli_residues": None
     }
 
-    if store.exists(status_key):
-        store.read_input_file(status_key, status_file)
-        with open(status_file) as fh:
-            status = json.load(fh)
-        exists = True
+    def __init__(self, pdbId, store, manual_status=False):
+        self.pdbId = pdbId
+        self.store = store
+        self.exists = False
+        self.work_dir = work_dir if work_dir is not None else os.getcwd()
 
-    else:
-        exists = False
-        status = {"numInterfaces":0}
-        if False and manual_status:
-            pdb_key = "pdb/{}".format(pdbId)
-            for key in store.list_input_directory(pdb_key):
-                if "status" in key: continue
+        self.key = "pdb/{}/status.json".format(pdbId)
+        self.path = os.path.join(self.work_dir, "{}_status.json".format(pdbId))
+        self["numInterfaces"] = 0
 
-                fname = os.path.splitext(key[len(pdb_key)+1:])[0]
-                intId, output_type = fname.split("_", 1)
+        if store.exists(key):
+            self.read()
+        elif manual_status:
+            self.manual_status()
 
-                if not int(intId) in status:
-                    status[intId] = status_template.copy()
+    def __get__(self, key):
+        try:
+            return super(Status, self).__get__(key)
+        except KeyError:
+            self[key] = status.TEMPLATE.copy()
+            return super(Status, self).__get__(key)
 
-                fname = os.path.join(work_dir, fname)
-                store.read_input_file(key, fname)
-                pd.read_hdf(fname, "table")
-                df = pd.HDFStore(fname)
-                status[intId][output_type] = df.get_storer('table').nrows
-                df.close()
+    def write(self):
+        with open(self.path, "w") as fh:
+            json.dump(self, fh)
 
-                try:
-                    os.remove(fname)
-                except OSError:
-                    pass
+        self.store.write_output_file(self.path, self.key)
 
-    skip_intIds = []
-    for intId, int_status in status.items():
-        if intId == "numInterfaces":
+        try:
+            os.remove(self.path)
+        except:
             pass
-        elif intId == "error":
-            #Interface failed previous version due to not being in API
-            skip_intIds.append(intId)
-        elif isinstance(int_status, dict) and all(isinstance(v, int) for v in \
-          int_status.values()):
-            #Interface is done
-            skip_intIds.append(intId)
-        else:
-            #Interface not calcualted, must recalculate
-            break
-    else:
-        if "numInterfaces" in status and status["numInterfaces"]==len(skip_intIds):
+
+    def read(self):
+        self.store.read_input_file(self.key, self.file)
+        with open(self.file) as fh:
+            status = json.load(fh)
+
+        self.update(status)
+        self.exists = True
+
+    def manual_status(self):
+        pdb_key = "pdb/{}".format(self.pdbId)
+        for key in self.store.list_input_directory(pdb_key):
+            if "status" in key: continue
+
+            fname = os.path.splitext(key[len(pdb_key)+1:])[0]
+            intId, output_type = fname.split("_", 1)
+
+            fname = os.path.join(work_dir, fname)
+            self.store.read_input_file(key, fname)
+            pd.read_hdf(fname, "table")
+            df = pd.HDFStore(fname)
+            self[intId][output_type] = df.get_storer('table').nrows
+            df.close()
+
+            try:
+                os.remove(fname)
+            except OSError:
+                pass
+
+    def finished_interfaces(self):
+        finished_intIds = []
+        for intId, int_status in self.items():
+            if intId == "numInterfaces":
+                pass
+            elif intId == "error":
+                #Interface failed previous version due to not being in API
+                skip_intIds.append(intId)
+            elif isinstance(int_status, dict) and all(isinstance(v, int) for v in \
+              int_status.values()):
+                #Interface is done
+                skip_intIds.append(intId)
+            else:
+                #Interface not calculated, must recalculate
+                continue
+
+        return finished_intIds
+
+    def is_complete(self, intIds=None):
+        skip_intIds = len(intIds) if intIds is None else len(self.finished_interfaces())
+        if "numInterfaces" in self and self["numInterfaces"]==len(skip_intIds):
             if status["numInterfaces"] > 0 or (status["numInterfaces"] == 0 and \
               "error" in "status"):
                 #PDB is Complete
-                if not exists:
-                    write_status_file(status, status_file, status_key, store)
-                return
+                if not self.exists:
+                    self.write()
+            return True
+        return False
 
-    #Get all chain:chain interfaces for PDB from EPPIC
-    interfaces = get_interfaces(pdbId.lower(), bio=True)
-
-    if interfaces is None:
-        #save empty status file
-        status["error"] = "interfaces is None"
-        write_status_file(status, status_file, status_key, store)
-        return
-
-    RealtimeLogger.info("IFACES {}".format(interfaces["interfaceId"]))
-    if len(skip_intIds)>0:
-        interfaces = interfaces[~interfaces.isin(skip_intIds)]
-
-    if interfaces.empty:
-        #save empty status file
-        status["error"] = "interfaces is empty"
-        write_status_file(status, status_file, status_key, store)
-        return
-
-    if isinstance(cathFileStoreID, pd.DataFrame):
-        cath = cathFileStoreID[cathFileStoreID["pdb"]==pdbId]
-    else:
-        cath_file = fileStore.readGlobalFile(cathFileStoreID)
-        cath = filter_hdf(cath_file, "table", pdb=pdbId)
-
-    cath["srange_start"] = cath["srange_start"].astype(str)
-    cath["srange_stop"] = cath["srange_stop"].astype(str)
-
-    #Convert CATH start/strop ranges to numeric indices
-    residue_info = get_residue_info(pdbId.lower())
-
-    if residue_info is None:
-        #save empty status file
-        status["error"] = "residue_info is None"
-        write_status_file(status, status_file, status_key, store)
-        return
-
-    residue_info = residue_info.drop(residue_info.columns.difference(
-        ["chain", "residueNumber", "pdbResidueNumber"]), 1)
-    residue_info["pdbResidueNumber"] = residue_info["pdbResidueNumber"].astype(str)
-
-    for i, cath_side in enumerate(("start", "stop")):
-        cath_col = "srange_{}".format(cath_side)
-        cath = pd.merge(
-            cath,
-            residue_info.rename(columns={"pdbResidueNumber":cath_col}),
-            on=["chain", cath_col],
-            how="inner")
-        cath = cath.rename(columns={"residueNumber":"cath{}ResidueNumber".format(
-            cath_side.title())})
-
-    del residue_info
-
+class EPPICInteractome(object):
     resSide = ["first", "second"]
 
-    for interface in interfaces.itertuples():
+    def __init__(self, pdbId, cathFileStoreID, store, manual_status=True, work_dir=None):
+        self.cathFileStoreID = cathFileStoreID
+        self.manual_status = manual_status
+        self.work_dir = work_dir if work_dir is not None else os.getcwd()
+
+        self.status = Status(pdbId, store, work_dir=work_dir)
+        self.writer = OutputWriter(work_dir, store)
+
+        self.skip_intIds = self.status.finished_interfaces()
+
+        #Start new connection EPPIC api
+        eppic_store = IOStore.get("aws:us-east-1:molmimic-eppic-service")
+        pdbe_store = IOStore.get("aws:us-east-1:molmimic-pdbe-service")
+        self.eppic = EPPICApi(pdbId.lower(), eppic_store, pdbe_store,
+            use_representative_chains=False, work_dir=work_dir)
+
+    def run(self):
+        if self.status.is_complete(self.skip_intIds):
+            return
+
+        #Get all chain:chain interfaces for PDB from EPPIC
+        interfaces = self.eppic.get_interfaces(bio=True)
+
+        if interfaces is None:
+            #save empty status file
+            self.status["error"] = "interfaces is None"
+            self.status.write()
+            return
+
+        RealtimeLogger.info("IFACES {}".format(interfaces["interfaceId"]))
+        if len(self.skip_intIds)>0:
+            interfaces = interfaces[~interfaces.isin(self.skip_intIds)]
+
+        if interfaces.empty:
+            #save empty status file
+            self.status["error"] = "interfaces is empty"
+            self.status.write()
+            return
+
+        #Convert CATH start/strop ranges to numeric indices
+        residue_info = self.eppic.get_residue_info()
+
+        if residue_info is None:
+            #save empty status file
+            self.status["error"] = "residue_info is None"
+            self.status.write()
+            return
+
+        residue_info = residue_info.drop(residue_info.columns.difference(
+            ["chain", "residueNumber", "pdbResidueNumber"]), 1)
+        residue_info["pdbResidueNumber"] = residue_info["pdbResidueNumber"].astype(str)
+
+        #Get CATH ranges
+        self.cath = self.get_cath_ranges(residue_info)
+        del residue_info
+
+        for interface in interfaces.itertuples():
+            self.process_interface(interface)
+
+        self.status.write()
+
+    def process_interface(self, interface):
         intId = str(interface.interfaceId)
         RealtimeLogger.info("intID {}".format(intId))
-        if intId not in status:
-            status[intId] = status_template.copy()
 
         #Get all residues chain:chain interface from EPPIC
-        interfaceResidues = get_interface_residues(
-            pdbId.lower(), interface.interfaceId)
+        interfaceResidues = self.eppic.get_interface_residues(interface.interfaceId)
         if interfaceResidues is None or interfaceResidues.empty:
             #save empty status file
-            status[intID]["error"] = "interfaceResidues is {}".format(None if \
+            self.status[intID]["error"] = "interfaceResidues is {}".format(None if \
                 interfaceResidues is None else "empty")
-            continue
-
+            return
 
         #Only keep residues that are "Totally buried", "Surface", "Rim",
         #"Core geometry", or "Core evolutionary"
@@ -393,82 +338,91 @@ def process_pdb(job, pdbId, cathFileStoreID, manual_status=True, work_dir=None):
         interfaceResidues["side"] = interfaceResidues["side"].astype(int)
         chainLetts = (interface.chain1, interface.chain2)
 
-        interfaceContacts = get_contacts(pdbId.lower(), interface.interfaceId)
+        interfaceContacts = self.eppic.get_contacts(interface.interfaceId)
         if interfaceContacts is None or interfaceContacts.empty:
             #save empty status file
-            status[intID]["error"] = "interfaceContacts is {}".format(None if \
+            self.status[intID]["error"] = "interfaceContacts is {}".format(None if \
                 interfaceContacts is None else "empty")
-            continue
+            return
 
-        domain_domain_contacts = loop_loop_contacts = interfaceContacts
+        self.domain_domain_contacts = self.loop_loop_contacts = interfaceContacts
 
         for side, chain in interfaceResidues.groupby("side"):
-            chainLett = chainLetts[side]
-            chain_residues = chain.assign(pdb=pdbId.lower(), chain=chainLett)
-            cath_chain = cath[cath["chain"]==chainLett]
-            cath_chain = pd.merge(
-                cath_chain[["cath_domain", "cathcode", "pdb", "chain",
-                    "cathStartResidueNumber", "cathStopResidueNumber"]],
-                chain_residues,
-                how="left", on=["pdb", "chain"])
+            self.process_interface_side(intId, side, chain, chainLetts[side])
 
-            domain_residues = cath_chain[
-                (cath_chain["residueNumber"] >= cath_chain["cathStartResidueNumber"]) & \
-                (cath_chain["residueNumber"] <= cath_chain["cathStopResidueNumber"])]
-            domain_residues = domain_residues.drop(columns=
-                ["cathStartResidueNumber", "cathStopResidueNumber"])
+        get_domain_loop_interactions(intId)
+        get_binding_sites(intId, domain_domain_contacts, "ddi")
+        get_binding_sites(intId, loop_loop_contacts, "lli")
 
-            loop_residues = cath_chain[
-                (cath_chain["residueNumber"] < cath_chain["cathStartResidueNumber"]) & \
-                (cath_chain["residueNumber"] > cath_chain["cathStopResidueNumber"])]
-            loop_residues = loop_residues.drop(columns=
-                ["cathStartResidueNumber", "cathStopResidueNumber"])
+        self.status["numInterfaces"] += 1
 
-            #Create DDI interactome by merging with contacts
-            domain_domain_contacts = pd.merge(
-                domain_domain_contacts, domain_residues, how="inner",
-                left_on=[resSide[side]+"ResNumber", "pdbCode" if "pdbCode" in \
-                    domain_domain_contacts.columns else "pdb", "interfaceId"],
-                right_on=["residueNumber", "pdb", "interfaceId"])
-            domain_domain_contacts = update_contact_columns(domain_domain_contacts, side)
+    def process_interface_side(self, intId, side, chain, chainLett):
+        chain_residues = chain.assign(pdb=self.pdbId.lower(), chain=chainLett)
+        self.cath_chain = self.cath[self.cath["chain"]==chainLett]
+        self.cath_chain = pd.merge(
+            self.cath_chain[["cath_domain", "cathcode", "pdb", "chain",
+                "cathStartResidueNumber", "cathStopResidueNumber"]],
+            chain_residues,
+            how="left", on=["pdb", "chain"])
 
-            #Create Loop:Loop interactome by merging with contacts
-            loop_loop_contacts = pd.merge(
-                loop_loop_contacts, loop_residues, how="inner",
-                left_on=[resSide[side]+"ResNumber", "pdbCode" if "pdbCode" in \
-                    loop_loop_contacts.columns else "pdb", "interfaceId"],
-                right_on=["residueNumber", "pdb", "interfaceId"])
-            loop_loop_contacts = update_contact_columns(loop_loop_contacts, side)
+        domain_residues = self.cath_chain[
+            (self.cath_chain["residueNumber"] >= self.cath_chain["cathStartResidueNumber"]) & \
+            (self.cath_chain["residueNumber"] <= self.cath_chain["cathStopResidueNumber"])]
+        domain_residues = domain_residues.drop(columns=
+            ["cathStartResidueNumber", "cathStopResidueNumber"])
 
-            #Complete Domain:Loop and Loop:Domain interactions
-            if side == 0:
-                #First side is either DDI or LLI w/o the second residue info
-                pass
-            else:
-                #Second side is merged with first sie of DDI or LLI w/ residue info
-                loop_domain_contacts = pd.merge(
-                    loop_loop_contacts, domain_residues, how="inner",
-                    left_on=[resSide[side]+"ResNumber", resSide[side]+"Chain", "pdb", "interfaceId"],
-                    right_on=["residueNumber", "chain", "pdb", "interfaceId"])
-                loop_domain_contacts = loop_domain_contacts.drop(columns=[
-                    'secondChain', 'secondCathDomain', 'secondCathCode',
-                    'secondUid', 'secondRegion', 'secondPdbResNumber',
-                    'secondEntropyScore'])
-                loop_domain_contacts = update_contact_columns(loop_domain_contacts, side)
-                domain_loop_contacts = pd.merge(
-                    domain_domain_contacts, loop_residues, how="inner",
-                    left_on=[resSide[side]+"ResNumber", resSide[side]+"Chain", "pdb", "interfaceId"],
-                    right_on=["residueNumber", "chain", "pdb", "interfaceId"])
-                domain_loop_contacts = domain_loop_contacts.drop(columns=[
-                    'secondChain', 'secondCathDomain', 'secondCathCode',
-                    'secondUid', 'secondRegion', 'secondPdbResNumber',
-                    'secondEntropyScore'])
-                domain_loop_contacts = update_contact_columns(domain_loop_contacts, side)
+        loop_residues = self.cath_chain[
+            (self.cath_chain["residueNumber"] < self.cath_chain["cathStartResidueNumber"]) & \
+            (self.cath_chain["residueNumber"] > self.cath_chain["cathStopResidueNumber"])]
+        loop_residues = loop_residues.drop(columns=
+            ["cathStartResidueNumber", "cathStopResidueNumber"])
 
+        #Create DDI interactome by merging with contacts
+        self.domain_domain_contacts = pd.merge(
+            self.domain_domain_contacts, domain_residues, how="inner",
+            left_on=[self.resSide[side]+"ResNumber", "pdbCode" if "pdbCode" in \
+                self.domain_domain_contacts.columns else "pdb", "interfaceId"],
+            right_on=["residueNumber", "pdb", "interfaceId"])
+        self.domain_domain_contacts = self._update_contact_columns(self.domain_domain_contacts, side)
+
+        #Create Loop:Loop interactome by merging with contacts
+        self.loop_loop_contacts = pd.merge(
+            self.loop_loop_contacts, loop_residues, how="inner",
+            left_on=[self.resSide[side]+"ResNumber", "pdbCode" if "pdbCode" in \
+                loop_loop_contacts.columns else "pdb", "interfaceId"],
+            right_on=["residueNumber", "pdb", "interfaceId"])
+        self.loop_loop_contacts = self._update_contact_columns(self.loop_loop_contacts, side)
+
+        #Complete Domain:Loop and Loop:Domain interactions
+        if side == 0:
+            #First side is either DDI or LLI w/o the second residue info
+            pass
+        else:
+            #Second side is merged with first sie of DDI or LLI w/ residue info
+            self.loop_domain_contacts = pd.merge(
+                self.loop_loop_contacts, domain_residues, how="inner",
+                left_on=[self.resSide[side]+"ResNumber", self.resSide[side]+"Chain", "pdb", "interfaceId"],
+                right_on=["residueNumber", "chain", "pdb", "interfaceId"])
+            self.loop_domain_contacts = self.loop_domain_contacts.drop(columns=[
+                'secondChain', 'secondCathDomain', 'secondCathCode',
+                'secondUid', 'secondRegion', 'secondPdbResNumber',
+                'secondEntropyScore'])
+            self.loop_domain_contacts = self._update_contact_columns(self.loop_domain_contacts, side)
+            self.domain_loop_contacts = pd.merge(
+                self.domain_domain_contacts, loop_residues, how="inner",
+                left_on=[self.resSide[side]+"ResNumber", self.resSide[side]+"Chain", "pdb", "interfaceId"],
+                right_on=["residueNumber", "chain", "pdb", "interfaceId"])
+            self.domain_loop_contacts = self.domain_loop_contacts.drop(columns=[
+                'secondChain', 'secondCathDomain', 'secondCathCode',
+                'secondUid', 'secondRegion', 'secondPdbResNumber',
+                'secondEntropyScore'])
+            self.domain_loop_contacts = self._update_contact_columns(self.domain_loop_contacts, side)
+
+    def get_domain_loop_interactions(self, intId):
         #Get Domain:Loop interactions closest domains
         domain_loop_contacts_to_cath = pd.merge(
-            domain_loop_contacts,
-            cath_chain[["pdb", "chain", "cath_domain", "cathcode", "cathStartResidueNumber", "cathStopResidueNumber"]],
+            self.domain_loop_contacts,
+            self.cath_chain[["pdb", "chain", "cath_domain", "cathcode", "cathStartResidueNumber", "cathStopResidueNumber"]],
             left_on=["pdb", "secondChain"],
             right_on=["pdb", "chain"])
         domain_loop_contacts_to_cath = domain_loop_contacts_to_cath[
@@ -489,69 +443,156 @@ def process_pdb(job, pdbId, cathFileStoreID, manual_status=True, work_dir=None):
                     get_top_cath_domains_to_loop_contacts)
 
             #Save DLI binding sites for PDB file
-            domain_loop_binding_sites = get_binding_sites(domain_loop_contacts)
-            write_output_files(domain_loop_binding_sites, "dli", work_dir, store)
-            status[intId]["dli"] = len(domain_loop_binding_sites)
+            self.domain_loop_binding_sites = get_binding_sites(self.domain_loop_contacts)
+            self.writer.write(self.domain_loop_binding_sites, "dli")
+            self.status[intId]["dli"] = len(self.domain_loop_binding_sites)
 
             #Save DLI contacts for PDB file with info on each residue
-            write_output_files(domain_loop_contacts, "dli_residues", work_dir, store)
-            status[intId]["dli_residues"] = len(domain_loop_contacts)
+            self.writer.write(self.domain_loop_contacts, "dli_residues")
+            self.status[intId]["dli_residues"] = len(self.domain_loop_contacts)
 
-            del domain_loop_contacts
-            del domain_loop_binding_sites
         else:
-            status[intId]["dli"] = 0
-            status[intId]["dli_residues"] = 0
+            self.status[intId]["dli"] = 0
+            self.status[intId]["dli_residues"] = 0
 
-        if not domain_domain_contacts.empty:
-            #Save DDI binding sites for PDB file (collapsed residues for one site)
-            domain_domain_binding_sites = get_binding_sites(domain_domain_contacts)
-            write_output_files(domain_domain_binding_sites, "ddi", work_dir, store)
-            status[intId]["ddi"] = len(domain_domain_binding_sites)
+    def get_binding_sites(self, intId, contacts, binding_site_type):
+        if not contacts.empty:
+            #Save binding sites for PDB file (collapsed residues for one site)
+            binding_sites = self._get_binding_sites(contacts)
+            self.writer.write(binding_sites, binding_site_type)
+            self.status[intId][binding_site_type] = len(binding_sites)
 
             #Save DDI contacts for PDB file with info on each residue
-            write_output_files(domain_domain_contacts, "ddi_residues", work_dir, store)
-            status[intId]["ddi_residues"] = len(domain_domain_contacts)
+            contact_type = "{}_residues".format(binding_site_type)
+            self.writer.write(contacts, contact_type)
+            self.status[intId][contact_type] = len(contacts)
 
-            del domain_domain_binding_sites
         else:
-            status[intId]["ddi"] = 0
-            status[intId]["ddi_residues"] = 0
+            contact_type = "{}_residues".format(binding_site_type)
+            self.status[intId][binding_site_type] = 0
+            self.status[intId][contact_type] = 0
 
-        if not loop_loop_contacts.empty:
-            #Save LLI binding sites for PDB file (collapsed residues for one site)
-            loop_loop_binding_sites = get_binding_sites(loop_loop_contacts)
-            write_output_files(loop_loop_binding_sites, "lli", work_dir, store)
-            status[intId]["lli"] = len(loop_loop_binding_sites)
-
-            #Save LLI contacts for PDB file with info on each residue
-            write_output_files(loop_loop_contacts, "lli_residues", work_dir, store)
-            status[intId]["lli_residues"] = len(loop_loop_contacts)
-
-            del loop_loop_binding_sites
+    def get_cath_ranges(self, residue_info):
+        if isinstance(self.cathFileStoreID, pd.DataFrame):
+            cath = self.cathFileStoreID[self.cathFileStoreID["pdb"]==self.pdbId]
         else:
-            status[intId]["lli"] = 0
-            status[intId]["lli_residues"] = 0
+            cath_file = fileStore.readGlobalFile(self.cathFileStoreID)
+            cath = filter_hdf(cath_file, "table", pdb=pdbId)
 
-        status["numInterfaces"] += 1
+        cath["srange_start"] = cath["srange_start"].astype(str)
+        cath["srange_stop"] = cath["srange_stop"].astype(str)
 
-        del domain_domain_contacts
-        del loop_loop_contacts
+        for i, cath_side in enumerate(("start", "stop")):
+            cath_col = "srange_{}".format(cath_side)
+            cath = pd.merge(
+                cath,
+                residue_info.rename(columns={"pdbResidueNumber":cath_col}),
+                on=["chain", cath_col],
+                how="inner")
+            cath = cath.rename(columns={"residueNumber":"cath{}ResidueNumber".format(
+                cath_side.title())})
 
-    write_status_file(status, status_file, status_key, store)
+        return cath
 
-def write_status_file(status, status_file, status_key, store):
-    RealtimeLogger.info("STATUS {}".format(status))
+    def _update_contact_columns(self, df, side):
+        if "pdb_x" in df.columns:
+            df = df.rename(columns={"pdb_x":"pdb"}).drop(columns=["pdb_y"])
 
-    with open(status_file, "w") as fh:
-        json.dump(status, fh)
+        contacts = df.drop(columns={
+            'asa', 'bsa', 'bsaPercentage', 'residueNumber', 'residueType', 'side'})
 
-    store.write_output_file(status_file, status_key)
+        if "pdbCode" in contacts.columns and "pdb" in contacts.columns:
+            contacts = contacts.drop(columns=["pdb"])
 
-    try:
-        os.remove(status_file)
-    except:
-        pass
+        contacts = contacts.rename(columns={
+            "pdbResidueNumber":self.resSide[side]+"PdbResNumber",
+            "entropyScore":self.resSide[side]+"EntropyScore",
+            "region":self.resSide[side]+"Region",
+            "chain":self.resSide[side]+"Chain",
+            "cath_domain":self.resSide[side]+"CathDomain",
+            "cathcode":self.resSide[side]+"CathCode",
+            "uid_x":"contactUid",
+            "uid_y":"firstUid",
+            "uid":"secondUid",
+            "pdbCode":"pdb",
+            "interfaceId_x":"interfaceId"})
+
+        #Reorder columns
+        cols = [
+            'contactUid', 'pdb', 'interfaceId',
+            'firstResNumber', 'firstPdbResNumber', 'firstResType', 'firstChain',
+            'firstCathDomain', 'firstCathCode']
+        if "secondResNumber" in contacts.columns and "secondCathCode" in contacts.columns:
+            cols += [
+                'secondResNumber', 'secondPdbResNumber', 'secondResType', 'secondChain',
+                'secondCathDomain', 'secondCathCode',
+            ]
+        else:
+            cols += ['secondResNumber', 'secondResType', 'secondBurial']
+
+        cols += ['firstBurial', 'firstEntropyScore', 'firstRegion', 'firstUid']
+
+        if "secondResNumber" in contacts.columns and "secondCathCode" in contacts.columns:
+            cols += ['secondEntropyScore', 'secondRegion', 'secondUid']
+
+        cols += ['isClash', 'isDisulfide', 'minDistance', 'numAtoms', 'numHBonds']
+
+        contacts = contacts[cols]
+
+        return contacts
+
+    def _get_binding_sites(contacts):
+        """Collapse interactions to one binding site per line"""
+
+        if "secondCathDomainClosest1" in contacts.columns:
+            #Domain:Loop Interactions
+            columns = ["firstCathDomain", "secondCathDomainClosest1"]
+            order = [
+                "pdb", "interfaceId", "reverse", "firstCathCode", "firstCathDomain",
+                "firstChain", "firstResi", "firstResn", "secondCathCodeClosest1",
+                "secondCathDomainClosest1", "secondCathDomainDistance1","secondChain",
+                "secondResi", "secondResn"
+            ]
+        elif "firstCathDomainClosest1" in contacts.columns:
+            #Loop:Domain Interactions
+            columns = ["firstCathDomainClosest1", "secondCathDomain"]
+            order = [
+                "pdb", "interfaceId", "reverse", "firstCathCodeClosest1", "firstCathDomainClosest1",
+                "firstCathDomainDistanceClosest1","firstChain", "firstResi", "firstResn",
+                "secondCathCode", "secondCathDomain", "secondChain", "secondResi", "secondResn"
+            ]
+        else:
+            #Domain:Domain Interactions
+            columns = ["firstCathDomain", "secondCathDomain"]
+            order = [
+                "pdb", "interfaceId", "reverse", "firstCathCode", "firstCathDomain",
+                "firstChain", "firstResi", "firstResn", "secondCathCode",
+                "secondCathDomain", "secondChain", "secondResi", "secondResn"
+            ]
+
+        binding_sites = contacts.groupby(columns, as_index=False)
+        binding_sites = binding_sites.apply(collapse_binding_site).reset_index(drop=True)
+        binding_sites = binding_sites.assign(reverse=False)
+
+        #Duplicate binding sites by swaping first and second chain
+        binding_sites2 = binding_sites.copy()
+        binding_sites2 = binding_sites2.rename(columns=
+            {c:c.replace("first", "second") if c[0]=="f" else c.replace("second", "first") \
+             for c in binding_sites2.columns if "first" in c or "second" in c})
+        binding_sites2["reverse"] = True
+        binding_sites = binding_sites.append(binding_sites2).reset_index(drop=True)
+
+        #Reorder collapsed DDI columns
+        binding_sites = binding_sites[order]
+
+        return binding_sites
+
+def process_pdb(job, pdbId, cathFileStoreID, manual_status=True, work_dir=None):
+    work_dir = work_dir if work_dir is not None else job.fileStore.getLocalTempDir()
+    store = IOStore.get("aws:us-east-1:molmimic-eppic-interfaces")
+    interactome = EPPICInteractome(pdbId, cathFileStoreID, store,
+        manual_status=manual_status, work_dir=work_dir)
+    interactome.run()
 
 def process_pdb_group(job, pdb_group, cathFileStoreID, further_parallelize=False):
     work_dir = job.fileStore.getLocalTempDir()
@@ -573,7 +614,6 @@ def process_pdb_group(job, pdb_group, cathFileStoreID, further_parallelize=False
                 RealtimeLogger.info("Failed getting interactome for {}: {} - {}".format(
                     pdbId, e.__class__.__name__, e))
                 RealtimeLogger.info(traceback.format_exc())
-
 
 def merge_cath(job, cathFileStoreID, further_parallelize=False):
     work_dir = job.fileStore.getLocalTempDir()
@@ -639,6 +679,233 @@ if __name__ == "__main__":
         cathFileURL = 'file://' + os.path.abspath("cath.h5")
         cathFileID = workflow.importFile(cathFileURL)
         workflow.start(Job.wrapJobFn(start_toil, cathFileID, options.check))
+
+    # status_key = "pdb/{}/status.json".format(pdbId)
+    # status_file = os.path.join(work_dir, "{}_status.json".format(pdbId))
+    #
+    # status = Status(status_file, status_key, store)
+    # writer = OutputWriter(work_dir, store)
+    #
+    # skip_intIds = status.finished_interfaces()
+    # if status.is_complete(skip_intIds):
+    #     return
+    #
+    # #Start new connection EPPIC api
+    # eppic_store = IOStore.get("aws:us-east-1:molmimic-eppic-service")
+    # pdbe_store = IOStore.get("aws:us-east-1:molmimic-pdbe-service")
+    # eppic = EPPICApi(pdbId.lower(), eppic_store, pdbe_store,
+    #     use_representative_chains=False, work_dir=work_dir)
+    #
+    # #Get all chain:chain interfaces for PDB from EPPIC
+    # interfaces = eppic.get_interfaces(bio=True)
+    #
+    # if interfaces is None:
+    #     #save empty status file
+    #     status["error"] = "interfaces is None"
+    #     status.write()
+    #     return
+    #
+    # RealtimeLogger.info("IFACES {}".format(interfaces["interfaceId"]))
+    # if len(skip_intIds)>0:
+    #     interfaces = interfaces[~interfaces.isin(skip_intIds)]
+    #
+    # if interfaces.empty:
+    #     #save empty status file
+    #     status["error"] = "interfaces is empty"
+    #     status.write()
+    #     return
+    #
+    # #Convert CATH start/strop ranges to numeric indices
+    # residue_info = eppic.get_residue_info()
+    #
+    # if residue_info is None:
+    #     #save empty status file
+    #     status["error"] = "residue_info is None"
+    #     status.write()
+    #     return
+    #
+    # residue_info = residue_info.drop(residue_info.columns.difference(
+    #     ["chain", "residueNumber", "pdbResidueNumber"]), 1)
+    # residue_info["pdbResidueNumber"] = residue_info["pdbResidueNumber"].astype(str)
+    #
+    # #Get CATH ranges
+    # cath = get_cath_ranges(pdbId, cathFileStoreID, residue_info)
+    #
+    # del residue_info
+    #
+    # resSide = ["first", "second"]
+    #
+    # for interface in interfaces.itertuples():
+    #     intId = str(interface.interfaceId)
+    #     RealtimeLogger.info("intID {}".format(intId))
+    #     if intId not in status:
+    #         status[intId] = status.TEMPLATE.copy()
+    #
+    #     #Get all residues chain:chain interface from EPPIC
+    #     interfaceResidues = eppic.get_interface_residues(interface.interfaceId)
+    #     if interfaceResidues is None or interfaceResidues.empty:
+    #         #save empty status file
+    #         status[intID]["error"] = "interfaceResidues is {}".format(None if \
+    #             interfaceResidues is None else "empty")
+    #         continue
+    #
+    #
+    #     #Only keep residues that are "Totally buried", "Surface", "Rim",
+    #     #"Core geometry", or "Core evolutionary"
+    #     interfaceResidues = interfaceResidues[interfaceResidues["region"]>=0]
+    #
+    #     interfaceResidues = interfaceResidues.assign(interfaceId=interface.interfaceId)
+    #     interfaceResidues["side"] = interfaceResidues["side"].astype(int)
+    #     chainLetts = (interface.chain1, interface.chain2)
+    #
+    #     interfaceContacts = eppic.get_contacts(interface.interfaceId)
+    #     if interfaceContacts is None or interfaceContacts.empty:
+    #         #save empty status file
+    #         status[intID]["error"] = "interfaceContacts is {}".format(None if \
+    #             interfaceContacts is None else "empty")
+    #         continue
+    #
+    #     domain_domain_contacts = loop_loop_contacts = interfaceContacts
+    #     domain_domain_contacts.eppic.type = "ddi"
+    #
+    #     for side, chain in interfaceResidues.groupby("side"):
+    #         chainLett = chainLetts[side]
+    #         chain_residues = chain.assign(pdb=pdbId.lower(), chain=chainLett)
+    #         cath_chain = cath[cath["chain"]==chainLett]
+    #         cath_chain = pd.merge(
+    #             cath_chain[["cath_domain", "cathcode", "pdb", "chain",
+    #                 "cathStartResidueNumber", "cathStopResidueNumber"]],
+    #             chain_residues,
+    #             how="left", on=["pdb", "chain"])
+    #
+    #         domain_residues = cath_chain[
+    #             (cath_chain["residueNumber"] >= cath_chain["cathStartResidueNumber"]) & \
+    #             (cath_chain["residueNumber"] <= cath_chain["cathStopResidueNumber"])]
+    #         domain_residues = domain_residues.drop(columns=
+    #             ["cathStartResidueNumber", "cathStopResidueNumber"])
+    #
+    #         loop_residues = cath_chain[
+    #             (cath_chain["residueNumber"] < cath_chain["cathStartResidueNumber"]) & \
+    #             (cath_chain["residueNumber"] > cath_chain["cathStopResidueNumber"])]
+    #         loop_residues = loop_residues.drop(columns=
+    #             ["cathStartResidueNumber", "cathStopResidueNumber"])
+    #
+    #         #Create DDI interactome by merging with contacts
+    #         domain_domain_contacts = pd.merge(
+    #             domain_domain_contacts, domain_residues, how="inner",
+    #             left_on=[resSide[side]+"ResNumber", "pdbCode" if "pdbCode" in \
+    #                 domain_domain_contacts.columns else "pdb", "interfaceId"],
+    #             right_on=["residueNumber", "pdb", "interfaceId"])
+    #         domain_domain_contacts = update_contact_columns(domain_domain_contacts, side)
+    #
+    #         #Create Loop:Loop interactome by merging with contacts
+    #         loop_loop_contacts = pd.merge(
+    #             loop_loop_contacts, loop_residues, how="inner",
+    #             left_on=[resSide[side]+"ResNumber", "pdbCode" if "pdbCode" in \
+    #                 loop_loop_contacts.columns else "pdb", "interfaceId"],
+    #             right_on=["residueNumber", "pdb", "interfaceId"])
+    #         loop_loop_contacts = update_contact_columns(loop_loop_contacts, side)
+    #
+    #         #Complete Domain:Loop and Loop:Domain interactions
+    #         if side == 0:
+    #             #First side is either DDI or LLI w/o the second residue info
+    #             pass
+    #         else:
+    #             #Second side is merged with first sie of DDI or LLI w/ residue info
+    #             loop_domain_contacts = pd.merge(
+    #                 loop_loop_contacts, domain_residues, how="inner",
+    #                 left_on=[resSide[side]+"ResNumber", resSide[side]+"Chain", "pdb", "interfaceId"],
+    #                 right_on=["residueNumber", "chain", "pdb", "interfaceId"])
+    #             loop_domain_contacts = loop_domain_contacts.drop(columns=[
+    #                 'secondChain', 'secondCathDomain', 'secondCathCode',
+    #                 'secondUid', 'secondRegion', 'secondPdbResNumber',
+    #                 'secondEntropyScore'])
+    #             loop_domain_contacts = update_contact_columns(loop_domain_contacts, side)
+    #             domain_loop_contacts = pd.merge(
+    #                 domain_domain_contacts, loop_residues, how="inner",
+    #                 left_on=[resSide[side]+"ResNumber", resSide[side]+"Chain", "pdb", "interfaceId"],
+    #                 right_on=["residueNumber", "chain", "pdb", "interfaceId"])
+    #             domain_loop_contacts = domain_loop_contacts.drop(columns=[
+    #                 'secondChain', 'secondCathDomain', 'secondCathCode',
+    #                 'secondUid', 'secondRegion', 'secondPdbResNumber',
+    #                 'secondEntropyScore'])
+    #             domain_loop_contacts = update_contact_columns(domain_loop_contacts, side)
+    #
+    #     #Get Domain:Loop interactions closest domains
+    #     domain_loop_contacts_to_cath = pd.merge(
+    #         domain_loop_contacts,
+    #         cath_chain[["pdb", "chain", "cath_domain", "cathcode", "cathStartResidueNumber", "cathStopResidueNumber"]],
+    #         left_on=["pdb", "secondChain"],
+    #         right_on=["pdb", "chain"])
+    #     domain_loop_contacts_to_cath = domain_loop_contacts_to_cath[
+    #         (domain_loop_contacts_to_cath["secondResNumber"]>domain_loop_contacts_to_cath["cathStopResidueNumber"]) &\
+    #         (domain_loop_contacts_to_cath["secondResNumber"]<domain_loop_contacts_to_cath["cathStartResidueNumber"])]
+    #
+    #     #Get distance from 2nd PDB Res to start and ends of closest CATH domains
+    #     dist_to_start = domain_loop_contacts_to_cath["cathStartResidueNumber"]-domain_loop_contacts_to_cath["secondResNumber"]
+    #     dist_to_end = domain_loop_contacts_to_cath["secondResNumber"]-domain_loop_contacts_to_cath["cathStopResidueNumber"]
+    #
+    #     if len(dist_to_start) > 0 and len(dist_to_end) > 0:
+    #         distance = pd.concat((dist_to_start, dist_to_end), axis=1).abs()
+    #         domain_loop_contacts_to_cath = domain_loop_contacts_to_cath.assign(
+    #             distance=distance.min(), position=distance.idxmin())
+    #
+    #         top_cath_domain_loops_contacts = domain_loop_contacts_to_cath.groupby(
+    #             ["firstCathDomain", "firstResNumber", "secondResNumber"]).apply(
+    #                 get_top_cath_domains_to_loop_contacts)
+    #
+    #         #Save DLI binding sites for PDB file
+    #         domain_loop_binding_sites = get_binding_sites(domain_loop_contacts)
+    #         writer.write(domain_loop_binding_sites, "dli")
+    #         status[intId]["dli"] = len(domain_loop_binding_sites)
+    #
+    #         #Save DLI contacts for PDB file with info on each residue
+    #         writer.write(domain_loop_contacts, "dli_residues")
+    #         status[intId]["dli_residues"] = len(domain_loop_contacts)
+    #
+    #         del domain_loop_contacts
+    #         del domain_loop_binding_sites
+    #     else:
+    #         status[intId]["dli"] = 0
+    #         status[intId]["dli_residues"] = 0
+    #
+    #     if not domain_domain_contacts.empty:
+    #         #Save DDI binding sites for PDB file (collapsed residues for one site)
+    #         domain_domain_binding_sites = get_binding_sites(domain_domain_contacts)
+    #         writer.write(domain_domain_binding_sites, "ddi")
+    #         status[intId]["ddi"] = len(domain_domain_binding_sites)
+    #
+    #         #Save DDI contacts for PDB file with info on each residue
+    #         writer.write(domain_domain_contacts, "ddi_residues")
+    #         status[intId]["ddi_residues"] = len(domain_domain_contacts)
+    #
+    #         del domain_domain_binding_sites
+    #     else:
+    #         status[intId]["ddi"] = 0
+    #         status[intId]["ddi_residues"] = 0
+    #
+    #     if not loop_loop_contacts.empty:
+    #         #Save LLI binding sites for PDB file (collapsed residues for one site)
+    #         loop_loop_binding_sites = get_binding_sites(loop_loop_contacts)
+    #         writer.write(loop_loop_binding_sites, "lli")
+    #         status[intId]["lli"] = len(loop_loop_binding_sites)
+    #
+    #         #Save LLI contacts for PDB file with info on each residue
+    #         writer.write(loop_loop_contacts, "lli_residues")
+    #         status[intId]["lli_residues"] = len(loop_loop_contacts)
+    #
+    #         del loop_loop_binding_sites
+    #     else:
+    #         status[intId]["lli"] = 0
+    #         status[intId]["lli_residues"] = 0
+    #
+    #     status["numInterfaces"] += 1
+    #
+    #     del domain_domain_contacts
+    #     del loop_loop_contacts
+    #
+    # status.write()
+
 
     #     for score in interface["interfaceScores"]["interfaceScore"]:
     #         if score["name"] == "eppic":

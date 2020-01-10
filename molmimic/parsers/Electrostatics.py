@@ -21,16 +21,25 @@ except ImportError:
 
 memory = Memory(verbose=0)
 
-def make_apbs_input(pqr_file, output_prefix=None):
+def write_apbs_electrostatics_input(pqr_file, ouput_input_prefix=None, output_atompot_prefix=None):
+    ouput_input_prefix = ouput_input_prefix or pqr_file+".apbs_input"
+    with open(ouput_input_prefix, "w") as f:
+        pqr_path = self.format_in_path(pqr_path)
+        contents, out_file = make_apbs_input(pqr_file, ouput_input_prefix=ouput_input_prefix,
+            output_atompot_prefix=output_atompot_prefix)
+        f.write(contents)
+    return ouput_input_prefix, out_file
+
+def make_apbs_electrostatics_input(pqr_file, output_prefix=None):
     ps = Psize()
     ps.runPsize(pqr_file)
     cglen = "{:.2f} {:.2f} {:.2f}".format(*ps.getCoarseGridDims())
     fglen = "{:.2f} {:.2f} {:.2f}".format(*ps.getFineGridDims())
     dime = "{:d} {:d} {:d}".format(*ps.getFineGridPoints())
 
-    output_prefix = output_prefix or pqr_file+"_apbs_output"
+    output_prefix = output_prefix or pqr_file+".apbs_output"
 
-    return """read
+    contents = """read
     mol pqr {pqr}
 end
 elec
@@ -64,153 +73,83 @@ quit
     out=output_prefix
     )
 
-def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None,
-  docker=True, job=None, attempts=3):
-    """Run APBS. Calculates correct size using Psize and defualt from Chimera
-    """
-    if work_dir is None:
-        work_dir = os.getcwd()
+    return contents, output_prefix
 
-    full_pqr_path = pqr_file
-    pqr_path = os.path.basename(full_pqr_path)
-    file_prefix = os.path.splitext(pqr_path)[0]
-    output_prefix = os.path.join(work_dir, "{}.apbs_output".format(file_prefix))
-    if input_file is not None and os.path.isfile(input_file):
-        keep_input = True
-    else:
-        input_file_contents = make_apbs_input(full_pqr_path, "{}.apbs_output".format(file_prefix))
+class APBS(Container):
+    IMAGE = 'edraizen/apbs:latest'
+    LOCAL = ["apbs"]
+    PARAMETERS = [("in_file", "path:in"), ("out_file", "path:out", None)]
+    RETURN_FILES = True
 
+    def atom_potentials_from_pdb(self, pdb_file, force_field="amber",
+      whitespace=False, chain=True, with_charge=False):
+        pdb2pqr = Pdb2pqr(work_dir=self.work_dir, job=self.job)
+        pqr_file = pdb2pqr.create_tidy_pqr(pdb_file, force_field=force_field,
+            whitespace=whitespace, chain=chain, remove_ter_lines=True, clean=True)
+        atom_pot_file = self.atom_potentials_from_pqr(pqr_file)
 
-    if docker and apiDockerCall is not None and job is not None:
-        input_file_name = os.path.join(work_dir, "{}.apbs_input".format(file_prefix))
-        input_file_short = "{}.apbs_input".format(file_prefix)
-        output_prefix = "{}.apbs_output".format(file_prefix)
-
-        if input_file is not None:
-            if not os.path.abspath(os.path.dirname(input_file)) == os.path.abspath(work_dir):
-                shutil.copy(input_file, os.path.join(work_dir, input_file_short))
-            else:
-                input_file_short = os.path.basename(input_file)
+        if with_charge:
+            return {atom:(charge, potential) for (key, charge), potential in \
+                zip(pdb2pqr.parse_pqr(pqr_file), self.parse_atom_pot_file(atom_pot_file))}
         else:
-            input_file = input_file_name
-            with open(input_file, "w") as f:
-                f.write(input_file_contents)
+            return {atom:potential for (key, charge), potential in \
+                zip(pdb2pqr.parse_pqr(pqr_file), self.parse_atom_pot_file(atom_pot_file))}
 
-        if not os.path.abspath(os.path.dirname(pqr_file)) == os.path.abspath(work_dir):
-            shutil.copy(pqr_file, work_dir)
+    def atom_potentials_from_pqr(self, pqr_file):
+        self.full_pqr_path = pqr_file
+        pqr_path = self.format_in_path(pqr_path)
+        input_file, out_file = make_apbs_input(pqr_path)
 
+        self.running_atom_potentials = True
+        atom_pot_file = self(in_file=input_file, out_file=out_file)
+        self.running_atom_potentials = False
+
+        return atom_pot_file
+
+    def local(self, *args, **kwds):
+        self.is_local = True
+        if hasattr(self, "running_atom_potentials") and self.running_atom_potentials:
+            pqr_path = self.format_in_path(self.full_pqr_path)
+            kwds["in_file"] = make_apbs_input(pqr_path)
+        super(self, APBS).local(*args, **kwds)
+
+    @staticmethod
+    def parse_atom_pot_file(self, atom_pot_file):
+        with open(atom_pot_file) as atom_pots:
+            #Skip first 4 rows of atompot file
+            for _ in range(4):
+                next(atom_pots)
+
+            for atom_pot in atom_pots
+                yield float(atom_pot)
+
+
+class pdb2pqr(Container):
+    IMAGE = 'edraizen/pdb2pqr:latest'
+    LOCAL = ["/usr/share/pdb2pqr/pdb2pqr.py"]
+    PARAMETERS = [
+        (":force_field:amber", str, "--ff={}"),
+        (":whitespace", "store_true"),
+        (":chain", "store_true"),
+        ("in_file", "path:in"),
+        ("out_file", "path:out")]
+    RETURN_FILES = True
+
+    def __call__(self, *args, **kwds):
         try:
-            parameters = ["/data/{}".format(input_file_short)]
-            apiDockerCall(job,
-                          image='edraizen/apbs:latest',
-                          working_dir="/data",
-                          volumes={work_dir:{"bind":"/data", "mode":"rw"}},
-                          parameters=parameters)
-            output_prefix = os.path.join(work_dir, output_prefix)
-        except (SystemExit, KeyboardInterrupt):
-            raise
-        except ImageNotFound:
-            if attempts > 0:
-                return run_apbs(pqr_file, input_file=input_file, keep_input=keep_input,
-                    work_dir=work_dir, docker=docker, job=job, attempts=attempts-1)
-            raise
-        # except:
-        #     raise
-        #     return run_apbs(full_pqr_file, input_file=input_file_name,
-        #         keep_input=keep_input, work_dir=work_dir, docker=False)
-
-    else:
-        input_file = os.path.join(work_dir, "{}.apbs_input".format(file_prefix))
-        output_prefix = os.path.join(work_dir, "{}.apbs_output".format(file_prefix))
-        with open(input_file, "w") as f:
-            f.write(input_file_contents)
-
-        try:
-            subprocess.call(["apbs", input_file])
-        except (SystemExit, KeyboardInterrupt):
-            raise
+            super(self, pdn2pqr).__call(*args, **kwds)
         except Exception as e:
-            raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
-
-    if not keep_input and input_file is not None and os.path.isfile(input_file):
-        os.remove(input_file)
-
-    out_file = output_prefix+".txt"
-    assert os.path.isfile(out_file), "Outfile not found: {}".format(os.listdir(work_dir))
-    return out_file
-
-def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None,
-  remove_ter_lines=True, tidy=False, chain=True, work_dir=None, docker=True,
-  job=None, attempts=3):
-    if work_dir is None:
-        work_dir = os.getcwd()
-
-    save_chains = get_all_chains(pdb_file)
-
-    full_pdb_path = _remove_ter_lines(pdb_file) if remove_ter_lines else pdb_file
-    pdb_path = os.path.basename(full_pdb_path)
-    pqr_file = "{}.pqr".format(pdb_path)
-
-    _parameters = list(parameters) if isinstance(parameters, (list, tuple)) else []
-    _parameters.append("--ff={}".format(ff))
-    if whitespace:
-        _parameters.append("--whitespace")
-    if chain and "--chain" not in _parameters:
-        _parameters.append("--chain")
-
-    if docker and apiDockerCall is not None and job is not None:
-        #Docker can only read from work_dir
-        if not os.path.abspath(os.path.dirname(full_pdb_path)) == os.path.abspath(work_dir):
-            shutil.copy(full_pdb_path, work_dir)
-
-        _parameters += ["/data/{}".format(pdb_path), "/data/{}.pqr".format(pdb_path)]
-        try:
-            output = apiDockerCall(job,
-                          image='edraizen/pdb2pqr:latest',
-                          working_dir=work_dir,
-                          parameters=_parameters)
-            pqr_file = os.path.join(work_dir, pqr_file)
-        except (SystemExit, KeyboardInterrupt):
-            raise
-        except ValueError as e:
-            if str(e).startswith("This PDB file is missing too many"):
-                return None
-            raise
-        except ContainerError as e:
             if "ValueError: This PDB file is missing too many" in str(e):
                 return None
             raise
-        except ImageNotFound:
-            if attempts > 0:
-                return run_pdb2pqr(pdb_file, whitespace=whitespace, ff=ff,
-                    parameters=parameters, remove_ter_lines=remove_ter_lines,
-                    tidy=tidy, chain=chain, work_dir=work_dir, docker=docker,
-                    job=job, attempts=attempts-1)
-            raise
-        #except:
-            #raise
-            #return run_pdb2pqr(pdb_file, whitespace=whitespace, ff=ff,
-            #    parameters=parameters, work_dir=work_dir, docker=False)
 
-    else:
-        pqr_file = os.path.join(work_dir, full_pdb_path)
-        command = ["/usr/share/pdb2pqr/pdb2pqr.py"]+parameters
-        command += [full_pdb_path, pqr_file]
-
-        try:
-            with silence_stdout(), silence_stderr():
-                subprocess.call(command)
-        except (SystemExit, KeyboardInterrupt):
-            raise
-        except ValueError as e:
-            if str(e).startswith("This PDB file is missing too many"):
-                return None
-            raise
-        #except Exception as e:
-            #raise
-            #raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
-
-    if tidy:
+    def create_tidy_pqr(self, pdb_file, remove_ter_lines=True, **kwds):
+        save_chains = get_all_chains(pdb_file)
+        full_pdb_path = _remove_ter_lines(pdb_file) if remove_ter_lines else pdb_file
+        pqr_file = "{}.pqr".format(pdb_path)
+        kwds["whitespace"] = True
+        kwds["chain"] = True
+        self(pdb_file, pqr_file, whitespace=True, chain=True)
         pqr_chains = extract_chains(pqr_file, save_chains)
         cmds = [[sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), pqr_chains]]
         tidy_file = pqr_file+".tidy"
@@ -221,9 +160,135 @@ def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None,
         except OSError:
             pass
         shutil.move(tidy_file, pqr_file)
+        return pqr_file
 
-    assert os.path.isfile(pqr_file)
-    return pqr_file
+    def get_charge_from_pdb_file(self, pdb_file, remove_ter_lines=True, clean=True, **kwds):
+        pqr_file = self.create_tidy_pqr(pdb_file, remove_ter_lines=True, **kwds)
+        return dict(self.parse_pqr(pqr_file))
+
+    @staticmethod
+    def parse_pqr(pqr_file):
+        with open(pqr_file) as pqr:
+            for line in pqr:
+                if not line.startswith("ATOM  ") or line.startswith("HETATM"): continue
+
+                fields = line.rstrip().split()
+                if len(fields) == 11:
+                    recordName, serial, atomName, residueName, chainID, residueNumber, X, Y, Z, charge, radius = fields
+                elif len(fields) == 10:
+                    recordName, serial, atomName, residueName, residueNumber, X, Y, Z, charge, radius = fields
+                else:
+                    raise RuntimeError("Invalid PQR File")
+
+                try:
+                    resseq = int("".join([i for i in residueNumber if i.isdigit()]))
+                except ValueError:
+                    continue
+
+                icode = "".join([i for i in residueNumber if not i.isdigit()])
+                if icode == "":
+                    icode = " "
+
+                if recordName == "HETATM":  # hetero atom flag
+                    if residueName in ["HOH", "WAT"]:
+                        hetero_flag = "W"
+                    else:
+                        hetero_flag = "H_{}".format(residueName)
+                else:
+                    hetero_flag = " "
+
+                residue_id = (hetero_flag, resseq, icode)
+
+                key = (residue_id, (atomName.strip(), ' '))
+
+                yield key, float(charge)
+                #result[key] = (float(charge), electrostatic_potential)
+
+# def run_pdb2pqr(pdb_file, whitespace=True, ff="amber", parameters=None,
+#   remove_ter_lines=True, tidy=False, chain=True, work_dir=None, docker=True,
+#   job=None, attempts=3):
+#     if work_dir is None:
+#         work_dir = os.getcwd()
+#
+#     save_chains = get_all_chains(pdb_file)
+#
+#     full_pdb_path = _remove_ter_lines(pdb_file) if remove_ter_lines else pdb_file
+#     pdb_path = os.path.basename(full_pdb_path)
+#     pqr_file = "{}.pqr".format(pdb_path)
+
+    # _parameters = list(parameters) if isinstance(parameters, (list, tuple)) else []
+    # _parameters.append("--ff={}".format(ff))
+    # if whitespace:
+    #     _parameters.append("--whitespace")
+    # if chain and "--chain" not in _parameters:
+    #     _parameters.append("--chain")
+    #
+    # if docker and apiDockerCall is not None and job is not None:
+    #     #Docker can only read from work_dir
+    #     if not os.path.abspath(os.path.dirname(full_pdb_path)) == os.path.abspath(work_dir):
+    #         shutil.copy(full_pdb_path, work_dir)
+    #
+    #     _parameters += ["/data/{}".format(pdb_path), "/data/{}.pqr".format(pdb_path)]
+    #     try:
+    #         output = apiDockerCall(job,
+    #                       image='edraizen/pdb2pqr:latest',
+    #                       working_dir=work_dir,
+    #                       parameters=_parameters)
+    #         pqr_file = os.path.join(work_dir, pqr_file)
+    #     except (SystemExit, KeyboardInterrupt):
+    #         raise
+    #     except ValueError as e:
+    #         if str(e).startswith("This PDB file is missing too many"):
+    #             return None
+    #         raise
+        # except ContainerError as e:
+        #     if "ValueError: This PDB file is missing too many" in str(e):
+        #         return None
+        #     raise
+        # except ImageNotFound:
+        #     if attempts > 0:
+        #         return run_pdb2pqr(pdb_file, whitespace=whitespace, ff=ff,
+        #             parameters=parameters, remove_ter_lines=remove_ter_lines,
+        #             tidy=tidy, chain=chain, work_dir=work_dir, docker=docker,
+        #             job=job, attempts=attempts-1)
+        #     raise
+        #except:
+            #raise
+            #return run_pdb2pqr(pdb_file, whitespace=whitespace, ff=ff,
+            #    parameters=parameters, work_dir=work_dir, docker=False)
+
+    # else:
+    #     pqr_file = os.path.join(work_dir, full_pdb_path)
+    #     command = ["/usr/share/pdb2pqr/pdb2pqr.py"]+parameters
+    #     command += [full_pdb_path, pqr_file]
+    #
+    #     try:
+    #         with silence_stdout(), silence_stderr():
+    #             subprocess.call(command)
+    #     except (SystemExit, KeyboardInterrupt):
+    #         raise
+    #     except ValueError as e:
+    #         if str(e).startswith("This PDB file is missing too many"):
+    #             return None
+    #         raise
+        #except Exception as e:
+            #raise
+            #raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
+
+    # if tidy:
+    #     pqr_chains = extract_chains(pqr_file, save_chains)
+    #     cmds = [[sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), pqr_chains]]
+    #     tidy_file = pqr_file+".tidy"
+    #     with open(tidy_file, "w") as f:
+    #         SubprocessChain(cmds, f)
+    #     try:
+    #         os.remove(pqr_file)
+    #     except OSError:
+    #         pass
+    #     shutil.move(tidy_file, pqr_file)
+    #
+    # assert os.path.isfile(pqr_file)
+    # return pqr_file
 
 @memory.cache
 def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
@@ -320,3 +385,78 @@ def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
             pass
 
     return result
+
+# def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None,
+#   docker=True, job=None, attempts=3):
+#     """Run APBS. Calculates correct size using Psize and defualt from Chimera
+#     """
+#     if work_dir is None:
+#         work_dir = os.getcwd()
+#
+#     full_pqr_path = pqr_file
+#     pqr_path = os.path.basename(full_pqr_path)
+#     file_prefix = os.path.splitext(pqr_path)[0]
+#     output_prefix = os.path.join(work_dir, "{}.apbs_output".format(file_prefix))
+#     if input_file is not None and os.path.isfile(input_file):
+#         keep_input = True
+#     else:
+#         input_file_contents = make_apbs_input(full_pqr_path, "{}.apbs_output".format(file_prefix))
+#
+#
+#     if docker and apiDockerCall is not None and job is not None:
+#         input_file_name = os.path.join(work_dir, "{}.apbs_input".format(file_prefix))
+#         input_file_short = "{}.apbs_input".format(file_prefix)
+#         output_prefix = "{}.apbs_output".format(file_prefix)
+#
+#         if input_file is not None:
+#             if not os.path.abspath(os.path.dirname(input_file)) == os.path.abspath(work_dir):
+#                 shutil.copy(input_file, os.path.join(work_dir, input_file_short))
+#             else:
+#                 input_file_short = os.path.basename(input_file)
+#         else:
+#             input_file = input_file_name
+#             with open(input_file, "w") as f:
+#                 f.write(input_file_contents)
+
+    #     if not os.path.abspath(os.path.dirname(pqr_file)) == os.path.abspath(work_dir):
+    #         shutil.copy(pqr_file, work_dir)
+    #
+    #     try:
+    #         parameters = ["/data/{}".format(input_file_short)]
+    #         apiDockerCall(job,
+    #                       image='edraizen/apbs:latest',
+    #                       working_dir="/data",
+    #                       volumes={work_dir:{"bind":"/data", "mode":"rw"}},
+    #                       parameters=parameters)
+    #         output_prefix = os.path.join(work_dir, output_prefix)
+    #     except (SystemExit, KeyboardInterrupt):
+    #         raise
+    #     except ImageNotFound:
+    #         if attempts > 0:
+    #             return run_apbs(pqr_file, input_file=input_file, keep_input=keep_input,
+    #                 work_dir=work_dir, docker=docker, job=job, attempts=attempts-1)
+    #         raise
+    #     # except:
+    #     #     raise
+    #     #     return run_apbs(full_pqr_file, input_file=input_file_name,
+    #     #         keep_input=keep_input, work_dir=work_dir, docker=False)
+    #
+    # else:
+    #     input_file = os.path.join(work_dir, "{}.apbs_input".format(file_prefix))
+    #     output_prefix = os.path.join(work_dir, "{}.apbs_output".format(file_prefix))
+    #     with open(input_file, "w") as f:
+    #         f.write(input_file_contents)
+    #
+    #     try:
+    #         subprocess.call(["apbs", input_file])
+    #     except (SystemExit, KeyboardInterrupt):
+    #         raise
+    #     except Exception as e:
+    #         raise RuntimeError("APBS failed becuase it was not found in path: {}".format(e))
+    #
+    # if not keep_input and input_file is not None and os.path.isfile(input_file):
+    #     os.remove(input_file)
+    #
+    # out_file = output_prefix+".txt"
+    # assert os.path.isfile(out_file), "Outfile not found: {}".format(os.listdir(work_dir))
+    # return out_file

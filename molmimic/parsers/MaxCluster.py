@@ -9,6 +9,15 @@ except ImportError:
     import subprocess
     maxcluster_path = os.path.dirname(os.path.dirname(subprocess.check_output(["which", "maxcluster"])))
 
+class MaxCluster(Container):
+    IMAGE = 'edraizen/maxcluster:latest'
+    PARAMETERS = [("l", "path:in", "-{}"), ("e", "path:in", "-{}"),
+        ("p", "path:in", "-{}"), ("F", "path:in", "-{}"), ("M", "path:in", "-{}"),
+        ("log", "path:out", "-{}"), ("R", "path:out", "-{}"),
+        ("Rl", "path:out", "-{}"), ("Ru", "path:out", "-{}")]
+    RETURN_FILES = True
+
+
 def run_maxcluster(*args, **kwds):
     work_dir = kwds.pop("work_dir", None)
     docker = kwds.pop("docker", True)

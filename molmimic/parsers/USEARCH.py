@@ -1,10 +1,18 @@
 import os, sys
 
+from molmimic.parser.container import Container
+
 try:
 	from toil.lib.docker import apiDockerCall
 except ImportError:
 	apiDockerCall = None
 	import subprocess
+
+class USEARCH(Container):
+	IMAGE = 'edraizen/usearch:latest'
+	LOCAL = ["usearch"]
+	RETURN_FILES = True
+	PARAMETERS = [(":")]
 
 def run_usearch(parameters, work_dir=None, docker=True, job=None):
 	if work_dir is None:

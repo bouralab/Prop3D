@@ -401,7 +401,7 @@ class FileIOStore(IOStore):
 
         """
 
-        self.path_prefix = path_prefix
+        self.path_prefix = self.store_name = path_prefix
 
     def read_input_file(self, input_path, local_path):
         """
@@ -694,7 +694,7 @@ class S3IOStore(IOStore):
         assert(have_s3)
 
         self.region = region
-        self.bucket_name = bucket_name
+        self.bucket_name = self.store_name = bucket_name
         self.name_prefix = name_prefix
         self.s3 = None
 
@@ -901,7 +901,7 @@ class AzureIOStore(IOStore):
         assert(have_azure)
 
         self.account_name = account_name
-        self.container_name = container_name
+        self.container_name = self.store_name = container_name
         self.name_prefix = name_prefix
 
         if self.name_prefix != "" and not self.name_prefix.endswith("/"):

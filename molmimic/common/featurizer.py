@@ -12,13 +12,13 @@ warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
 from toil.realtimeLogger import RealtimeLogger
 
 from molmimic.generate_data.util import InvalidPDB, natural_keys, silence_stdout, silence_stderr
+from molmimic.parsers.openbabel import OpenBabel
 from molmimic.parsers.FreeSASA import run_freesasa_biopython
-from molmimic.parsers.Electrostatics import run_pdb2pqr_APBS
-from molmimic.parsers.CX import run_cx
-from molmimic.parsers.Consurf import run_consurf
-from molmimic.parsers.eppic import run_eppic
-from molmimic.parsers.DSSP import run_dssp
-from molmimic.parsers.PDBQT import get_autodock_features
+from molmimic.parsers.Electrostatics import APBS, Pdb2pqr
+from molmimic.parsers.cx import CX
+from molmimic.parsers.dssp import DSSP
+from molmimic.parsers.consurf import ConSurfApi
+from molmimic.parsers.eppic import EPPICApi
 
 from molmimic.common.Structure import Structure, number_of_features, \
     get_feature_names, angle_between, get_dihedral
@@ -261,7 +261,8 @@ class ProteinFeaturizer(Structure):
         """Get Autodock atom type"""
 
         if not hasattr(self, "_autodock"):
-            self._autodock = get_autodock_features(self.path, work_dir=self.work_dir, job=self.job)
+            openbabel = OpenBabel(job=self.job, work_dir=self.work_dir)
+            self._autodock = openbabel.get_autodock_features(self.path)
 
         try:
             atom_type, h_bond_donor = self._autodock[atom.serial_number]
@@ -334,10 +335,16 @@ class ProteinFeaturizer(Structure):
         else:
             raise RuntimeError("Input must be Atom or Residue: {}".format(type(atom_or_residue)))
 
-        if not hasattr(self, "_pqr"):
+        if not hasattr(self, "_pqr") or (not only_charge and len(self._pqr.values()[0])==1):
             try:
-                self._pqr = run_pdb2pqr_APBS(self.path, pdb2pqr_whitespace=True,
-                    work_dir=self.work_dir, job=self.job, only_charge=only_charge)
+                if only_charge:
+                    pdb2pqr = Pdb2Pqr(work_dir=self.work_dir, job=self.job)
+                    self._pqr = pdb2pqr.get_charge_from_pdb_file(self.path)
+                else:
+                    apbs = APBS(work_dir=self.work_dir, job=self.job)
+                    self._pqr = apbs.atom_potentials_from_pdb(self.path)
+                # self._pqr = run_pdb2pqr_APBS(self.path, pdb2pqr_whitespace=True,
+                #     work_dir=self.work_dir, job=self.job, only_charge=only_charge)
             except (SystemExit, KeyboardInterrupt):
                 raise
             except Exception as e:
@@ -404,7 +411,8 @@ class ProteinFeaturizer(Structure):
             raise RuntimeErorr("Input must be Atom or Residue")
 
         if not hasattr(self, "_cx"):
-            self._cx = run_cx(self.path, work_dir=self.work_dir, job=self.job)
+            cx = CX(work_dir=self.work_dir, job=self.job)
+            self._cx = cx(self.path)
 
         concavity_value = self._cx.get(atom.serial_number, np.NaN)
         #concave, convex, or both
@@ -648,7 +656,8 @@ class ProteinFeaturizer(Structure):
         """Use DeepSites rules for autodock atom types
         """
         if not hasattr(self, "_autodock"):
-            self._autodock = get_autodock_features(self.path, work_dir=self.work_dir, job=self.job)
+            openbabel = OpenBabel(job=self.job, work_dir=self.work_dir)
+            self._autodock = openbabel.get_autodock_features(self.path)
 
         try:
             atom_type, h_bond_donor = self._autodock[atom.serial_number]
@@ -703,12 +712,23 @@ class ProteinFeaturizer(Structure):
                 else:
                     eppic = False
 
+        assert consurf or eppic
+
+        pdbe_store = IOStore.get("aws:us-east-1:molmimic-pdbe-service")
+
         if consurf and not hasattr(self, "_consurf"):
-            self._consurf = run_consurf(self.pdb, self.chain, work_dir=self.work_dir)
+            #self._consurf = run_consurf(self.pdb, self.chain, work_dir=self.work_dir)
+            consurf_store = IOStore.get("aws:us-east-1:molmimic-consurf-service")
+            consurf_api = ConsurfApi(consurf_store, pdbe_store,
+                use_representative_chains=False, work_dir=work_dir)
+            self._consurf = consurf_api.get_conservation_score(self.pdb, self.chain)
 
         if eppic and not hasattr(self, "_eppic"):
-            self._eppic = run_eppic(self.pdb, self.chain, work_dir=self.work_dir)
-            #RealtimeLogger.info("EPPIC is {}".format(self._eppic))
+            #self._eppic = run_eppic(self.pdb, self.chain, work_dir=self.work_dir)
+            eppic_store = IOStore.get("aws:us-east-1:molmimic-eppic-service")
+            eppic_api = EPPICApi(self.pdb, eppic_store, pdbe_store,
+                use_representative_chains=False, work_dir=work_dir)
+            self._eppic = eppic_api.get_entropy_scores(self.chain)
 
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             is_atom = True
