@@ -7,26 +7,43 @@ try:
 except ImportError:
     apiDockerCall = None
 
-from docker.errors import ContainerError
-
-from molmimic.generate_data.util import delocc_pdb
+from molmimic.parsers.container import Container
+from molmimic.util.pdb import delocc_pdb
 
 memory = Memory(verbose=0)
 
 class DSSP(Container):
-    IMAGE = 'edraizen/dssp:latest'
+    IMAGE = 'docker://edraizen/dssp:latest'
     LOCAL = ["dssp"]
-    PARAMETERS = ["-i", ("in_file", "path:in"), ("out_file", "path:out")]
+    PARAMETERS = ["-i", ("in_file", "path:in"), "-o", ("out_file", "path:out")]
+    RETURN_FILES=True
 
-    def get_dssp(self, bioPDB, pdb_path, clean=True):
-        dssp = self(in_file=pdb_path, out_file=pdb_path+".dssp")
-        result = bioDSSP(bioPDB, dssp, file_type='DSSP')
+
+    def get_dssp(self, bioPDB, pdb_path, out_file=None, clean=True):
+        if out_file is None:
+            out_file = os.path.join(self.work_dir, os.path.basename(pdb_path)+".dssp")
+
+        try:
+            dssp = self.__call__(in_file=pdb_path, out_file=out_file)
+        except RuntimeError as e:
+            if "DSSP could not be created due to an error" in str(e):
+                delocc_file = delocc_pdb(pdb_path)
+                self.files_to_remove.append(delocc_file)
+                out_file = delocc_file+".dssp"
+                try:
+                    dssp = self.__call__(in_file=delocc_file, out_file=out_file)
+                except RuntimeError as e:
+                    raise
+
+        result = bioDSSP(bioPDB[0], dssp, file_type='DSSP')
 
         if clean:
             try:
-                os.remove(dssp)
+                os.remove(out_file)
             except OSError:
                 pass
+
+        return result
 
 # @memory.cache
 # def run_dssp(biopdb, pdb_path, work_dir=None, job=None):

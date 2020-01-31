@@ -13,7 +13,8 @@ import shutil
 import pandas as pd
 
 from molmimic.parsers.container import Container
-from molmimic.generate_data.util import izip_missing, PDB_TOOLS, SubprocessChain
+from molmimic.util import izip_missing, SubprocessChain
+from molmimic.util.pdb import PDB_TOOLS
 
 script_dir = os.path.dirname(__file__)
 
@@ -58,7 +59,7 @@ class CNS(Container):
 	    os.environ.update(new_env)
 
 
-class Minimize(CNS):
+class CNSMinimize(CNS):
     LOCAL = ["cns"]
     PARAMETERS = [("pdb_file", "path:in"), ("output_file", "path:out")]
     RETURN_FILES = True

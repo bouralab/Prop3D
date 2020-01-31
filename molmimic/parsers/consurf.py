@@ -1,14 +1,14 @@
 from __future__ import print_function
 import os
-from tempfile import mkdtemp
 import zipfile
-from shutil import copyfileobj
-from collections import defaultdict
+import shutil
 
 import requests
 
-from molmimic.generate_data.iostore import IOStore
-from molmimic.generate_data.util import natural_keys
+import numpy as np
+
+from molmimic.util.iostore import IOStore
+from molmimic.util import natural_keys
 from molmimic.parsers.json import WebService
 from molmimic.parsers.pdbe import PDBEApi
 
@@ -17,6 +17,110 @@ from toil.realtimeLogger import RealtimeLogger
 from joblib import Parallel, delayed
 
 class ConSurfApi(WebService):
+    def __init__(self, consurf_store, work_dir=None, download=True, max_attempts=2):
+        super(ConSurfApi, self).__init__("https://consurfdb.tau.ac.il/scripts/downloadPDB.php?",
+            consurf_store, work_dir=work_dir, download=download, max_attempts=max_attempts)
+
+    def _fix_key(self, key):
+        return "/".join([kv.split("=")[1] for kv in key.split("&")])
+
+    def extension(self, key):
+        return ".consurf"
+
+    def get_conservation_score(self, pdb, chain, bioPDB, raw_values=False):
+        consurf = self.get("pdb_ID={}&view_chain={}".format(pdb, chain))
+        try:
+            scores = [int(s) if s!="." else np.nan for s in consurf["seq3d_grades"]]
+        except KeyError:
+            print(consurf)
+            raise
+        scores = {r.get_id():score for r, score in zip(bioPDB[0][chain].get_residues(), scores)}
+
+        if not raw_values:
+            scores = {k:(v-1)/8 for k, v in scores.items()}
+
+        return scores
+
+    def should_add_to_store(self, key, fname):
+        """Modify file to only include consurf values, remove PDB lines"""
+        newf = fname+".tmp"
+        with open(newf, "w") as new:
+            for line in self.parse_raw_line(fname):
+                print(line, file=new)
+
+        try:
+            os.remove(fname)
+        except OSError:
+            pass
+
+        shutil.move(newf, fname)
+
+        return True
+
+    def parse(self, file_path, key, raw_lines=False):
+        def _get_value(value, force_string=False):
+            if value.startswith("Array"):
+                return list(map(int, value[6:-2].split(",")))
+
+            if value.startswith('"') and value.endswith('"'):
+                #String
+                value = value[1:-1]
+                if force_string:
+                    return value
+
+            try:
+                return int(value)
+            except ValueError:
+                try:
+                    return float(value)
+                except ValueError:
+                    return value
+
+        consurf = {}
+        raw_lines = iter(self.parse_raw_line(file_path))
+        for line in raw_lines:
+            fields = line[2:-1].split("=")
+            if len(fields) ==  2:
+                #Key/Value Pairs
+                key, value = fields[0].strip(), fields[1].strip()
+                value = _get_value(value)
+            else:
+                #Key, values on next lines
+                key = fields[0].strip()
+                value = None
+
+                stop = False
+                for loop_line in raw_lines:
+                    loop_line = loop_line.rstrip()
+                    if loop_line.endswith(";"):
+                        stop = True
+                    if loop_line.startswith("!"):
+                        loop_line = loop_line[2:-2]
+
+                    if value is None:
+                        value = _get_value(loop_line, force_string=True)
+                    else:
+                        value += _get_value(loop_line, force_string=True)
+
+                    if stop:
+                        break
+
+            consurf[key] = value
+
+        return consurf
+
+    def parse_raw_line(self, file_path):
+        parse = False
+        with open(file_path) as fh:
+            for line in fh:
+                line = line.rstrip()
+                if line.startswith("! "):
+                    parse = True
+                    yield line
+                if parse and line.startswith("!!"):
+                    break
+
+class ConSurfApiOld(WebService):
     def __init__(self, consurf_store, pdbe_store, work_dir=None, download=True,
       use_representative_chains=True, max_attempts=2):
         super(ConSurfApi, self).__init__("http://bental.tau.ac.il/new_ConSurfDB/",
@@ -177,6 +281,20 @@ class ConSurfApi(WebService):
         #     consurf_rep_pdb_id += "_"+cluster_rep_chain
 
         return consurf_rep_pdb_id, cluster_member_ids
+
+def get_consurf_feature():
+    if consurf and not hasattr(self, "_consurf"):
+        #self._consurf = run_consurf(self.pdb, self.chain, work_dir=self.work_dir)
+        consurf_store = IOStore.get("aws:us-east-1:molmimic-consurf-service")
+        consurf_api = ConSurfApi(consurf_store, work_dir=self.work_dir)
+        self._consurf = consurf_api.get_conservation_score(self.pdb,
+            self.chain, self.path)
+
+    if consurf:
+        result["consurf_normalized_score"] = self._consurf.get(residue.get_id(), np.nan)
+        result["consurf_is_conserved"] = float(consurf_normalized_score>=.6)
+
+
 
 # def download_consurf_scores(pdb, chain, n_tries=3, consurf_path=None):
 #     if consurf_path is None:
