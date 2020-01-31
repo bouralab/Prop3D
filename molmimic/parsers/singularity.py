@@ -14,16 +14,8 @@ import requests
 import logging
 import os
 import sys
-from docker.errors import create_api_error_from_http_exception
-from docker.errors import ContainerError
-from docker.errors import ImageNotFound
-from docker.errors import NotFound
 
 logger = logging.getLogger(__name__)
-
-FORGO = 0
-STOP = 1
-RM = 2
 
 def apiSingularityCall(job,
                   image,
@@ -37,6 +29,7 @@ def apiSingularityCall(job,
                   entrypoint=None,
                   stream=False,
                   detach=False,
+                  auto_remove=False,
                   remove=False,
                   user=None,
                   stdout=None,
@@ -152,20 +145,31 @@ def apiSingularityCall(job,
         working_dir = os.getcwd()
         options += ["--workdir", working_dir]
 
-    if bind is None:
-        bind = "{}:/data".format(working_dir)
+    if bind is None and volumes is None:
+        bind = ["{}:/data".format(working_dir)]
+    else:
+        if isinstance(bind, str):
+            bind = [bind]
+        elif isinstance(bind, tuple):
+            bind = list(tuple)
+        elif volumes is None and not isinstance(bind, list):
+            raise RuntimeError("Bind paths must a single string, tuple or list")
+        else:
+            bind = []
 
-    if isinstance(volumes, dict):
-        bind += [":".join((host_path, container_path["bind"]) for host_path,
-            container_path in volumes.items()]
+        if isinstance(volumes, dict):
+            bind += ["{}:{}".format(host_path, container_path["bind"]) for \
+                host_path, container_path in volumes.items()]
+
+    if len(bind) == 0:
+        bind = None
 
     if parameters is None:
         parameters = []
 
-
     # If 'parameters' is a list of lists, treat each list as a separate command
     # and chain with pipes.
-    if len(parameters) > 0 and type(parameters[0]) is list:
+    if len(parameters) > 0 and isinstance(parameters[0], list):
         if isinstance(runscript, str):
             runscript = [runscript]
         else: #runscript is None:
@@ -184,11 +188,12 @@ def apiSingularityCall(job,
     # Note that this is still a list, and the docker API prefers this as best
     # practice:
     # http://docker-py.readthedocs.io/en/stable/containers.html
-    elif len(parameters) > 0 and type(parameters) is list:
+    elif len(parameters) > 0 and isinstance(parameters, list) and runscript is not None:
         if isinstance(runscript, str):
             runscript = [runscript]
-        else: #runscript is None:
-            runscript = ['/bin/bash', '-c']
+        # else: #runscript is None:
+        #     pass
+            #runscript = ['/bin/bash', '-c']
         command = ' '.join((quote(arg) for arg in parameters))
         logger.debug("Calling singularity with: " + repr(command))
 
@@ -200,54 +205,81 @@ def apiSingularityCall(job,
 
     working_dir = os.path.abspath(working_dir)
 
-    # Ensure the user has passed a valid value for deferParam
-    assert deferParam in (None, FORGO, STOP, RM), \
-        'Please provide a valid value for deferParam.'
+    # # Ensure the user has passed a valid value for deferParam
+    # assert deferParam in (None, FORGO, STOP, RM), \
+    #     'Please provide a valid value for deferParam.'
+    #
+    # client = spython.main.get_client()
+    #
+    # if deferParam == STOP:
+    #     job.defer(singularityStop, containerName)
+    #
+    # if deferParam == FORGO:
+    #     remove = False
+    # elif deferParam == RM:
+    #     remove = True
+    #     job.defer(singularityKill, containerName)
+    # elif remove is True:
+    #     job.defer(singularityKill, containerName)
 
-    client = spython.spython.main.get_client()
+    # if runscript is None:
+    #     client_command = client.run
+    # else:
+    #     client_command = client.execute
 
-    if deferParam == STOP:
-        job.defer(singularityStop, containerName)
-
-    if deferParam == FORGO:
-        remove = False
-    elif deferParam == RM:
-        remove = True
-        job.defer(singularityKill, containerName)
-    elif remove is True:
-        job.defer(singularityKill, containerName)
-
-    if auto_remove is None:
-        auto_remove = remove
-
-    if runscript is None:
-        client_command = client.run
-    else:
-        client_command = client.execute
+    client = spython.main.get_client()
 
     try:
         if runscript is None:
             out = client.run(image=image,
-                       arguments=command,
-                       runscript=runscript,
+                       args=parameters,
                        stream=False,
                        bind=bind,
                        **kwargs)
         else:
             out = client.execute(image=image,
                                  command=command,
-                                 runscript=runscript,
                                  stream=False,
                                  bind=bind,
                                  **kwargs)
-        return out
-
     except Exception as e:
         logger.error("Singularity had non-zero exit. Error: {} \n " +
             "Check your command: {}".format(e, repr(command)))
         raise
 
-def dockerKill(container_name, gentleKill=False, timeout=365 * 24 * 60 * 60):
+    if not stream:
+        return out
+
+    if stdout or stderr:
+        if streamfile is None:
+            streamfile = 'output.log'
+        for line in out:
+            with open(streamfile, 'w') as f:
+                f.write(line)
+
+    # If we didn't capture output, the caller will need iterate on
+    # the container to know when it is done. Even if we did capture
+    # output, the caller needs the container to get at the exit code.
+    return out
+
+def pullSingularityImage(image, pull_folder=None):
+    if pull_folder is None:
+        pull_folder = os.environ.get("HOME", "")
+
+    base_image = os.path.basename(image)+".simg"
+
+    for dir in (pull_folder, os.getcwd(), os.environ.get("HOME")):
+        path = os.path.join(dir, base_image)
+        if os.path.isfile(path):
+            return path
+
+    client = spython.main.get_client()
+    client.pull(image, name=base_image, pull_folder=pull_folder)
+
+    return os.path.join(pull_folder, base_image)
+
+
+def singularityKill(container_name, gentleKill=False, timeout=365 * 24 * 60 * 60):
     """
     Immediately kills a container.  Equivalent to "docker kill":
     https://docs.docker.com/engine/reference/commandline/kill/
@@ -262,7 +294,7 @@ def dockerKill(container_name, gentleKill=False, timeout=365 * 24 * 60 * 60):
     return
 
 
-def dockerStop(container_name):
+def singularityStop(container_name):
     """
     Gracefully kills a container.  Equivalent to "docker stop":
     https://docs.docker.com/engine/reference/commandline/stop/

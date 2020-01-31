@@ -33,20 +33,19 @@ atom_type_h_bond_donor = {
 }
 
 class OpenBabel(Container):
-    IMAGE = 'edraizen/openbabel:latest'
+    IMAGE = 'docker://edraizen/openbabel:latest'
     LOCAL = None
     PARAMETERS = ["-i", ("in_format", "str"), ("in_file", "path:in"),
         "-o", ("out_format", "str"), "-O", ("out_file", "path:out")]
     RETURN_FILES = True
 
     def get_autodock_features(self, pdb_path):
-        #pdbqt_file = run_open_babel("pdb", pdb_path, "pdbqt", pdb_path+"qt", work_dir=work_dir, job=job)
-        pdbqt_file = self(in_format="pdb", in_file=pdb_path, out_format="pdbqt", out_file=pdb_path+"qt")
+        out_file = pdb_path+".pdbqt"
+        pdbqt_file = self(in_format="pdb", in_file=pdb_path, out_format="pdbqt",
+            out_file=out_file)
         autodock_features = self._get_autodock_features_from_pdbqt(pdbqt_file)
-        try:
-            os.remove(pdb_path+"qt")
-        except OSError:
-            pass
+        self.files_to_remove += [out_file, pdbqt_file]
+        self.clean()
         return autodock_features
 
     def _get_autodock_features_from_pdbqt(self, pdbqt_file):

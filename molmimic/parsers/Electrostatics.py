@@ -6,102 +6,58 @@ from itertools import cycle
 from joblib import Memory
 from docker.errors import ImageNotFound, ContainerError
 
-from molmimic.generate_data.util import silence_stdout, silence_stderr, \
-    get_all_chains, extract_chains, SubprocessChain, PDB_TOOLS
-from molmimic.generate_data.util import remove_ter_lines as _remove_ter_lines
+from molmimic.util import silence_stdout, silence_stderr, SubprocessChain
+from molmimic.util.pdb import get_all_chains, extract_chains, PDB_TOOLS
+from molmimic.util.pdb import remove_ter_lines as _remove_ter_lines
 from molmimic.parsers.psize import Psize
 
-try:
-    from toil.lib.docker import apiDockerCall
-except ImportError:
-    apiDockerCall = None
-    pdb2pqr_src = os.path.join(os.path.dirname(subprocess.check_output(["which", "pdb2pqr"])), "src")
-    if pdb2pqr_src:
-        sys.path.append(pdb2pqr_src)
+from molmimic.parsers.container import Container
+
+# try:
+#     from toil.lib.docker import apiDockerCall
+# except ImportError:
+#     apiDockerCall = None
+#     pdb2pqr_src = os.path.join(os.path.dirname(subprocess.check_output(["which", "pdb2pqr"])), "src")
+#     if pdb2pqr_src:
+#         sys.path.append(pdb2pqr_src)
 
 memory = Memory(verbose=0)
 
-def write_apbs_electrostatics_input(pqr_file, ouput_input_prefix=None, output_atompot_prefix=None):
-    ouput_input_prefix = ouput_input_prefix or pqr_file+".apbs_input"
-    with open(ouput_input_prefix, "w") as f:
-        pqr_path = self.format_in_path(pqr_path)
-        contents, out_file = make_apbs_input(pqr_file, ouput_input_prefix=ouput_input_prefix,
-            output_atompot_prefix=output_atompot_prefix)
-        f.write(contents)
-    return ouput_input_prefix, out_file
-
-def make_apbs_electrostatics_input(pqr_file, output_prefix=None):
-    ps = Psize()
-    ps.runPsize(pqr_file)
-    cglen = "{:.2f} {:.2f} {:.2f}".format(*ps.getCoarseGridDims())
-    fglen = "{:.2f} {:.2f} {:.2f}".format(*ps.getFineGridDims())
-    dime = "{:d} {:d} {:d}".format(*ps.getFineGridPoints())
-
-    output_prefix = output_prefix or pqr_file+".apbs_output"
-
-    contents = """read
-    mol pqr {pqr}
-end
-elec
-    mg-auto # Specify the mode for APBS to run
-    dime {dime} # The grid dimensions
-    cglen {cglen}
-    fglen {fglen}
-    cgcent mol 1
-    fgcent mol 1
-    mol 1 # Perform the calculation on molecule 1
-    lpbe # Solve the linearized Poisson-Boltzmann equation
-    bcfl sdh # Use all single moments when calculating the potential
-    pdie 2.00 # Solute dielectric
-    sdie 2.00 #78.54 # Solvent dielectric
-    chgm spl2 # Spline-based discretization of the delta functions
-    srfm smol # Molecular surface definition
-    srad 1.4 # Solvent probe radius (for molecular surface)
-    swin 0.3 # Solvent surface spline window (not used here)
-    sdens 10.0 # Sphere density for accessibility object
-    temp 298.15 # Temperature
-    calcenergy total # Calculate energies
-    calcforce no # Do not calculate forces
-    write atompot flat {out}
-end
-quit
-""".format(
-    pqr=os.path.basename(pqr_file),
-    dime=dime,
-    cglen=cglen,
-    fglen=fglen,
-    out=output_prefix
-    )
-
-    return contents, output_prefix
-
 class APBS(Container):
-    IMAGE = 'edraizen/apbs:latest'
+    IMAGE = 'docker://edraizen/apbs:latest'
     LOCAL = ["apbs"]
-    PARAMETERS = [("in_file", "path:in"), ("out_file", "path:out", None)]
+    PARAMETERS = [("in_file", "path:in")]
     RETURN_FILES = True
 
     def atom_potentials_from_pdb(self, pdb_file, force_field="amber",
-      whitespace=False, chain=True, with_charge=False):
+      whitespace=False, chain=True, with_charge=True):
         pdb2pqr = Pdb2pqr(work_dir=self.work_dir, job=self.job)
         pqr_file = pdb2pqr.create_tidy_pqr(pdb_file, force_field=force_field,
-            whitespace=whitespace, chain=chain, remove_ter_lines=True, clean=True)
+            whitespace=whitespace, chain=chain, remove_ter_lines=True)
         atom_pot_file = self.atom_potentials_from_pqr(pqr_file)
 
         if with_charge:
-            return {atom:(charge, potential) for (key, charge), potential in \
+            output = {atom:(charge, potential) for (atom, charge), potential in \
                 zip(pdb2pqr.parse_pqr(pqr_file), self.parse_atom_pot_file(atom_pot_file))}
         else:
-            return {atom:potential for (key, charge), potential in \
+            output = {atom:potential for (atom, charge), potential in \
                 zip(pdb2pqr.parse_pqr(pqr_file), self.parse_atom_pot_file(atom_pot_file))}
+
+        self.files_to_remove.append(pqr_file)
+        self.clean()
+
+        return output
 
     def atom_potentials_from_pqr(self, pqr_file):
         self.full_pqr_path = pqr_file
-        pqr_path = self.format_in_path(pqr_path)
-        input_file, out_file = make_apbs_input(pqr_path)
+
+        pqr_path = self.format_in_path(None, pqr_file)
+
+        input_file, out_file = self.write_apbs_electrostatics_input(pqr_file)
+        self.files_to_remove.append(input_file)
 
         self.running_atom_potentials = True
-        atom_pot_file = self(in_file=input_file, out_file=out_file)
+        atom_pot_file = self(in_file=input_file)
         self.running_atom_potentials = False
 
         return atom_pot_file
@@ -109,26 +65,83 @@ class APBS(Container):
     def local(self, *args, **kwds):
         self.is_local = True
         if hasattr(self, "running_atom_potentials") and self.running_atom_potentials:
-            pqr_path = self.format_in_path(self.full_pqr_path)
-            kwds["in_file"] = make_apbs_input(pqr_path)
+            pqr_path = self.format_in_path(None, self.full_pqr_path)
+            input_file, out_file = self.write_apbs_electrostatics_input(self.full_pqr_path)
+            kwds["in_file"] = input_file
         super(self, APBS).local(*args, **kwds)
 
     @staticmethod
-    def parse_atom_pot_file(self, atom_pot_file):
+    def parse_atom_pot_file(atom_pot_file):
         with open(atom_pot_file) as atom_pots:
             #Skip first 4 rows of atompot file
             for _ in range(4):
                 next(atom_pots)
 
-            for atom_pot in atom_pots
+            for atom_pot in atom_pots:
                 yield float(atom_pot)
 
+    def write_apbs_electrostatics_input(self, pqr_file, ouput_input_prefix=None,
+      output_prefix=None):
+        base = os.path.basename(pqr_file)
+        ouput_input_prefix = ouput_input_prefix or base+".apbs_input"
+        pqr_path = self.format_in_path(None, ouput_input_prefix)
 
-class pdb2pqr(Container):
-    IMAGE = 'edraizen/pdb2pqr:latest'
+        output_prefix = output_prefix or base+".apbs_output.txt"
+        pot_path = self.format_out_path(None, output_prefix)
+        with open(ouput_input_prefix, "w") as f:
+            contents = self.make_apbs_electrostatics_input(pqr_file, pot_path[:-4])
+            f.write(contents)
+        return ouput_input_prefix, pot_path
+
+    @staticmethod
+    def make_apbs_electrostatics_input(pqr_file, output_prefix):
+        ps = Psize()
+        ps.runPsize(pqr_file)
+        cglen = "{:.2f} {:.2f} {:.2f}".format(*ps.getCoarseGridDims())
+        fglen = "{:.2f} {:.2f} {:.2f}".format(*ps.getFineGridDims())
+        dime = "{:d} {:d} {:d}".format(*ps.getFineGridPoints())
+
+        contents = """read
+        mol pqr {pqr}
+    end
+    elec
+        mg-auto # Specify the mode for APBS to run
+        dime {dime} # The grid dimensions
+        cglen {cglen}
+        fglen {fglen}
+        cgcent mol 1
+        fgcent mol 1
+        mol 1 # Perform the calculation on molecule 1
+        lpbe # Solve the linearized Poisson-Boltzmann equation
+        bcfl sdh # Use all single moments when calculating the potential
+        pdie 2.00 # Solute dielectric
+        sdie 2.00 #78.54 # Solvent dielectric
+        chgm spl2 # Spline-based discretization of the delta functions
+        srfm smol # Molecular surface definition
+        srad 1.4 # Solvent probe radius (for molecular surface)
+        swin 0.3 # Solvent surface spline window (not used here)
+        sdens 10.0 # Sphere density for accessibility object
+        temp 298.15 # Temperature
+        calcenergy total # Calculate energies
+        calcforce no # Do not calculate forces
+        write atompot flat {out}
+    end
+    quit
+    """.format(
+        pqr=os.path.basename(pqr_file),
+        dime=dime,
+        cglen=cglen,
+        fglen=fglen,
+        out=output_prefix
+        )
+
+        return contents
+
+class Pdb2pqr(Container):
+    IMAGE = 'docker://edraizen/pdb2pqr:latest'
     LOCAL = ["/usr/share/pdb2pqr/pdb2pqr.py"]
     PARAMETERS = [
-        (":force_field:amber", str, "--ff={}"),
+        (":force_field:amber", None, "--ff={}"),
         (":whitespace", "store_true"),
         (":chain", "store_true"),
         ("in_file", "path:in"),
@@ -137,29 +150,36 @@ class pdb2pqr(Container):
 
     def __call__(self, *args, **kwds):
         try:
-            super(self, pdn2pqr).__call(*args, **kwds)
+            return Container.__call__(self, *args, **kwds)
         except Exception as e:
             if "ValueError: This PDB file is missing too many" in str(e):
                 return None
             raise
 
     def create_tidy_pqr(self, pdb_file, remove_ter_lines=True, **kwds):
-        save_chains = get_all_chains(pdb_file)
+        save_chains = "".join(list(sorted(get_all_chains(pdb_file))))
         full_pdb_path = _remove_ter_lines(pdb_file) if remove_ter_lines else pdb_file
-        pqr_file = "{}.pqr".format(pdb_path)
-        kwds["whitespace"] = True
+        pqr_file = "{}.pqr".format(os.path.basename(pdb_file))
+
+        #Whitespace must be False to ensure correct PDB file
+        kwds["whitespace"] = False
         kwds["chain"] = True
-        self(pdb_file, pqr_file, whitespace=True, chain=True)
+
+        self(pdb_file, pqr_file, **kwds)
+
         pqr_chains = extract_chains(pqr_file, save_chains)
+
         cmds = [[sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), pqr_chains]]
         tidy_file = pqr_file+".tidy"
         with open(tidy_file, "w") as f:
             SubprocessChain(cmds, f)
+
         try:
             os.remove(pqr_file)
         except OSError:
             pass
         shutil.move(tidy_file, pqr_file)
+
         return pqr_file
 
     def get_charge_from_pdb_file(self, pdb_file, remove_ter_lines=True, clean=True, **kwds):
@@ -290,101 +310,101 @@ class pdb2pqr(Container):
     # assert os.path.isfile(pqr_file)
     # return pqr_file
 
-@memory.cache
-def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
-  pdb2pqr_parameters=None, apbs_input_file=None, apbs_keep_input=False,
-  work_dir=None, docker=True, job=None, clean=True, only_charge=False):
-    """Run PDB2PQR and APBS to get charge and electrostatics for each atom
-
-    Parameters
-    ----------
-    pdb_path : str
-    Path to PDB file
-    job : Toil.job.Job
-    The job that is calling this method if using toil
-    clean : bool
-    Remove the resulting PQR and APBS files. Default is True.
-
-    Return
-    ------
-    A dictionary mapping atoms bu Bio.PDB identifiers to a tuple of floats:
-    charge, and
-    electrostatic potential
-    """
-    pqr_path = run_pdb2pqr(pdb_path, whitespace=pdb2pqr_whitespace,
-        ff=pdb2pqr_ff, parameters=pdb2pqr_parameters, work_dir=work_dir,
-        docker=docker, job=job)
-
-    if pqr_path is None:
-        return {}
-
-    assert os.path.isfile(pqr_path)
-
-    if not only_charge:
-        atom_pot_file = run_apbs(pqr_path, input_file=apbs_input_file,
-            keep_input=apbs_keep_input, work_dir=work_dir, docker=docker, job=job)
-        atom_pot = open(atom_pot_file)
-    else:
-        #Set all atom potentials to NaN
-        atom_pot = cycle([np.nan])
-
-    result = {}
-    with open(pqr_path) as pqr:
-        #Skip first 4 rows of atompot file
-        for _ in range(4):
-            next(atom_pot)
-
-        for line in pqr:
-            if not line.startswith("ATOM  ") or line.startswith("HETATM"): continue
-
-            electrostatic_potential = float(next(atom_pot))
-
-            fields = line.rstrip().split()
-            if len(fields) == 11:
-                recordName, serial, atomName, residueName, chainID, residueNumber, X, Y, Z, charge, radius = fields
-            elif len(fields) == 10:
-                recordName, serial, atomName, residueName, residueNumber, X, Y, Z, charge, radius = fields
-            else:
-                raise RuntimeError("Invalid PQR File")
-
-            try:
-                resseq = int("".join([i for i in residueNumber if i.isdigit()]))
-            except ValueError:
-                continue
-
-            icode = "".join([i for i in residueNumber if not i.isdigit()])
-            if icode == "":
-                icode = " "
-
-            if recordName == "HETATM":  # hetero atom flag
-                if residueName in ["HOH", "WAT"]:
-                    hetero_flag = "W"
-                else:
-                    hetero_flag = "H_{}".format(residueName)
-            else:
-                hetero_flag = " "
-
-            residue_id = (hetero_flag, resseq, icode)
-
-            key = (residue_id, (atomName.strip(), ' '))
-            result[key] = (float(charge), electrostatic_potential)
-
-    if not only_charge:
-        atom_pot.close()
-        if clean:
-            try:
-                os.remove(atom_pot_file)
-            except OSError:
-                pass
-    del atom_pot
-
-    if clean:
-        try:
-            os.remove(pqr_path)
-        except OSError:
-            pass
-
-    return result
+#@memory.cache
+# def run_pdb2pqr_APBS(pdb_path, pdb2pqr_whitespace=False, pdb2pqr_ff="amber",
+#   pdb2pqr_parameters=None, apbs_input_file=None, apbs_keep_input=False,
+#   work_dir=None, docker=True, job=None, clean=True, only_charge=False):
+#     """Run PDB2PQR and APBS to get charge and electrostatics for each atom
+#
+#     Parameters
+#     ----------
+#     pdb_path : str
+#     Path to PDB file
+#     job : Toil.job.Job
+#     The job that is calling this method if using toil
+#     clean : bool
+#     Remove the resulting PQR and APBS files. Default is True.
+#
+#     Return
+#     ------
+#     A dictionary mapping atoms bu Bio.PDB identifiers to a tuple of floats:
+#     charge, and
+#     electrostatic potential
+#     """
+#     pqr_path = run_pdb2pqr(pdb_path, whitespace=pdb2pqr_whitespace,
+#         ff=pdb2pqr_ff, parameters=pdb2pqr_parameters, work_dir=work_dir,
+#         docker=docker, job=job)
+#
+#     if pqr_path is None:
+#         return {}
+#
+#     assert os.path.isfile(pqr_path)
+#
+#     if not only_charge:
+#         atom_pot_file = run_apbs(pqr_path, input_file=apbs_input_file,
+#             keep_input=apbs_keep_input, work_dir=work_dir, docker=docker, job=job)
+#         atom_pot = open(atom_pot_file)
+#     else:
+#         #Set all atom potentials to NaN
+#         atom_pot = cycle([np.nan])
+#
+#     result = {}
+#     with open(pqr_path) as pqr:
+#         #Skip first 4 rows of atompot file
+#         for _ in range(4):
+#             next(atom_pot)
+#
+#         for line in pqr:
+#             if not line.startswith("ATOM  ") or line.startswith("HETATM"): continue
+#
+#             electrostatic_potential = float(next(atom_pot))
+#
+#             fields = line.rstrip().split()
+#             if len(fields) == 11:
+#                 recordName, serial, atomName, residueName, chainID, residueNumber, X, Y, Z, charge, radius = fields
+#             elif len(fields) == 10:
+#                 recordName, serial, atomName, residueName, residueNumber, X, Y, Z, charge, radius = fields
+#             else:
+#                 raise RuntimeError("Invalid PQR File")
+#
+#             try:
+#                 resseq = int("".join([i for i in residueNumber if i.isdigit()]))
+#             except ValueError:
+#                 continue
+#
+#             icode = "".join([i for i in residueNumber if not i.isdigit()])
+#             if icode == "":
+#                 icode = " "
+#
+#             if recordName == "HETATM":  # hetero atom flag
+#                 if residueName in ["HOH", "WAT"]:
+#                     hetero_flag = "W"
+#                 else:
+#                     hetero_flag = "H_{}".format(residueName)
+#             else:
+#                 hetero_flag = " "
+#
+#             residue_id = (hetero_flag, resseq, icode)
+#
+#             key = (residue_id, (atomName.strip(), ' '))
+#             result[key] = (float(charge), electrostatic_potential)
+#
+#     if not only_charge:
+#         atom_pot.close()
+#         if clean:
+#             try:
+#                 os.remove(atom_pot_file)
+#             except OSError:
+#                 pass
+#     del atom_pot
+#
+#     if clean:
+#         try:
+#             os.remove(pqr_path)
+#         except OSError:
+#             pass
+#
+#     return result
 
 # def run_apbs(pqr_file, input_file=None, keep_input=False, work_dir=None,
 #   docker=True, job=None, attempts=3):

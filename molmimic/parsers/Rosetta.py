@@ -2,7 +2,7 @@ import os, sys
 import time
 import shutil
 from joblib import Memory
-from molmimic.generate_data.util import silence_stdout, silence_stderr, number_of_lines
+from molmimic.util import silence_stdout, silence_stderr, number_of_lines
 
 try:
     from toil.lib.docker import apiDockerCall

@@ -2,7 +2,7 @@ import os, sys
 import json
 import shutil
 import subprocess
-from molmimic.generate_data.util import silence_stdout, silence_stderr
+from molmimic.util import silence_stdout, silence_stderr
 
 try:
     from toil.lib.docker import apiDockerCall
@@ -47,6 +47,64 @@ class CaModel(automodel):
         self.res_num_from(self.ca_template, aln)
 """
 
+class MODELLER(Container):
+    IMAGE = "docker://edraizen/modeller:latest"
+    LOCAL = [sys.executable]
+    PARAMETERS = [("modeller_file", "path:in")]
+
+    def __call__(self, *args, **kwds):
+        pass
+
+    def automodel(self, template_pdb, model_sequence, pir_file, num_models=5,
+      make_model_callback=None):
+        python_file = os.path.join(self.work_dir, "run_modeller.py")
+
+        with open(python_file, "w") as f:
+            f.write(make_modeller_file(
+                pir = os.path.join("/data", os.path.basename(pir)),
+                template = os.path.basename(template).rsplit(".", 1)[0],
+                model=model, num_models=num_models, work_dir="/data",
+                callback=make_model_callback))
+
+    def make_ca_model(self, template_pdb, chain, num_models=5):
+        assert is_ca_model(template_pdb)
+
+        prefix = os.path.basename(template_pdb).split(".", 1)[0]
+        template_file_prefix = "{}_ca_model".format(prefix)
+        model_file_prefix = "{}_full_model".format(prefix)
+        template_file = "{}.pdb".format(template_file_prefix)
+
+        with open(template_pdb) as f:
+            seq = "\n".join(subprocess.check_output(
+                [sys.executable, os.path.join(PDB_TOOLS, "pdb_toseq.py")],
+                stdin=f).decode("utf-8").split("\n")[1:])
+
+        pir_file = self._make_pir(template_file_prefix, model_file_prefix,
+            chain, seq)
+
+        def ca_callback(modeller_file, pir, template, model, num_models, work_dir):
+            _ca_model = ca_model.format(template=template)
+            f = modeller_file.replace("#Add New Class Here", _ca_model)
+            return f.replace("a = automodel", "a = CaModel")
+
+        return self.automodel(pir_file, template_file, model_file_prefix,
+            num_models=num_models, make_model_callback=ca_callback)
+
+    def _make_pir(self, template_file_prefix, model_file_prefix, chain, seq):
+        pir_file = os.path.join(self.work_dir, template_file_prefix+".pir")
+        with open(pir_file, "w") as pir:
+            pir.write(pir_text.format(
+            template = template_file_prefix,
+            target = model_file_prefix,
+            chain=chain,
+            seq=seq))
+        return pir_file
+
+
+
+
+
+
 def make_modeller_file(pir, template, model, num_models=5, work_dir="", callback=None):
     global _modeller_file
     _modeller_file = modeller_file.format(pir=pir, template=template, model=model,
@@ -55,10 +113,7 @@ def make_modeller_file(pir, template, model, num_models=5, work_dir="", callback
         _modeller_file = callback(_modeller_file, pir, template, model, num_models, work_dir)
     return _modeller_file
 
-def ca_callback(modeller_file, pir, template, model, num_models, work_dir):
-    _ca_model = ca_model.format(template=template)
-    f = modeller_file.replace("#Add New Class Here", _ca_model)
-    return f.replace("a = automodel", "a = CaModel")
+
 
 def run_modeller(pir, template, model, num_models=5, work_dir=None, docker=True,
   job=None, make_model_callback=None):

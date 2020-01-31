@@ -25,6 +25,7 @@ class SCWRL(Container):
         (":remove_hydrogens", "store_true", "-h"),
         (":remove_h_n_term", "store_true", "-t"),
         ]
+    RETURN_FILES = True
 
 # def run_scwrl(pdb_file, output_prefix=None, framefilename=None, sequencefilename=None,
 #   paramfilename=None, in_cystal=False, remove_hydrogens=False, remove_h_n_term=False,

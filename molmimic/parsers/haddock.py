@@ -8,7 +8,8 @@ import tempfile
 
 from toil.realtimeLogger import RealtimeLogger
 
-from molmimic.generate_data.util import PDB_TOOLS, SubprocessChain
+from molmimic.util.pdb import PDB_TOOLS
+from molmimic.util import SubprocessChain
 
 try:
     from toil.lib.docker import apiDockerCall

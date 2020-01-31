@@ -14,8 +14,8 @@ try:
 except ImportError:
     from pandas.api.types import infer_dtype
 
-from molmimic.generate_data.iostore import IOStore
-from molmimic.generate_data.util import natural_keys, reset_ip
+from molmimic.util.iostore import IOStore
+from molmimic.util import natural_keys, reset_ip
 from molmimic.parsers.json import JSONApi
 from molmimic.parsers.pdbe import PDBEApi
 
@@ -46,7 +46,7 @@ class EPPICApi(JSONApi):
             eppic_store, work_dir=work_dir, download=download, clean=clean,
             max_attempts=max_attempts)
 
-        self.pdb = pdb
+        self.pdb = pdb.lower()
         self.sequences = self.get_sequences()
         self.chains = {chain:rep.repChain for rep in self.sequences.itertuples() \
             for chain in rep.memberChains.split(",")}

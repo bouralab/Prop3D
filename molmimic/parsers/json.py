@@ -40,7 +40,7 @@ class WebService(object):
     def fix_key(self, key):
         return key
 
-    def extension(self):
+    def extension(self, key=None):
         return ""
 
     def parse(self, file_path, key):
@@ -61,11 +61,15 @@ class WebService(object):
 
         if isinstance(key, (list, tuple)):
             key = "/".join(self.fix_key(str(k)) for k in key)
+        elif isinstance(key, str):
+            key = self.fix_key(key)
+        else:
+            raise KeyError(key)
 
-        store_key = "{}".format(key, self.extension())
+        store_key = "{}{}".format(key, self.extension(key))
         fname = os.path.join(self.work_dir, "{}-{}{}".format(
             self.store.store_name.replace("/", "-"), key.replace("/", "-"),
-            self.extension()))
+            self.extension(key)))
 
         #Check if file should be download or get from store
         if os.path.isfile(fname):
@@ -112,13 +116,16 @@ class WebService(object):
             raise
         except ValueError as e:
             rerun = False
-            with open(fname) as f:
-                for line in f:
-                    rerun = self.check_line(key, line, attempts)
+            try:
+                with open(fname) as f:
+                    for line in f:
+                        rerun = self.check_line(key, line, attempts)
+            except Exception:
+                rerun = True
 
             try:
                 os.remove(fname)
-            except OSError:
+            except (OSError, FileNotFoundError):
                 pass
 
             if rerun:
@@ -163,7 +170,7 @@ class WebService(object):
         return True
 
 class JSONApi(WebService):
-    def extension(self):
+    def extension(self, key):
         return ".json"
 
     def parse(self, file_path, key):
