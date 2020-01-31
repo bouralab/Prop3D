@@ -1,4 +1,5 @@
 import os
+import copy
 from io import StringIO
 
 import pandas as pd
@@ -10,109 +11,11 @@ from Bio.PDB.NeighborSearch import NeighborSearch
 import warnings
 warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
 
-from molmimic.util import InvalidPDB, natural_keys
-from molmimic.common.ProteinTables import vdw_radii
-
-def number_of_features(only_aa=False, only_atom=False, non_geom_features=False,
-  use_deepsite_features=False, course_grained=False):
-    if course_grained:
-        if non_geom_features:
-            return 35
-        elif only_aa:
-            return 21
-        else:
-            return 47
-    else:
-        if non_geom_features:
-            return 13
-        elif only_atom:
-            return 5
-        elif only_aa and use_deepsite_features:
-            return 21+9
-        elif only_aa:
-            return 21
-        elif use_deepsite_features:
-            return 8
-        else:
-            return 75
-
-def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=False, course_grained=False):
-    if only_atom:
-        return ["C", "N", "O", "S", "Unk_element"]
-    elif only_aa and use_deepsite_features:
-        return PDB.Polypeptide.aa3+[ #DeepSite features
-            "hydrophobic_atom",
-            "aromatic_atom",
-            "hbond_acceptor",
-            "hbond_donor",
-            "metal",
-            "is_hydrogen",
-            "is_pos",
-            "is_neg",
-            "is_conserved"
-        ]
-    if only_aa:
-        return PDB.Polypeptide.aa3
-    if use_deepsite_features:
-        return [ #DeepSite features
-            "hydrophobic_atom",
-            "aromatic_atom",
-            "hbond_acceptor",
-            "hbond_donor",
-            "metal",
-            "is_pos",
-            "is_neg",
-            "is_conserved"
-        ]
-    feature_names = [
-        "C", "CT", "CA", "N", "N2", "N3", "NA", "O", "O2", "OH", "S", "SH", "Unk_atom",
-        "C_elem", "N_elem", "O_elem", "S_elem", "Unk_element",
-        "vdw_volume", "charge", "neg_charge", "pos_charge", "neutral_charge",
-        "electrostatic_potential", "is_electropositive", "is_electronegative",
-        "cx", "is_concave", "is_convex", "is_concave_and_convex",
-        "hydrophobicity", "is_hydrophbic", "is_hydrophilic", "hydrophobicity_is_0",
-        "atom_asa", "atom_is_buried", "atom_exposed",
-        "residue_asa", "residue_buried", "residue_exposed"]
-    feature_names += PDB.Polypeptide.aa3+["Unk_residue"]
-    feature_names += ["is_helix", "is_sheet", "Unk_SS"]
-    feature_names += [ #DeepSite features
-        "hydrophobic_atom",
-        "aromatic_atom",
-        "hbond_acceptor",
-        "hbond_donor",
-        "metal",
-        "is_hydrogen",
-    ]
-    feature_names += [
-        "consurf_conservation_normalized",
-        "consurf_conservation_scale",
-        "consurf_is_conserved",
-        "eppic_conservation",
-        "eppic_is_conserved",
-        "is_conserved"
-    ]
-
-    return feature_names
-
-def get_residue_feature_names():
-    feature_names = [
-        "charge", "neg_charge", "pos_charge", "neutral_charge",
-        "electrostatic_potential", "is_electropositive", "is_electronegative",
-        "cx", "is_concave", "is_convex", "is_concave_and_convex",
-        "hydrophobicity", "is_hydrophbic", "is_hydrophilic", "hydrophobicity_is_0",
-        "residue_asa", "residue_buried", "residue_exposed"]
-    feature_names += PDB.Polypeptide.aa3
-    feature_names += [
-        "Unk_residue", "is_helix", "is_sheet", "Unk_SS"]
-    feature_names += [
-        "consurf_conservation_normalized",
-        "consurf_conservation_scale",
-        "consurf_is_conserved",
-        "eppic_conservation",
-        "eppic_is_conserved",
-        "is_conserved"
-    ]
-    return feature_names
+from molmimic.util import natural_keys
+from molmimic.util.pdb import InvalidPDB
+from molmimic.common.ProteinTables import vdw_radii, vdw_aa_radii
+from molmimic.common.features import default_atom_feature_df, default_residue_feature_df, \
+    atom_features, residue_features
 
 class Structure(object):
     def __init__(self, path, cath_domain, input_format="pdb",
@@ -154,10 +57,8 @@ class Structure(object):
             raise InvalidPDB("Only accepts PDBs with 1 chain in {} {}".format(self.cath_domain, self.path))
 
         self.id = "{}{}{:02d}".format(self.pdb, self.chain, int(self.domNo))
-#         self.n_residues = max(r.get_id()[1] for r in self.structure.get_residues())
-#         self.n_atoms = max(a.serial_number for a in self.structure.get_atoms())
-        self.n_residue_features = number_of_features(course_grained=True)
-        self.n_atom_features = number_of_features(course_grained=False)
+        self.n_residue_features = len(residue_features)
+        self.n_atom_features = len(atom_features)
 
         self.features_path = os.environ.get("MOLMIMIC_FEATURES", features_path)
 
@@ -189,27 +90,60 @@ class Structure(object):
         else:
             self.residue_feature_mode = residue_feature_mode
 
-        # self.residue_features = np.memmap(self.residue_features_file,
-        #     dtype=np.float, mode=self.residue_feature_mode, shape=(self.n_residues, self.n_residue_features))
-        # self.atom_features = np.memmap(self.atom_features_file,
-        #     dtype=np.float, mode=self.atom_feature_mode, shape=(self.n_atoms, self.n_atom_features))
-
         atom_index = [self._remove_altloc(a).serial_number for a in self.structure.get_atoms()]
         if self.atom_feature_mode == "r":
             self.atom_features = pd.read_hdf(self.atom_features_file, "table", mode="r")
-            #self.atom_features = self.atom_features.reset_index()
-            #self.atom_features = self.atom_features.reindex(index=atom_index)
         else:
-            self.atom_features = pd.DataFrame(0., columns=get_feature_names(),
-                index=atom_index)
+            self.atom_features = default_atom_feature_df(len(atom_index)).reindex(atom_index, axis=0)
 
         if self.residue_feature_mode == "r":
             self.residue_features = pd.read_hdf(self.residue_features_file, "table", mode="r")
         else:
-            residue_index = [self._remove_inscodes(r).get_id() for r in \
-                self.structure.get_residues()]
-            self.residue_features = pd.DataFrame(0., columns=get_residue_feature_names(),
-                index=residue_index)
+            residue_index = pd.MultiIndex.from_tuples(
+                [self._remove_inscodes(r).get_id() for r in \
+                self.structure.get_residues()], names=('HET_FLAG', 'resi', 'ins'))
+            self.residue_features = default_residue_feature_df(len(residue_index)).reindex(residue_index, axis=0)
+
+    def __abs__(self):
+        new = self.copy()
+        new.atom_features = new.atom_features.abs()
+        return new
+
+    def __sub__(self, other):
+        new = self.copy()
+        if isinstance(other, Structure):
+            new.atom_features -= other.atom_features
+        elif isinstance(other, (int, float)):
+            new.atom_features -= other
+        else:
+            raise TypeError
+        return new
+
+    def __add__(self, other):
+        new = self.copy()
+        if isinstance(other, Structure):
+            new.atom_features += other.atom_features
+        elif isinstance(other, (int, float)):
+            new.atom_features += other
+        else:
+            raise TypeError
+        return new
+
+    def __floordiv__(self, other):
+        new = self.copy()
+        if isinstance(other, Structure):
+            new.atom_features /= other.atom_features
+        elif isinstance(other, (int, float)):
+            new.atom_features /= other
+        else:
+            raise TypeError
+        return new
+
+    def __truediv__(self, other):
+        return self.__floordiv__(other)
+
+    def copy(self):
+        return copy.copy(self)
 
     def get_atoms(self, include_hetatms=False, exclude_atoms=None):
         for a in self.filter_atoms(self.structure.get_atoms(), include_hetatms=include_hetatms, exclude_atoms=exclude_atoms):
@@ -240,6 +174,35 @@ class Structure(object):
             path = path.read()
 
         return path
+
+    def write_features_to_pdb(self, features=None, name=None, coarse_grain=False,
+      work_dir=None):
+        if work_dir is None:
+            work_dir = os.getcwd()
+
+        if features is None:
+            features = self.atom_features if not coarse_grain else \
+                self.residue_features
+        else:
+            features = self.atom_features.loc[:, features] if not coarse_grain \
+                else self.residue_features.loc[:, features]
+
+        bfactors = [a.bfactor for a in self.structure.get_atoms()]
+
+        path = os.path.join(work_dir, self.cath_domain)
+        if name is not None:
+            path += "-"+name
+
+        outfiles = {}
+        for feature in features.columns:
+            self.update_bfactors(features.loc[:, feature]*100)
+            outfile = "{}-{}.pdb".format(path, feature)
+            self.save_pdb(outfile)
+            outfiles[feature] = outfile
+
+        self.update_bfactors(bfactors)
+
+        return outfiles
 
     def get_residue_from_resseq(self, resseq, model=0, chain=None):
         chain = chain or self.chain
@@ -336,7 +299,7 @@ class Structure(object):
 
     def update_bfactors(self, b_factors):
         for atom, b in zip(self.structure.get_atoms(), b_factors):
-            atom.set_set_bfactor(b)
+            atom.set_bfactor(b)
 
     def _remove_altloc(self, atom):
         if isinstance(atom, PDB.Atom.Atom):
@@ -379,8 +342,28 @@ class Structure(object):
 
         return all_list
 
-    def get_vdw(self, atom):
-        return np.array([vdw_radii.get(atom.element.title(), 2.0)])
+    def get_vdw(self, atom_or_residue):
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            return np.array([vdw_radii.get(atom_or_residue.element.title(), 1.7)])
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            #For coarse graining, not really a vdw radius
+            return np.array([vdw_aa_radii.get(atom_or_residue.get_resname(), 3.0)])
+
+    def get_dihedral_angles(self, atom_or_residue):
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            residue = atom_or_residue.get_parent()
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            residue = atom_or_residue
+        else:
+            raise RuntimeError("Input must be Atom or Residue")
+
+        if not hasattr(self, "_phi_psi"):
+            peptides = PDB.PPBuilder().build_peptides(self.structure[0][self.chain])[0]
+            self._phi_psi = {res.get_id():ppl for res, ppl in zip(
+                peptides, peptides.get_phi_psi_list())}
+
+        return self._phi_psi.get(residue.get_id(), (None, None))
+
 
 def flip_around_axis(coords, axis = (0.2, 0.2, 0.2)):
     'Flips coordinates randomly w.r.t. each axis with its associated probability'

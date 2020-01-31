@@ -1,4 +1,5 @@
 import os
+import copy
 from io import StringIO
 from collections import defaultdict
 
@@ -8,16 +9,18 @@ from scipy import spatial
 from Bio import PDB
 from Bio.PDB.NeighborSearch import NeighborSearch
 
-from molmimic.common.Structure import Structure, number_of_features
-from molmimic.common.ProteinTables import vdw_radii, vdw_aa_radii, surface_areas
-from molmimic.common.featurizer import atom_feature_names, residue_feature_names
+from molmimic.common.Structure import Structure
+from molmimic.common.ProteinTables import vdw_radii, vdw_aa_radii
+from molmimic.common.features import atom_features_by_category, number_of_features
 
 class ProteinVoxelizer(Structure):
     def __init__(self, path, cath_domain, input_format="pdb",
       volume=264, voxel_size=1.0, rotate=True, features_path=None,
       residue_feature_mode=None, use_features=None):
         super().__init__(path, cath_domain,
-            input_format=input_format, feature_mode="r", features_path=features_path, residue_feature_mode=residue_feature_mode)
+            input_format=input_format, feature_mode="r",
+            features_path=features_path,
+            residue_feature_mode=residue_feature_mode)
 
         self.mean_coord = np.zeros(3)
         self.mean_coord_updated = False
@@ -31,8 +34,29 @@ class ProteinVoxelizer(Structure):
 
         if rotate is None:
             self.shift_coords_to_volume_center()
+            self.set_voxel_size(self.voxel_size)
         else:
             next(self.rotate(rotate))
+
+    def voxels_from_pdb(self, autoencoder=False, only_surface=False,
+      return_voxel_map=False):
+        import torch
+        dtypei = 'torch.cuda.LongTensor' if torch.cuda.is_available() else \
+            'torch.LongTensor'
+        dtype = 'torch.cuda.FloatTensor' if torch.cuda.is_available() else \
+            'torch.FloatTensor'
+        label_dtype = dtype if autoencoder else dtypei
+
+        indices, data, truth, voxel_map = self.map_atoms_to_voxel_space(
+            autoencoder=autoencoder,
+            only_surface=only_surface,
+            return_voxel_map=return_voxel_map
+            )
+        inputs = [
+            torch.from_numpy(indices).type(dtypei),
+            torch.from_numpy(data).type(dtype)]
+        labels = torch.from_numpy(truth).type(label_dtype)
+        return inputs, labels
 
     def get_flat_features(self, resi=None):
         features = [s.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features) \
@@ -55,7 +79,7 @@ class ProteinVoxelizer(Structure):
     def get_features(self, residue_list=None, only_aa=False, only_atom=False,
       non_geom_features=False, use_deepsite_features=False, expand_atom=False,
       undersample=False, autoencoder=False):
-        if self.course_grained:
+        if self.coarse_grained:
             return self.map_residues_to_voxel_space(
                 binding_site_residues=residue_list,
                 include_full_protein=include_full_protein,
@@ -81,12 +105,6 @@ class ProteinVoxelizer(Structure):
 
         Parameters
         ----------
-        expand_atom : boolean
-            If true, atoms will be converted into spheres with their Van der walls
-            radii. The features for the atom are copied into all voxels that contain
-            the atom and features from overlapping atoms are summed. If false, an atom
-            will only occupy one voxel, where overlapping features for overlapping atoms
-            are summed.
         binding_site_residues : list of Bio.PDB.Residue objects or None
             If a binding is known, add the list of Bio.PDB.Residue objects, usually
             obtained by Structure.align_seq_to_struc()
@@ -127,7 +145,7 @@ class ProteinVoxelizer(Structure):
             only_atom=only_atom,
             non_geom_features=non_geom_features,
             use_deepsite_features=use_deepsite_features,
-            course_grained=False)
+            coarse_grained=False)
 
         data_voxels = defaultdict(lambda: np.zeros(nFeatures if self.use_features is None else len(self.use_features)))
         truth_voxels = {}
@@ -161,19 +179,30 @@ class ProteinVoxelizer(Structure):
                 continue
 
             if only_surface:
-                features, is_buried = self.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features, warn_if_buried=True)
+                features, is_buried = self.get_features_for_atom(
+                    atom,
+                    only_aa=only_aa,
+                    only_atom=only_atom,
+                    non_geom_features=non_geom_features,
+                    use_deepsite_features=use_deepsite_features,
+                    warn_if_buried=True)
                 if not truth and is_buried:
                     skipped += 1
                     skipped_inside.append((atom, features, is_buried))
                     continue
             else:
-                features = self.get_features_for_atom(atom, only_aa=only_aa, only_atom=only_atom, non_geom_features=non_geom_features, use_deepsite_features=use_deepsite_features)
+                features = self.get_features_for_atom(
+                    atom,
+                    only_aa=only_aa,
+                    only_atom=only_atom,
+                    non_geom_features=non_geom_features,
+                    use_deepsite_features=use_deepsite_features)
 
             features = features.astype(float)
 
             truth_value = true_value_.copy() if truth else neg_value_.copy()
 
-            for atom_grid in self.get_grid_coords_for_atom_by_kdtree(atom):
+            for atom_grid in self.get_vdw_grid_coords_for_atom(atom):
                 atom_grid = tuple(atom_grid.tolist())
                 try:
                     data_value = np.maximum(features, data_voxels[atom_grid])
@@ -230,7 +259,7 @@ class ProteinVoxelizer(Structure):
         nFeatures = Structure.number_of_features(
             only_aa=only_aa,
             non_geom_features=non_geom_features,
-            course_grained=True,
+            coarse_grained=True,
             use_deepsite_features=use_deepsite_features)
 
         data_voxels = defaultdict(lambda: np.zeros(nFeatures))
@@ -251,7 +280,7 @@ class ProteinVoxelizer(Structure):
             except Exception as e:
                 print(e)
                 raise
-            for residue_grid in self.get_grid_coords_for_residue_by_kdtree(residue):
+            for residue_grid in self.get_vdw_grid_coords_for_residue(residue):
                 residue_grid = tuple(residue_grid.tolist())
                 try:
                     data_voxels[residue_grid] = np.maximum(features, data_voxels[residue_grid])
@@ -288,40 +317,13 @@ class ProteinVoxelizer(Structure):
     def get_features_for_atom(self, atom, only_aa=False, only_atom=False,
       non_geom_features=False, use_deepsite_features=False, warn_if_buried=False):
         """Calculate FEATUREs"""
-#         from molmimic.parsers.Consurf import run_consurf
-#         if not hasattr(self, "_consurf"):
-#             self._consurf = run_consurf(self, self.pdb, self.chain)
-#             print(self._consurf.keys())
-#             assert 0, self._consurf.keys()
-
-        # from molmimic.parsers.eppic import run_eppic
-        # if not hasattr(self, "_eppic"):
-        #     self._eppic = run_eppic(self.pdb, self.chain)
-
-#         if not hasattr(self, "_infocontent"):
-#             from Bio.Align import AlignInfo
-#             from Bio.Align import MultipleSeqAlignment
-#             self._align = MultipleSeqAlignment("~/SageMaker/cdd/fasta/cd00096.FASTA")
-#             self._infocontent = AlignInfo(self._align).information_content()
-
         if isinstance(atom, PDB.Atom.DisorderedAtom):
             #All altlocs have been removed so onlt one remains
             atom = atom.disordered_get_list()[0]
 
         try:
             features = self.atom_features.loc[atom.serial_number]
-            is_buried = bool(features["atom_is_buried"])
-
-
-#             from Bio.SubsMat import MatrixInfo as matlist
-#             matrix = matlist.blosum62
-#             next(pairwise2.align.globaldx("KEVLA", "EVL", matrix))
-
-            # try:
-            #     con = np.array([self._eppic[atom.get_parent().get_id()]>0.6]).astype(float)
-            # except Exception as e:
-            #     assert 0, (atom.get_parent().get_id(), self._eppic.keys(), e)
-            #     raise
+            is_buried = bool(features["residue_buried"])
 
             if self.use_features is not None:
                 #Only use hand-selected features
@@ -333,10 +335,10 @@ class ProteinVoxelizer(Structure):
 
             elif only_aa and use_deepsite_features:
                 feats = features[
-                    atom_feature_names["get_residue"] + \
-                    atom_feature_names["get_deepsite_features"] + \
-                    atom_feature_names["get_charge_and_electrostatics"][1:3] +\
-                    atom_feature_names["get_evolutionary_conservation_score"][-1:]]
+                    atom_features_by_category["get_residue"] + \
+                    atom_features_by_category["get_deepsite_features"] + \
+                    atom_features_by_category["get_charge_and_electrostatics"][1:3] +\
+                    atom_features_by_category["get_evolutionary_conservation_score"][-1:]]
 
                 if warn_if_buried:
                     return feats, is_buried
@@ -345,32 +347,32 @@ class ProteinVoxelizer(Structure):
 
             if use_deepsite_features:
                 feats = features[
-                    atom_feature_names["get_deepsite_features"] + \
-                    atom_feature_names["get_charge_and_electrostatics"][1:3] +\
-                    atom_feature_names["get_evolutionary_conservation_score"][-1:]]
+                    atom_features_by_category["get_deepsite_features"] + \
+                    atom_features_by_category["get_charge_and_electrostatics"][1:3] +\
+                    atom_features_by_category["get_evolutionary_conservation_score"][-1:]]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
                     return feats
 
             if only_atom:
-                feats = features[atom_feature_names["get_atom_type"]]
+                feats = features[atom_features_by_category["get_atom_type"]]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
                     return feats
 
             elif only_aa:
-                feats = features[atom_feature_names["get_residue"]]
+                feats = features[atom_features_by_category["get_residue"]]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
                     return feats
             elif non_geom_features:
                 feats = features[
-                    atom_feature_names["get_element_type"] + \
-                    atom_feature_names["get_charge_and_electrostatics"] +\
-                    atom_feature_names["get_hydrophobicity"] +\
+                    atom_features_by_category["get_element_type"] + \
+                    atom_features_by_category["get_charge_and_electrostatics"] +\
+                    atom_features_by_category["get_hydrophobicity"] +\
                     [float(is_buried)]]
                 if warn_if_buried:
                     return feats, is_buried
@@ -414,17 +416,29 @@ class ProteinVoxelizer(Structure):
         except ValueError:
             pass
 
-    def get_grid_coords_for_atom_by_kdtree(self, atom, k=4):
+    def get_vdw_grid_coords_for_atom(self, atom):
         dist = self.get_vdw(atom)[0]
         neighbors = self.voxel_tree.query_ball_point(atom.coord, r=dist)
         for idx in neighbors:
             yield self.voxel_tree.data[idx]
 
-    def get_grid_coords_for_residue_by_kdtree(self, residue):
+    def get_closest_grid_coord_for_atom(self, atom):
+        _, neighbors = self.voxel_tree.query([atom.coord])
+        for idx in neighbors:
+            yield self.voxel_tree.data[idx]
+
+    def get_vdw_grid_coords_for_residue(self, residue):
         dist = vdw_aa_radii.get(residue.get_resname(), 3.2)
         center = np.mean([a.get_coord() for a in residue], axis=0)
         neighbors = self.voxel_tree.query_ball_point(center, r=dist)
-        return [self.voxel_tree.data[idx] for idx in neighbors]
+        for idx in neighbors:
+            yield self.voxel_tree.data[idx]
+
+    def get_closest_grid_coord_for_residue(self, residue):
+        center = np.mean([a.get_coord() for a in residue], axis=0)
+        _, neighbors = self.voxel_tree.query([center])
+        for idx in neighbors:
+            yield self.voxel_tree.data[idx]
 
     def rotate(self, rvs=None, num=1):
         for r, M in super().rotate(rvs=rvs, num=num):
@@ -441,6 +455,7 @@ class ProteinVoxelizer(Structure):
         extent_y = np.arange(min_coord[1], max_coord[1], self.voxel_size)
         extent_z = np.arange(min_coord[2], max_coord[2], self.voxel_size)
         mx, my, mz = np.meshgrid(extent_x, extent_y, extent_z)
+
         self.voxel_tree = spatial.cKDTree(list(zip(mx.ravel(), my.ravel(), mz.ravel())))
 
     def convert_voxels(self, grid, radius=2.75, level="A"):
@@ -450,79 +465,6 @@ class ProteinVoxelizer(Structure):
             self.atom_tree = NeighborSearch(list(self.structure.get_atoms()))
 
         return self.atom_tree.search(grid, radius, level=level)
-
-def voxels_to_unknown_structure(coords, data, bucket_size=10):
-    from Bio.PDB.kdtrees import KDTree
-    assert bucket_size > 1
-    assert self.coords.shape[1] == 3
-    kdt = KDTree(coords, bucket_size)
-    neighbors_max = kdt.neighbor_search(1.55) #2.75
-    neighbors_min = kdt.neighbor_search(1.53) #1.3
-
-    neighbors_min = [sorted((n1.index1, n2.index2)) for n in neighbors_min]
-
-    neighbor_atoms = defaultdict(list)
-
-    for neighbor in neighbors_max:
-        i1 = neighbor.index1
-        i2 = neighbor.index2
-
-        if sorted((i1, i2)) in neighbors_min:
-            continue
-
-        voxel1 = data[i1]
-        voxel2 = data[i2]
-
-        atom1_isC = voxel1["hydrophobic"] and not voxel1["aromatic"]
-        atom2_isC = voxel2["hydrophobic"] and not voxel2["aromatic"]
-
-        if atom1_isC and atom2_isC:
-            #Could a CA, CB, or CG?
-            pass
-
-        if atomtype_1 == "C" and atomtype_2 == "C":
-            pass
-
-    #Refold using rosetta CA-CA??
-
-def voxels_to_structure_from_starting_structure(coords, data, starting_structure, starting_data, features=None, diff=True, prefix=None, work_dir=None):
-    reconstructed_features = []
-    for atom in starting_structure.get_atoms():
-        atom = self._remove_altloc(atom)
-
-        atom_orig_feats = []
-        atom_reconstructed_feats = []
-        for atom_grid in self.get_grid_coords_for_atom_by_kdtree(atom):
-            idx = starting_data.index(atom_grid)
-            atom_orig_feats.append(starting_data[idx])
-            atom_reconstructed_feats.append(coords[atom_grid])
-
-        atom_orig_feats = np.avarage(np.concatenate(atom_orig_feats))
-        atom_reconstructed_feats = np.avarage(np.concatenate(atom_reconstructed_feats))
-
-        reconstructed_features_ = atom_reconstructed_feats-atom_orig_feats if diff else atom_reconstructed_feats
-        reconstructed_features.append(reconstructed_features_)
-
-    reconstructed_features = np.concatenate(reconstructed_features, axis=0)
-
-    if features is None:
-        features = range(starting_data.shape[1])
-
-    if prefix is None:
-        prefix = "reconstructed_{}".format(starting_structure.cathdomain)
-
-    if work_dir is None:
-        work_dir = os.getcwd()
-
-    outfiles = []
-
-    for i, feature in enumerate(features):
-        starting_structure.update_bfactors(features[:, i])
-        outfile = os.path.join(work_dir, "{}_{}.pdb".format(prefix, feature))
-        starting_structure.write_pdb(outfile)
-        outfiles.append(outfile)
-
-    return outfiles
 
 if __name__ == "__main__":
   import sys

@@ -60,7 +60,8 @@ vdw_aa_radii = {
  }
 
 from numpy import pi
-surface_areas = {atom:4.*pi*(radius**2) for atom, radius in list(vdw_radii.items())}
+total_surface_areas_with_solvent = {atom:4.*pi*((radius+1.4)**2) for atom, radius \
+    in list(vdw_radii.items())}
 
 maxASA = {"A": 129.0, "R": 274.0, "N": 195.0, "D": 193.0, "C": 167.0, "E": 223.0,
           "Q": 225.0, "G": 104.0, "H": 224.0, "I": 197.0, "K": 201.0, "L": 236.0,
