@@ -3,6 +3,7 @@ import sys
 import re
 import shutil
 import subprocess
+import glob
 
 import numpy as np
 import pandas as pd
@@ -226,6 +227,43 @@ def replace_occ_b(reference, target, occ=1.0, bfactor=20.0, updated_pdb=None):
                       "{:6.2f}".format(bfactor).ljust(6)[:6], file=fh)
 
     return updated_pdb
+
+def normalize_b(pdb_file):
+    pdb_dir = os.path.dirname(pdb_file)
+    bfactor_norm_file = os.path.join(pdb_dir, "bfactor.norm")
+    if os.path.isfile(bfactor_norm_file):
+        with open(bfactor_norm_file) as f:
+            mean, std = map(float, f.read().split())
+    else:
+        mean, std = get_bfactor_norm_mean(pdb_dir)
+
+def get_bfactor_norm_mean(pdb_dir):
+    from scipy.stats import median_absolute_deviation
+    bfactors_file = os.path.join(pdb_dir, "bfactors.txt")
+
+    #Combine all B-facotrs from every PDB
+    with open(bfactors_file, "w") as fh:
+        for pdb_file in glob.glob(os.path.join(pdb_dir, "*.pdb")):
+            pdb_bfactors = "\n".join(line[60:66] for line in \
+                get_atom_lines(pdb_file))
+            print(pdb_bfactors, file=fh)
+
+    bfactors = np.loadtxt(bfactors_file)
+    raw_mean, raw_std = bfactors.mean(), bfactors.std()
+    mad = median_absolute_deviation(bfactors)
+
+    #From Chung, Wang, Bourne. "Exploiting sequence and structure homologs to identify
+    #protein–protein binding sites." Proteins: Structure, Function, Bioinformatics. 2005.
+    #https://doi.org/10.1002/prot.20741
+    M = 0.6745*((bfactors-mean)/mad)
+    bfactors = bfactors[M<=3.5]
+    mean, std = bfactors.mean(), bfactors.std()
+
+    bfactor_norm_file = os.path.join(pdb_dir, "bfactor.norm")
+    with open(bfactor_norm_file, "w") as fh:
+        print("{} {}".format(mean, std), file=fh)
+
+    return mean, std
 
 def s3_download_pdb(pdb, work_dir=None, remove=False):
     if work_dir is None:
