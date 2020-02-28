@@ -5,7 +5,9 @@ import os
 from math import ceil
 import tarfile
 from contextlib import closing
-from molmimic.generate_data.iostore import IOStore
+from molmimic.util.iostore import IOStore
+
+from toil.realtimeLogger import RealtimeLogger
 
 def partitions(l, partition_size):
     """

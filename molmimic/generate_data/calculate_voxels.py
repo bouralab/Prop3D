@@ -7,10 +7,9 @@ from itertools import groupby
 import glob
 import tempfile
 
-from molmimic.generate_data.iostore import IOStore
-from molmimic.generate_data.util import get_file, filter_hdf, filter_hdf_chunks
-from molmimic.generate_data.job_utils import map_job
-from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
+from molmimic.util.iostore import IOStore
+from molmimic.util.hdf import get_file, filter_hdf, filter_hdf_chunks
+from molmimic.util.toil import map_job
 
 from toil.realtimeLogger import RealtimeLogger
 

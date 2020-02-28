@@ -7,10 +7,7 @@ import requests
 #from joblib import Memory
 #memory = Memory(os.getcwd(), verbose=0)
 
-class RealtimeLogger:
-    @staticmethod
-    def info(msg):
-        print(msg)
+from toil.realtimeLogger import RealtimeLogger
 
 class WebService(object):
     def __init__(self, base_url, store, work_dir=None, download=True, clean=True, max_attempts=2):
@@ -115,6 +112,7 @@ class WebService(object):
         except (SystemExit, KeyboardInterrupt) as e:
             raise
         except ValueError as e:
+            raise
             rerun = False
             try:
                 with open(fname) as f:

@@ -7,11 +7,11 @@ class PDBEApi(JSONApi):
         super(PDBEApi, self).__init__(url, store, work_dir=work_dir,
             download=download, max_attempts=max_attempts)
 
-    def fix_key(self, key):
-        return key.lower()
-
     def get_pdb_residues(self, pdb, chain):
-        residues = self.get("residue_listing/{}/chain/{}".format(pdb, chain))
+        residues = self.get("residue_listing/{}/chain/{}".format(pdb.lower(), chain))
+
+        if isinstance(residues, dict) and pdb not in residues:
+            print(residues)
 
         residue_map = {"residueNumber":[], "pdbResidueNumber":[]}
         for molecule in residues[pdb]["molecules"]:

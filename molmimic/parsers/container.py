@@ -72,6 +72,7 @@ class Container(object):
     LOCAL = None
     PARAMETERS = []
     RULES = {}
+    ENTRYPOINT = None
     RETURN_FILES = False
 
     def __init__(self, job=None, return_files=False, force_local=False, fallback_local=False, work_dir=None):
@@ -193,6 +194,7 @@ class Container(object):
         assert self.job is not None
 
         parameters = self.format_parameters(args, kwds)
+        RealtimeLogger.info("Run {} with params {}".format(self.IMAGE, parameters))
 
         image = pullContainer(self.IMAGE, pull_folder=CONTAINER_PATH)
 
@@ -201,6 +203,7 @@ class Container(object):
                 out = containerCall(
                     self.job,
                     image=image,
+                    entrypoint=self.ENTRYPOINT,
                     working_dir="/data",
                     volumes={self.work_dir:{"bind":"/data", "mode":"rw"}},
                     parameters=parameters,

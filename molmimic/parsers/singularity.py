@@ -151,7 +151,7 @@ def apiSingularityCall(job,
         if isinstance(bind, str):
             bind = [bind]
         elif isinstance(bind, tuple):
-            bind = list(tuple)
+            bind = list(bind)
         elif volumes is None and not isinstance(bind, list):
             raise RuntimeError("Bind paths must a single string, tuple or list")
         else:
@@ -233,13 +233,13 @@ def apiSingularityCall(job,
         if runscript is None:
             out = client.run(image=image,
                        args=parameters,
-                       stream=False,
+                       stream=stream,
                        bind=bind,
                        **kwargs)
         else:
             out = client.execute(image=image,
                                  command=command,
-                                 stream=False,
+                                 stream=stream,
                                  bind=bind,
                                  **kwargs)
     except Exception as e:

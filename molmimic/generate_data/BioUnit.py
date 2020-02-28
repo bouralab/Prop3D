@@ -4,8 +4,8 @@ import numpy as np
 import Bio.PDB
 from prodigy.predict_IC import calculate_ic
 
-from molmimic.generate_data.iostore import IOStore
-from molmimic.generate_data.util import rottrans_from_matrix, tidy
+from molmimic.util.iostore import IOStore
+from molmimic.util.pdb import rottrans_from_matrix, tidy
 
 from toil.realtimeLogger import RealtimeLogger
 

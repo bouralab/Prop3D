@@ -47,8 +47,7 @@ def number_of_lines(path):
         numlines = sum([1 for line in f])
     return numlines
 
-
-def SubprocessChain(commands, output):
+def SubprocessChain(commands, output=subprocess.PIPE):
     if len(commands) > 2:
         prev_proc = subprocess.Popen(
             commands[0],
@@ -82,7 +81,6 @@ def SubprocessChain(commands, output):
             stdout=output,
             stderr=subprocess.PIPE,
             env=os.environ)
-        print("Ran 2 commands", commands[1])
         return final_proc.communicate()
     elif len(commands) == 1:
         final_proc = subprocess.Popen(
@@ -93,6 +91,17 @@ def SubprocessChain(commands, output):
     else:
         raise RuntimeError
     return final_proc.communicate()
+
+def safe_remove(files):
+    if isinstance(files, str):
+        files = [str]
+
+    for f in files:
+        if isinstance(f, str) and os.path.exists(f):
+            try:
+                os.remove(f)
+            except (OSError, FileNotFoundError):
+                pass
 
 @contextmanager
 def silence_stdout():

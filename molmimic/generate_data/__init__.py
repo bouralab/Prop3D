@@ -1,3 +1,4 @@
+
 def start_toil(option, use_data=False):
     from molmimic.generate_data import download_data
     from molmimic.generate_data import convert_mmdb_to_pdb
@@ -27,7 +28,7 @@ def start_toil(option, use_data=False):
 if __name__ == "__main__":
     from toil.common import Toil
     from toil.job import Job
-    
+
     parser = Job.Runner.getDefaultArgumentParser()
     options = parser.parse_args()
     options.logLevel = "DEBUG"

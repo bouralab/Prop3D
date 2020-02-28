@@ -6,20 +6,15 @@ from itertools import cycle
 from joblib import Memory
 from docker.errors import ImageNotFound, ContainerError
 
-from molmimic.util import silence_stdout, silence_stderr, SubprocessChain
-from molmimic.util.pdb import get_all_chains, extract_chains, PDB_TOOLS
+from molmimic.util import silence_stdout, silence_stderr, SubprocessChain, safe_remove
+from molmimic.util.pdb import get_all_chains, extract_chains, get_atom_lines, \
+    replace_occ_b, PDB_TOOLS
 from molmimic.util.pdb import remove_ter_lines as _remove_ter_lines
 from molmimic.parsers.psize import Psize
 
 from molmimic.parsers.container import Container
 
-# try:
-#     from toil.lib.docker import apiDockerCall
-# except ImportError:
-#     apiDockerCall = None
-#     pdb2pqr_src = os.path.join(os.path.dirname(subprocess.check_output(["which", "pdb2pqr"])), "src")
-#     if pdb2pqr_src:
-#         sys.path.append(pdb2pqr_src)
+from toil.realtimeLogger import RealtimeLogger
 
 memory = Memory(verbose=0)
 
@@ -56,9 +51,18 @@ class APBS(Container):
         input_file, out_file = self.write_apbs_electrostatics_input(pqr_file)
         self.files_to_remove.append(input_file)
 
-        self.running_atom_potentials = True
-        atom_pot_file = self(in_file=input_file)
-        self.running_atom_potentials = False
+        try:
+            self.running_atom_potentials = True
+            atom_pot_file = self(in_file=input_file)
+            self.running_atom_potentials = False
+        except RuntimeError as e:
+            if "Problem opening virtual socket" in str(e):
+                try:
+                    with open(pqr_file) as f:
+                        raise RuntimeError("{} \n PQR file: {}".format(str(e), f.read()))
+                except:
+                    pass
+            raise e
 
         return atom_pot_file
 
@@ -84,8 +88,6 @@ class APBS(Container):
       output_prefix=None):
         base = os.path.basename(pqr_file)
         ouput_input_prefix = ouput_input_prefix or base+".apbs_input"
-        pqr_path = self.format_in_path(None, ouput_input_prefix)
-
         output_prefix = output_prefix or base+".apbs_output.txt"
         pot_path = self.format_out_path(None, output_prefix)
         with open(ouput_input_prefix, "w") as f:
@@ -93,10 +95,11 @@ class APBS(Container):
             f.write(contents)
         return ouput_input_prefix, pot_path
 
-    @staticmethod
-    def make_apbs_electrostatics_input(pqr_file, output_prefix):
+    def make_apbs_electrostatics_input(self, pqr_file, output_prefix):
         ps = Psize()
         ps.runPsize(pqr_file)
+        pqr_path = self.format_in_path(None, pqr_file)
+
         cglen = "{:.2f} {:.2f} {:.2f}".format(*ps.getCoarseGridDims())
         fglen = "{:.2f} {:.2f} {:.2f}".format(*ps.getFineGridDims())
         dime = "{:d} {:d} {:d}".format(*ps.getFineGridPoints())
@@ -128,7 +131,7 @@ class APBS(Container):
     end
     quit
     """.format(
-        pqr=os.path.basename(pqr_file),
+        pqr=pqr_path,
         dime=dime,
         cglen=cglen,
         fglen=fglen,
@@ -156,13 +159,43 @@ class Pdb2pqr(Container):
                 return None
             raise
 
-    def create_tidy_pqr(self, pdb_file, remove_ter_lines=True, **kwds):
+    def create_tidy_pqr(self, pdb_file, remove_ter_lines=True, keep_occ_and_b=None, **kwds):
+        """Run pdb2pqr for a given pdb_file.
+
+        Parameters
+        ----------
+        pdb_file : str
+            Path to pdb file
+        remove_ter_lines : bool
+            Remove TER lines before running since pdb2pqr may choke on them.
+            Default True.
+        keep_occ_and_b : None, bool, or 2-tuple
+            Replace the new partial charge and radius fields with original
+            occupancy and bfactor values and create new occupancy and bfactor
+            values for added hydrogens in order to create a valid PDB file with
+            standard column sizes.
+                None, False: keep the partial charge and radius fields
+                True: Replace fields with originals and new hydogens get an
+                    occupancy of 1.0 and bfactor of 20.0
+                2-tuple (occupancy, bfactor): Replace fields with originals and
+                    new hydogens get the first tuple value, bfactors get the
+                    second tuple value.
+        **kwds:
+            Paramters to pass to pdb2pqr.
+
+        Returns
+        -------
+        A path the the new pqr file
+        """
+
         save_chains = "".join(list(sorted(get_all_chains(pdb_file))))
         full_pdb_path = _remove_ter_lines(pdb_file) if remove_ter_lines else pdb_file
-        pqr_file = "{}.pqr".format(os.path.basename(pdb_file))
+        pqr_file = "{}.pqr".format(os.path.basename(full_pdb_path))
 
         #Whitespace must be False to ensure correct PDB file
-        kwds["whitespace"] = False
+        kwds.pop("whitespace", None)
+
+        #Make sure chain is True
         kwds["chain"] = True
 
         self(pdb_file, pqr_file, **kwds)
@@ -174,11 +207,13 @@ class Pdb2pqr(Container):
         with open(tidy_file, "w") as f:
             SubprocessChain(cmds, f)
 
-        try:
-            os.remove(pqr_file)
-        except OSError:
-            pass
+        safe_remove(pqr_file)
         shutil.move(tidy_file, pqr_file)
+
+        if keep_occ_and_b:
+            occ_b_file = replace_occ_b(pdb_file, pqr_file)
+            safe_remove(pqr_file)
+            shutil.move(occ_b_file, pqr_file)
 
         return pqr_file
 

@@ -1,20 +1,41 @@
+import os
 import shutil
 import yaml
 
 from molmimic.parsers.json import JSONApi
 
 class CATHApi(JSONApi):
-    def __init__(self, cath_store, work_dir=None, download=True, clean=True, max_attempts=2):
-        super(self, CATHApi).__init__("https://www.cathdb.info/version/v4_2_0/api/rest/",
-            cath_store, work_dir=work_dir, download=download, clean=clean,
+    def __init__(self, cath_store, work_dir=None, download=True, max_attempts=2):
+        super().__init__("https://www.cathdb.info/version/v4_2_0/",
+            cath_store, work_dir=work_dir, download=download, clean=False,
             max_attempts=max_attempts)
 
     def parse(self, file_path, key):
         if ".pdb" in key:
-            return self.parse_pdb(file_path)
+            #Make sure file can open and is PDB file
+            with open(file_path) as f:
+                for line in f:
+                    if line.startswith("ATOM"):
+                        break
+                else:
+                    raise ValueError("{} not a PDB file".format(file_path))
+
+            #Make sure raw files aren't removed
+            if key not in self.files:
+                self.files[key] = (file_path, False)
+
+            return file_path
         elif ".png" in key or "stockholm" in key:
+            if os.path.getsize(file_path) == 0:
+                raise ValueError("{} is empty".format(file_path))
+
+            #Make sure raw files aren't removed
+            if key not in self.files:
+                self.files[key] = (file_path, False)
+
             #Don't read in image or alingment
             return file_path
+
         elif "from_cath_id_to_depth" in key or "cluster_summary_data" in data:
             with open(file_path) as fh:
                 return yaml.safe_load(fh)
@@ -24,7 +45,7 @@ class CATHApi(JSONApi):
 
     def parse_pdb(self, domain_file):
         try:
-            with open(domain_file) as f, open(domain_file+".atom") as f2:
+            with open(domain_file) as f, open(domain_file+".atom", "w") as f2:
                 for line in f:
                     if line.startswith("ATOM"):
                         print(line.rstrip(), file=f2)
@@ -49,16 +70,20 @@ class CATHApi(JSONApi):
 
 
     def extension(self, key):
-        if ".pdb" in key:
-            return return ".pdb"
-        elif ".png" in key:
-            return ".png"
+        if ".pdb" in key or ".png" in key:
+            return ""
         elif "stockholm" in key:
             return ".sto"
         elif "from_cath_id_to_depth" in key or "cluster_summary_data" in data:
             return ".yaml"
         else:
             return ".json"
+
+    def get(self, key, no_api=False):
+        if no_api:
+            return self.get(key)
+        else:
+            return self.get("api/rest/"+key)
 
     def get_domain_pdb_file(self, cath_domain):
         return self.get("id/{}.pdb".format(cath_domain))
@@ -74,7 +99,7 @@ class CATHApi(JSONApi):
         return self.get("superfamily/{}".format(superfamily))
 
     def get_superfamily_clusters(self, superfamily):
-        return self.get("superfamily/{}/cluster_summary_data".format(superfamily))
+        return self.get("superfamily/{}/cluster_summary_data".format(superfamily), no_api=True)
 
     #Functional Families (FunFams)
     def list_funfams_in_superfamily(self, superfamily):

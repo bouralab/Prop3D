@@ -57,7 +57,7 @@ def is_ca_model(pdb_file):
     try:
         with open(pdb_file) as f:
             for line in f:
-                if line.startswith("ATOM") and line[13:15] != "CA":
+                if line.startswith("ATOM") and line[13:16] != 'CA ':
                     return False
         return True
     except IOError:
@@ -191,6 +191,39 @@ def remove_ter_lines(pdb_file, updated_pdb=None):
         for line in f:
             if not line.startswith("TER"):
                 updated.write(line)
+
+    return updated_pdb
+
+def build_atom_unique_id(atom_line):
+    """Returns a unique identifying tuple from an ATOM line. From pdb_tools"""
+
+    # unique_id: (name, altloc, resi, insert, chain, segid)
+    unique_id = (atom_line[12:16],
+                 atom_line[16],
+                 int(atom_line[22:26]),
+                 atom_line[26], atom_line[21],
+                 atom_line[72:76].strip())
+
+    return unique_id
+
+def replace_occ_b(reference, target, occ=1.0, bfactor=20.0, updated_pdb=None):
+    assert occ<999999
+    assert bfactor<999999
+
+    if updated_pdb is None:
+        updated_pdb = "{}.occ_b.pdb".format(os.path.splitext(target)[0])
+
+    reference_lines = {build_atom_unique_id(line):line for line in \
+        get_atom_lines(reference)}
+
+    with open(updated_pdb, "w") as fh:
+        for line in get_atom_lines(target):
+            atom_id = build_atom_unique_id(line)
+            if atom_id in reference_lines:
+                print(line[:54]+reference_lines[atom_id][54:].rstrip(), file=fh)
+            else:
+                print(line[:54]+"{:6.2f}".format(occ).ljust(6)[:6]+\
+                      "{:6.2f}".format(bfactor).ljust(6)[:6], file=fh)
 
     return updated_pdb
 

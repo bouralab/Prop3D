@@ -18,12 +18,11 @@ except ImportError:
 
 from Bio.PDB.Polypeptide import three_to_one
 
-from molmimic.generate_data.iostore import IOStore
-from molmimic.generate_data.util import iter_unique_superfams, get_file, \
-    filter_hdf, filter_hdf_chunks, natural_keys
-from molmimic.generate_data.job_utils import map_job, map_job_rv, map_job_rv_list
-from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
-#from molmimic.generate_data.parse_cath import run_cath_hierarchy
+from molmimic.util.iostore import IOStore
+from molmimic.util.hdf import get_file, filter_hdf, filter_hdf_chunks
+from molmimic.util import natural_keys
+from molmimic.util.toil import map_job, map_job_rv, map_job_rv_list
+from molmimic.util.cath import run_cath_hierarchy
 from molmimic.parsers.eppic import EPPICApi
 
 from toil.realtimeLogger import RealtimeLogger
@@ -32,11 +31,8 @@ logging.getLogger('boto3').setLevel(logging.WARNING)
 logging.getLogger('botocore').setLevel(logging.WARNING)
 logging.getLogger('s3transfer').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
-#
-# pd.set_option('display.max_columns', None)
-# pd.set_option('display.max_rows', None)
 
-# Helper fubtions for pandas apply
+# Helper funtions for pandas apply
 
 def collapse_binding_site(df):
     columns = ["pdb", "interfaceId", "firstChain", "secondChain"]

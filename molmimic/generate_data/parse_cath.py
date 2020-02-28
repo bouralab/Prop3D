@@ -1,96 +1,27 @@
-from __future__ import print_function
 import os
 import re
 import glob
+import logging
+import shutil
 from collections import defaultdict
 from itertools import groupby
 from multiprocessing.pool import Pool
 
-import logging
-import shutil
 
-# import dask
-# import dask.dataframe as dd
 import requests
 import pandas as pd
-#from joblib import Parallel, delayed
+
 from botocore.exceptions import ClientError
 
-from molmimic.generate_data.iostore import IOStore
+from molmimic.util.iostore import IOStore
 from molmimic.generate_data.job_utils import map_job
-from molmimic.generate_data.util import get_file, filter_hdf, filter_hdf_chunks, get_atom_lines
+from molmimic.util.cath import run_cath_hierarchy, download_cath_domain
+from molmimic.util.hdf import get_file, filter_hdf, filter_hdf_chunks
 
 from toil.realtimeLogger import RealtimeLogger
 
-#dask.config.set(pool=Pool(20))
-
-def run_cath_hierarchy(job, func, cathcode, cathFileStoreID, **kwds):
-    work_dir = job.fileStore.getLocalTempDir()
-    further_parallelize = kwds.get("further_parallelize", True)
-    level = kwds.get("level", 4)
-
-    cath_path = get_file(job, "cath.h5", cathFileStoreID, work_dir=work_dir)
-
-    cath_names = ["class", "architechture", "topology", "homology"]
-    cathcode = dict(zip(cath_names, cathcode))
-    cath_names = cath_names[:len(cathcode)+1]
-
-    cathcodes = filter_hdf_chunks(
-        cath_path,
-        "table",
-        columns=cath_names,
-        drop_duplicates=True,
-        **cathcode)[cath_names]
-
-    RealtimeLogger.info("cathcode {} {} {}".format(cathcode, cath_names, cathcodes.columns))
-
-    if len(cathcodes.columns) < level:
-        map_job(job, func, cathcodes.values, cathFileStoreID, **kwds)
-        RealtimeLogger.info("Running {} {}s".format(len(cathcodes), cathcodes.columns[-1]))
-    else:
-        sfams = (cathcodes.astype(int).astype(str)+"/").sum(axis=1).str[:-1].tolist()
-        RealtimeLogger.info("Running sfam {}".format(cathcode))
-        kwds.pop("further_parallelize")
-        kwds.pop("level")
-        map_job(job, func, sfams, update_features, **kwds)
-
-    try:
-        os.remove(cath_path)
-    except (FileNotFoundError, OSError):
-        pass
-
-cath_desc = {
-    "cath_domain":str,
-    "pdb":str,
-    "chain": str,
-    "domain": str,
-    "version": str,
-    "verdate": str,
-    "name": str,
-    "source": str,
-    "cathcode": str,
-    "class": int,
-    "architecture": int,
-    "topology": int,
-    "homology": int,
-    "class_name": str,
-    "architechture_name": str,
-    "topology_name": str,
-    "homology_name": str,
-    "dlength": int,
-    "dseqh": str,
-    "dseqs": str,
-    "nsegments": int,
-    "nseg": int,
-    "segment": str,
-    "srange_start": str,
-    "srange_stop": str,
-    "slength": int,
-    "sseqh": str,
-    "sseqs": str
-}
-
-def download_sfam(job, sfam_id, cathFileStoreID, download_all=False, check=False, skip_ids=None, further_parallelize=True):
+def download_superfamily(job, sfam_id, cathFileStoreID, download_all=False,
+  check_if_downloaded=False, skip_ids=None, further_parallelize=True):
     work_dir = job.fileStore.getLocalTempDir()
     cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
 
@@ -103,7 +34,7 @@ def download_sfam(job, sfam_id, cathFileStoreID, download_all=False, check=False
 
     cath_store = IOStore.get("aws:us-east-1:molmimic-cath-structure")
 
-    if not check:
+    if not check_if_downloaded:
         done_domains = set(os.path.basename(k)[:-4] for k in \
             cath_store.list_input_directory(sfam_id.replace(".", "/")) \
             if k.endswith(".pdb"))
@@ -142,55 +73,36 @@ def download_sfam(job, sfam_id, cathFileStoreID, download_all=False, check=False
                 RealtimeLogger.info(tb)
                 continue
 
-def is_valid_pdb(domain_file, cath_key=None, cath_store=None):
-    if cath_store is not None:
-        cath_store.read_input_file(cath_key, domain_file)
-
-    for line in get_atom_lines(domain_file):
-        valid_pdb = True
-        break
-    else:
-        valid_pdb = False
-
-    if cath_store is not None:
-        try:
-            os.remove(domain_file)
-        except OSError:
-            pass
-
-    return valid_pdb
-
-def download_cath_domain(job, cath_domain, sfam_id, check=False, work_dir=None):
-    if work_dir is None and job is None:
-        work_dir = os.getcwd()
-    elif job is not None:
-        work_dir = job.fileStore.getLocalTempDir()
-
-    RealtimeLogger.info("RUNNING {}/{}".format(sfam_id, cath_domain))
-
-    cath_store = IOStore.get("aws:us-east-1:molmimic-cath-structure")
-    cath_key = "{sfam_id}/{cath_domain}.pdb".format(
-        sfam_id=sfam_id.replace(".", "/"),
-        cath_domain=cath_domain)
-    domain_file = os.path.join(work_dir, "{}.pdb".format(cath_domain))
-
-    if check and cath_store.exists(cath_store):
-        if is_valid_pdb(domain_file, cath_key, cath_store):
-            return
-
-    if check or not cath_store.exists(cath_store):
-        url = "https://www.cathdb.info/version/v4_2_0/api/rest/id/{}.pdb".format(
-            cath_domain)
-        with requests.get(url, stream=True) as r, open(domain_file, 'wb') as f:
-            shutil.copyfileobj(r.raw, f)
-
-        if check and is_valid_pdb(domain_file):
-            cath_store.write_output_file(domain_file, cath_key)
-
-        try:
-            os.remove(domain_file)
-        except OSError:
-            pass
+cath_desc = {
+    "cath_domain":str,
+    "pdb":str,
+    "chain": str,
+    "domain": str,
+    "version": str,
+    "verdate": str,
+    "name": str,
+    "source": str,
+    "cathcode": str,
+    "class": int,
+    "architecture": int,
+    "topology": int,
+    "homology": int,
+    "class_name": str,
+    "architechture_name": str,
+    "topology_name": str,
+    "homology_name": str,
+    "dlength": int,
+    "dseqh": str,
+    "dseqs": str,
+    "nsegments": int,
+    "nseg": int,
+    "segment": str,
+    "srange_start": str,
+    "srange_stop": str,
+    "slength": int,
+    "sseqh": str,
+    "sseqs": str
+}
 
 def parse_cath_chunk(job, chunk_info, cath_file, chunk_size=100):
     work_dir = job.fileStore.getLocalTempDir()

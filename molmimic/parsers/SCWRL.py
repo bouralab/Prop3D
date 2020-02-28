@@ -10,10 +10,10 @@ from joblib import Memory
 #     apiDockerCall = None
 #     import subprocess
 
-from molmimic.parser.container import Container
+from molmimic.parsers.container import Container
 
 class SCWRL(Container):
-    IMAGE = 'edraizen/scwrl4:latest'
+    IMAGE = 'docker://edraizen/scwrl4:latest'
     LOCAL = ["scwrl4"]
     PARAMETERS = [
         "-i", ("in_file", "path:in"),
@@ -26,6 +26,11 @@ class SCWRL(Container):
         (":remove_h_n_term", "store_true", "-t"),
         ]
     RETURN_FILES = True
+
+    def fix_rotamers(self, in_file, out_file=None, **kwds):
+        if out_file is None:
+            out_file = os.path.splitext(in_file)[0]+".scwrl.pdb"
+        return self(in_file, out_file, **kwds)
 
 # def run_scwrl(pdb_file, output_prefix=None, framefilename=None, sequencefilename=None,
 #   paramfilename=None, in_cystal=False, remove_hydrogens=False, remove_h_n_term=False,

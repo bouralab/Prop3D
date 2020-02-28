@@ -7,9 +7,9 @@ import glob
 
 import pandas as pd
 
-from molmimic.generate_data.iostore import IOStore
-from molmimic.generate_data.util import get_file, filter_hdf, filter_hdf_chunks
-from molmimic.generate_data.job_utils import map_job
+from molmimic.util.iostore import IOStore
+from molmimic.util.hdf import get_file, filter_hdf, filter_hdf_chunks
+from molmimic.util.toil import map_job
 from molmimic.torch_model.torch_train import train
 
 def normalize(job, features, work_dir=None):
@@ -54,7 +54,7 @@ def normalize(job, features, work_dir=None):
         features[:, raw] = minmax_scaled
         np.save(base+".minmaxscaled.npy", features)
         del features
-        
+
 def cluster_by_structure(job, sfam, structures, work_dir=None):
     from molmimic.parsers.MaxCluster import run_maxcluster, get_centroid
     from molmimic.generate_data.util import PDB_TOOLS, SubprocessChain
@@ -187,13 +187,13 @@ def compare_clusters(job, seq_clusters, struct_clusters):
     seq_clusters = seq_clusters[["label_query", "cluster"]].rename(columns={
         "label_query":"pdb_file", "cluster":"sequence_cluster"})
     clusters = pd.merge(seq_clusters, struct_clusters, on="pdb_file")
-    
-        
+
+
 def cluster(job, structures_data):
     seq_job = job.addChildJobFn(cluster_by_sequence, structures_data)
     struct_job = job.addChildJobFn(cluster_by_structre, structures_data["structures"])
     job.addFollowOnJobFn(compare_clusters, seq_job.rv(), struct_job.rv())
-    
+
 def start_sae(job, sfam_id, work_dir=None, sae=True):
     if work_dir is None and job is not None:
         work_dir = job.fileStore.getLocalTempDir()
@@ -202,7 +202,7 @@ def start_sae(job, sfam_id, work_dir=None, sae=True):
     # pdb_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
     # feature_store = IOStore.get("aws:us-east-1:molmimic-structure-features")
     #sae_store = IOStore.get("aws:us-east-1:molmimic-structure-features")
-    
+
     #if not sae:
     #    ibis_store = IOStore.get("aws:us-east-1:molmimic-interfaces-1")
     #
@@ -220,10 +220,10 @@ def start_sae(job, sfam_id, work_dir=None, sae=True):
     sfam_id = str(int(sfam_id))
     #for feature_key in feature_store.list_input_directory(sfam_id):
         #if feature_key.endswith("atom.npy"):
-        
+
     int_file = os.path.join(work_dir, "interfaces", "{}.observed_interactome".format(sfam_id))
     ibis_df = pd.read_hdf(int_file, "table")
-    
+
     for feature_file in glob.glob(os.path.join(work_dir, "features", sfam_id, "*", "*_atom.npy")):
         if True:
             print(feature_file)
@@ -252,17 +252,17 @@ def start_sae(job, sfam_id, work_dir=None, sae=True):
 
             if not os.path.isfile(pdb_file):
                 print("Skipping "+os.path.basename(feature_file[:-8]))
-                
+
             datum = [key, pdb, chain, sdi, domNo, pdb_file, feature_file]
-            
+
             if not sae:
                 curr_int = ibis_df[ibis_df["mol_sdi_id"]==int(sdi)]
                 res = set([r for res in curr_int["mol_res"] for r in res.split(",")])
                 if len(res) == 0:
                     continue
-                    
+
                 datum.append(",".join(map(str, sorted(res))))
-                
+
             data.append(datum)
 
     data_key = os.path.join(sfam_id, "autoencoder_keys.csv")
@@ -276,7 +276,7 @@ def start_sae(job, sfam_id, work_dir=None, sae=True):
     #sae_store.write_output_file(data_file, data_key)
     del df
     del data
-    
+
     if not sae:
         return data_file
 
