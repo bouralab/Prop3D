@@ -228,7 +228,7 @@ def replace_occ_b(reference, target, occ=1.0, bfactor=20.0, updated_pdb=None):
 
     return updated_pdb
 
-def normalize_b(pdb_file):
+def normalize_b(b):
     pdb_dir = os.path.dirname(pdb_file)
     bfactor_norm_file = os.path.join(pdb_dir, "bfactor.norm")
     if os.path.isfile(bfactor_norm_file):
@@ -237,8 +237,15 @@ def normalize_b(pdb_file):
     else:
         mean, std = get_bfactor_norm_mean(pdb_dir)
 
-def get_bfactor_norm_mean(pdb_dir):
+    return ((b-mean)/std)
+
+def get_bfactor_norm_mean(pdb_dir, force=False):
     from scipy.stats import median_absolute_deviation
+    bfactor_norm_file = os.path.join(pdb_dir, "bfactor.norm")
+
+    if not force and os.path.isfile(bfactor_norm_file):
+        return
+
     bfactors_file = os.path.join(pdb_dir, "bfactors.txt")
 
     #Combine all B-facotrs from every PDB
@@ -259,7 +266,6 @@ def get_bfactor_norm_mean(pdb_dir):
     bfactors = bfactors[M<=3.5]
     mean, std = bfactors.mean(), bfactors.std()
 
-    bfactor_norm_file = os.path.join(pdb_dir, "bfactor.norm")
     with open(bfactor_norm_file, "w") as fh:
         print("{} {}".format(mean, std), file=fh)
 
