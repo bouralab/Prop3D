@@ -19,7 +19,7 @@ from molmimic.parsers.FreeSASA import run_freesasa_biopython
 from molmimic.parsers.Electrostatics import APBS, Pdb2pqr
 from molmimic.parsers.cx import CX
 from molmimic.parsers.dssp import DSSP
-from molmimic.parsers.eppic import EPPICApi
+from molmimic.parsers.eppic import EPPICApi, EPPICLocal
 
 from molmimic.common.Structure import Structure, angle_between, get_dihedral
 from molmimic.common.ProteinTables import hydrophobicity_scales
@@ -60,6 +60,13 @@ class ProteinFeaturizer(Structure):
             if self.atom_feature_mode == "w+" or self.update_features is not None:
                 self.write_features()
             return features, self.atom_features_file
+
+    def calculate_flat_residue_features(self, only_aa=False, only_atom=False,
+      non_geom_features=False, use_deepsite_features=False):
+        return self.calculate_flat_features(coarse_grained=True,
+            only_aa=only_aa, only_atom=only_atom,
+            non_geom_features=non_geom_features,
+            use_deepsite_features=use_deepsite_features)
 
     def write_features(self, coarse_grained=False):
         if coarse_grained:
@@ -653,7 +660,7 @@ class ProteinFeaturizer(Structure):
         return self.atom_features.loc[idx, cols]
 
     def get_evolutionary_conservation_score(self, atom_or_residue, eppic=True,
-      only_bool=False):
+      only_bool=False, run_eppic_for_domain_on_failure=False):
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             use_atom = True
             atom = atom_or_residue
@@ -679,9 +686,19 @@ class ProteinFeaturizer(Structure):
         if not hasattr(self, "_eppic"):
             pdbe_store = IOStore.get("aws:us-east-1:molmimic-pdbe-service")
             eppic_store = IOStore.get("aws:us-east-1:molmimic-eppic-service")
-            eppic_api = EPPICApi(self.pdb, eppic_store, pdbe_store,
-                use_representative_chains=False, work_dir=self.work_dir)
-            self._eppic = eppic_api.get_entropy_scores(self.chain)
+
+            try:
+                eppic_api = EPPICApi(self.pdb, eppic_store, pdbe_store,
+                    use_representative_chains=False, work_dir=self.work_dir)
+                self._eppic = eppic_api.get_entropy_scores(self.chain)
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except:
+                if run_eppic_for_domain_on_failure:
+                    eppic_local = EPPICLocal(work_dir=self.work_dir, job=self.job)
+                    self._eppic = eppic_local.get_entropy_scores(self.path)
+                else:
+                    self._eppic = {}
 
         result = pd.Series(np.empty(len(cols)), index=cols, dtype=np.float64)
         result["eppic_entropy"] = self._eppic.get(residue.get_id(), np.nan)
@@ -708,7 +725,7 @@ class ProteinFeaturizer(Structure):
 
         edge_file = os.path.join(self.work_dir, "{}.edges.gz".format(self.id))
         nx.write_edgelist(structure_graph, edge_file)
-        return edge_file
+        return structure_graph, edge_file
 
     def get_edge_features(self, r1, r2):
         r1_pos = np.array([self._remove_altloc(a).get_coord() for a in r1]).mean(axis=0)

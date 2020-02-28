@@ -2,6 +2,7 @@ import os
 import yaml
 from collections import OrderedDict
 import pandas as pd
+import numpy as np
 
 with open(os.path.join(os.path.dirname(__file__), "features.yaml")) as fh:
     features = yaml.safe_load(fh)
@@ -16,13 +17,13 @@ default_atom_features = pd.Series(
     {feature["name"]:feature["default"] for category in features for \
         feature in list(category.values())[0]},
     index=atom_features,
-    dtype=pd.np.float64)
+    dtype=np.float64)
 
 default_residue_features = pd.Series(
     {feature["name"]:feature["default"] for category in features for \
         feature in list(category.values())[0] if feature["residue"]},
     index=residue_features,
-    dtype=pd.np.float64)
+    dtype=np.float64)
 
 atom_bool_features = [feature["name"] for category in features for feature in \
     list(category.values())[0] if feature["bool"]]

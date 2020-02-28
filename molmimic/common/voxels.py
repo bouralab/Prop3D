@@ -100,7 +100,8 @@ class ProteinVoxelizer(Structure):
     def map_atoms_to_voxel_space(self, binding_site_residues=None,
       include_full_protein=True, only_aa=False, only_atom=False,
       use_deepsite_features=False, non_geom_features=False,
-      only_surface=True, autoencoder=False, return_voxel_map=False, nClasses=2):
+      only_surface=True, autoencoder=False, return_voxel_map=False,
+      return_b=False, nClasses=2):
         """Map atoms to sparse voxel space.
 
         Parameters
@@ -152,6 +153,8 @@ class ProteinVoxelizer(Structure):
 
         voxel_map = {}
 
+        b_factors_voxels = {}
+
         skipped = 0
         skipped_inside = []
 
@@ -163,6 +166,7 @@ class ProteinVoxelizer(Structure):
             neg_value_ = np.array([0.])
         elif nClasses == "sfams":
             pass
+
 
         for atom in atoms:
             atom = self._remove_altloc(atom)
@@ -212,6 +216,7 @@ class ProteinVoxelizer(Structure):
                     raise
                 truth_voxels[atom_grid] = truth_value
                 voxel_map[atom_grid] = atom.get_parent().get_id()
+                b_factors_voxels[atom_grid] = atom.b
 
 
         #assert len(list(data_voxels)) > 0, (self.pdb, self.chain, self.sdi, data_voxels, list(data_voxels), np.array(list(data_voxels)), skipped, nAtoms, skipped_inside)
@@ -232,7 +237,14 @@ class ProteinVoxelizer(Structure):
             print(e)
             raise
 
-        outputs.append(np.array(list(voxel_map.values())) if return_voxel_map else None)
+        if return_voxel_map:
+            outputs.append(np.array(list(voxel_map.values())))
+        else:
+            outputs.append(None)
+
+        if return_b:
+            outputs.append(np.array(list(b_factors_voxels.values())))
+
         return outputs
 
     def map_residues_to_voxel_space(self, binding_site_residues=None, include_full_protein=False, non_geom_features=True, only_aa=False, use_deepsite_features=False, undersample=False):
