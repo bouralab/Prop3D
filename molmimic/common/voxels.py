@@ -47,10 +47,12 @@ class ProteinVoxelizer(Structure):
             'torch.FloatTensor'
         label_dtype = dtype if autoencoder else dtypei
 
-        indices, data, truth, voxel_map = self.map_atoms_to_voxel_space(
+        indices, data, truth, voxel_map, serial, bfactors = self.map_atoms_to_voxel_space(
             autoencoder=autoencoder,
             only_surface=only_surface,
-            return_voxel_map=return_voxel_map
+            return_voxel_map=return_voxel_map,
+            return_b=True,
+            return_serial=True
             )
         inputs = [
             torch.from_numpy(indices).type(dtypei),
@@ -101,7 +103,7 @@ class ProteinVoxelizer(Structure):
       include_full_protein=True, only_aa=False, only_atom=False,
       use_deepsite_features=False, non_geom_features=False,
       only_surface=True, autoencoder=False, return_voxel_map=False,
-      return_b=False, nClasses=2):
+      return_serial=False, return_b=False, nClasses=2):
         """Map atoms to sparse voxel space.
 
         Parameters
@@ -154,6 +156,7 @@ class ProteinVoxelizer(Structure):
         voxel_map = {}
 
         b_factors_voxels = {}
+        serial_number_voxels = {}
 
         skipped = 0
         skipped_inside = []
@@ -216,7 +219,8 @@ class ProteinVoxelizer(Structure):
                     raise
                 truth_voxels[atom_grid] = truth_value
                 voxel_map[atom_grid] = atom.get_parent().get_id()
-                b_factors_voxels[atom_grid] = atom.b
+                b_factors_voxels[atom_grid] = atom.bfactor
+                serial_number_voxels[atom_grid] = atom.serial_number
 
 
         #assert len(list(data_voxels)) > 0, (self.pdb, self.chain, self.sdi, data_voxels, list(data_voxels), np.array(list(data_voxels)), skipped, nAtoms, skipped_inside)
@@ -239,6 +243,11 @@ class ProteinVoxelizer(Structure):
 
         if return_voxel_map:
             outputs.append(np.array(list(voxel_map.values())))
+        else:
+            outputs.append(None)
+
+        if return_serial:
+            outputs.append(np.array(list(serial_number_voxels.values())))
         else:
             outputs.append(None)
 
