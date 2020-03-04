@@ -229,13 +229,11 @@ def replace_occ_b(reference, target, occ=1.0, bfactor=20.0, updated_pdb=None):
     return updated_pdb
 
 def normalize_b(b):
-    pdb_dir = os.path.dirname(pdb_file)
-    bfactor_norm_file = os.path.join(pdb_dir, "bfactor.norm")
-    if os.path.isfile(bfactor_norm_file):
-        with open(bfactor_norm_file) as f:
+    if os.path.isfile("bfactor.norm"):
+        with open("bfactor.norm") as f:
             mean, std = map(float, f.read().split())
     else:
-        mean, std = get_bfactor_norm_mean(pdb_dir)
+        raise RuntimeError("Must call get_bfactor_norm_mean before this")
 
     return ((b-mean)/std)
 
@@ -251,7 +249,7 @@ def get_bfactor_norm_mean(pdb_dir, force=False):
     #Combine all B-facotrs from every PDB
     with open(bfactors_file, "w") as fh:
         for pdb_file in glob.glob(os.path.join(pdb_dir, "*.pdb")):
-            pdb_bfactors = "\n".join(line[60:66] for line in \
+            pdb_bfactors = "\n".join(line[60:66].strip() for line in \
                 get_atom_lines(pdb_file))
             print(pdb_bfactors, file=fh)
 
@@ -262,7 +260,7 @@ def get_bfactor_norm_mean(pdb_dir, force=False):
     #From Chung, Wang, Bourne. "Exploiting sequence and structure homologs to identify
     #protein–protein binding sites." Proteins: Structure, Function, Bioinformatics. 2005.
     #https://doi.org/10.1002/prot.20741
-    M = 0.6745*((bfactors-mean)/mad)
+    M = 0.6745*((bfactors-raw_mean)/mad)
     bfactors = bfactors[M<=3.5]
     mean, std = bfactors.mean(), bfactors.std()
 
