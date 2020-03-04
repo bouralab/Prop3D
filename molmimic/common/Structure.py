@@ -286,9 +286,11 @@ class Structure(object):
             old_coords = self.get_coords()
             coords = np.dot(self.get_coords(), M)
             self.update_coords(coords)
-            assert not np.array_equal(old_coords, self.get_coords()), M
+            # if rvs is None or rvs!=np.eye(3):
+            #     assert not np.array_equal(old_coords, self.get_coords()), M
             self.shift_coords_to_volume_center()
-            assert not np.array_equal(coords, self.get_coords()), M
+            # if rvs is None or rvs!=np.eye(3):
+            #     assert not np.array_equal(coords, self.get_coords()), M
             yield r, M
 
     def update_coords(self, coords):
