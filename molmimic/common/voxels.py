@@ -151,12 +151,12 @@ class ProteinVoxelizer(Structure):
             coarse_grained=False)
 
         data_voxels = defaultdict(lambda: np.zeros(nFeatures if self.use_features is None else len(self.use_features)))
-        truth_voxels = {}
+        truth_voxels = {} #defaultdict(list)
 
-        voxel_map = {}
+        voxel_map = defaultdict(list)
 
-        b_factors_voxels = {}
-        serial_number_voxels = {}
+        b_factors_voxels = {} #defaultdict(list)
+        serial_number_voxels = defaultdict(list)
 
         skipped = 0
         skipped_inside = []
@@ -217,10 +217,12 @@ class ProteinVoxelizer(Structure):
                 except ValueError:
                     print(nFeatures, data_voxels[atom_grid].shape, features.shape)
                     raise
-                truth_voxels[atom_grid] = truth_value
-                voxel_map[atom_grid] = atom.get_parent().get_id()
-                b_factors_voxels[atom_grid] = atom.bfactor
-                serial_number_voxels[atom_grid] = atom.serial_number
+                truth_voxels[atom_grid] = np.maximum(
+                    truth_value, truth_voxels.get(atom_grid, truth_value))
+                voxel_map[atom_grid].append(atom.get_parent().get_id())
+                b_factors_voxels[atom_grid] = np.maximum(
+                    atom.bfactor, b_factors_voxels.get(atom_grid, atom.bfactor))
+                serial_number_voxels[atom_grid].append(atom.serial_number)
 
 
         #assert len(list(data_voxels)) > 0, (self.pdb, self.chain, self.sdi, data_voxels, list(data_voxels), np.array(list(data_voxels)), skipped, nAtoms, skipped_inside)
