@@ -195,6 +195,21 @@ def remove_ter_lines(pdb_file, updated_pdb=None):
 
     return updated_pdb
 
+def split_xyz(pdb_file, updated_pdb=None):
+    if updated_pdb is None:
+        updated_pdb = "{}.xyz.pdb".format(os.path.splitext(pdb_file)[0])
+
+    with open(pdb_file) as f, open(updated_pdb, "w") as updated:
+        for line in f:
+            if line.startswith("ATOM"):
+                new = line[:30]+" "+line[30:38]+" "+line[38:46]+" "+line[46:53]+" "+line[53:]
+                updated.write(new)
+                print(new)
+            else:
+                updated.write(line)
+
+    return updated_pdb
+
 def build_atom_unique_id(atom_line):
     """Returns a unique identifying tuple from an ATOM line. From pdb_tools"""
 

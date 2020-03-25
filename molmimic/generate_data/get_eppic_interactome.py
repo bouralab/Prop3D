@@ -20,10 +20,11 @@ from Bio.PDB.Polypeptide import three_to_one
 
 from molmimic.util.iostore import IOStore
 from molmimic.util.hdf import get_file, filter_hdf, filter_hdf_chunks
-from molmimic.util import natural_keys
+from molmimic.util import natural_keys, safe_remove
 from molmimic.util.toil import map_job, map_job_rv, map_job_rv_list
 from molmimic.util.cath import run_cath_hierarchy
 from molmimic.parsers.eppic import EPPICApi
+from molmimic.generate_data import data_stores
 
 from toil.realtimeLogger import RealtimeLogger
 
@@ -150,7 +151,7 @@ class OutputWriter(object):
             except OSError:
                 pass
 
-class Status(dict):
+class Status(object):
     TEMPLATE = {
         "ddi": None,
         "ddi_residues": None,
@@ -160,7 +161,7 @@ class Status(dict):
         "dli_residues": None
     }
 
-    def __init__(self, pdbId, store, manual_status=False):
+    def __init__(self, pdbId, store, work_dir=None, manual_status=False):
         self.pdbId = pdbId
         self.store = store
         self.exists = False
@@ -168,25 +169,35 @@ class Status(dict):
 
         self.key = "pdb/{}/status.json".format(pdbId)
         self.path = os.path.join(self.work_dir, "{}_status.json".format(pdbId))
-        self["numInterfaces"] = 0
 
-        if store.exists(key):
-            self.read()
-        elif manual_status:
-            self.manual_status()
+        self.status = {"numInterfaces": 0}
 
-    def __get__(self, key):
+        # if store.exists(self.key):
+        #     self.read()
+        # elif manual_status:
+        #     self.manual_status()
+
+    def __getitem__(self, key):
         try:
-            return super(Status, self).__get__(key)
+            return self.status[key]
         except KeyError:
-            self[key] = status.TEMPLATE.copy()
-            return super(Status, self).__get__(key)
+            self.status[key] = Status.TEMPLATE.copy()
+            RealtimeLogger.info("Added {}".format(key))
+            return self.status[key]
+
+    def __setitem__(self, key, item):
+        self.status[key] = item
+
+    def items(self):
+        return self.status.items()
 
     def write(self):
         with open(self.path, "w") as fh:
-            json.dump(self, fh)
+            json.dump(self.status, fh)
 
         self.store.write_output_file(self.path, self.key)
+
+        RealtimeLogger.info("Wrote {}".format(self.key))
 
         try:
             os.remove(self.path)
@@ -223,7 +234,7 @@ class Status(dict):
 
     def finished_interfaces(self):
         finished_intIds = []
-        for intId, int_status in self.items():
+        for intId, int_status in self.status.items():
             if intId == "numInterfaces":
                 pass
             elif intId == "error":
@@ -237,13 +248,28 @@ class Status(dict):
                 #Interface not calculated, must recalculate
                 continue
 
-        return finished_intIds
+        RealtimeLogger.info("Skip IDs {}".format(finished_intIds))
+
+        if len(finished_intIds) > 0:
+            return finished_intIds
+
+        return -1
 
     def is_complete(self, intIds=None):
-        skip_intIds = len(intIds) if intIds is None else len(self.finished_interfaces())
-        if "numInterfaces" in self and self["numInterfaces"]==len(skip_intIds):
-            if status["numInterfaces"] > 0 or (status["numInterfaces"] == 0 and \
+        """If intIds is None, it will check against the store.
+        If intIds is -1, it will automaitcally be incomplete
+        """
+        if intIds is None:
+            intIds =  self.finished_interfaces()
+
+        if intIds == -1 or not isinstance(intIds, (list, tuple)):
+            return False
+
+        if self.status["numInterfaces"] == len(intIds):
+            RealtimeLogger.info("Done or error {}".format(len(intIds)))
+            if self.status["numInterfaces"] > 0 or (self.status["numInterfaces"] == 0 and \
               "error" in "status"):
+                RealtimeLogger.info("Done or error")
                 #PDB is Complete
                 if not self.exists:
                     self.write()
@@ -253,7 +279,9 @@ class Status(dict):
 class EPPICInteractome(object):
     resSide = ["first", "second"]
 
-    def __init__(self, pdbId, cathFileStoreID, store, manual_status=True, work_dir=None):
+    def __init__(self, job, pdbId, cathFileStoreID, store, manual_status=True, work_dir=None):
+        self.job = job
+        self.pdbId = pdbId
         self.cathFileStoreID = cathFileStoreID
         self.manual_status = manual_status
         self.work_dir = work_dir if work_dir is not None else os.getcwd()
@@ -276,6 +304,8 @@ class EPPICInteractome(object):
         #Get all chain:chain interfaces for PDB from EPPIC
         interfaces = self.eppic.get_interfaces(bio=True)
 
+        RealtimeLogger.info("Interfaces {}".format(interfaces))
+
         if interfaces is None:
             #save empty status file
             self.status["error"] = "interfaces is None"
@@ -283,7 +313,7 @@ class EPPICInteractome(object):
             return
 
         RealtimeLogger.info("IFACES {}".format(interfaces["interfaceId"]))
-        if len(self.skip_intIds)>0:
+        if isinstance(self.skip_intIds, (list, tuple)) and len(self.skip_intIds)>0:
             interfaces = interfaces[~interfaces.isin(self.skip_intIds)]
 
         if interfaces.empty:
@@ -346,9 +376,9 @@ class EPPICInteractome(object):
         for side, chain in interfaceResidues.groupby("side"):
             self.process_interface_side(intId, side, chain, chainLetts[side])
 
-        get_domain_loop_interactions(intId)
-        get_binding_sites(intId, domain_domain_contacts, "ddi")
-        get_binding_sites(intId, loop_loop_contacts, "lli")
+        self.get_domain_loop_interactions(intId)
+        self.get_binding_sites(intId, self.domain_domain_contacts, "ddi")
+        self.get_binding_sites(intId, self.loop_loop_contacts, "lli")
 
         self.status["numInterfaces"] += 1
 
@@ -385,7 +415,7 @@ class EPPICInteractome(object):
         self.loop_loop_contacts = pd.merge(
             self.loop_loop_contacts, loop_residues, how="inner",
             left_on=[self.resSide[side]+"ResNumber", "pdbCode" if "pdbCode" in \
-                loop_loop_contacts.columns else "pdb", "interfaceId"],
+                self.loop_loop_contacts.columns else "pdb", "interfaceId"],
             right_on=["residueNumber", "pdb", "interfaceId"])
         self.loop_loop_contacts = self._update_contact_columns(self.loop_loop_contacts, side)
 
@@ -472,8 +502,9 @@ class EPPICInteractome(object):
         if isinstance(self.cathFileStoreID, pd.DataFrame):
             cath = self.cathFileStoreID[self.cathFileStoreID["pdb"]==self.pdbId]
         else:
-            cath_file = fileStore.readGlobalFile(self.cathFileStoreID)
-            cath = filter_hdf(cath_file, "table", pdb=pdbId)
+            cath_file = self.job.fileStore.readGlobalFile(self.cathFileStoreID, cache=True)
+            cath = filter_hdf(cath_file, "table", pdb=self.pdbId)
+            safe_remove(cath_file)
 
         cath["srange_start"] = cath["srange_start"].astype(str)
         cath["srange_stop"] = cath["srange_stop"].astype(str)
@@ -537,7 +568,7 @@ class EPPICInteractome(object):
 
         return contacts
 
-    def _get_binding_sites(contacts):
+    def _get_binding_sites(self, contacts):
         """Collapse interactions to one binding site per line"""
 
         if "secondCathDomainClosest1" in contacts.columns:
@@ -583,10 +614,9 @@ class EPPICInteractome(object):
 
         return binding_sites
 
-def process_pdb(job, pdbId, cathFileStoreID, manual_status=True, work_dir=None):
+def process_pdb(job, pdbId, cathFileStoreID, manual_status=False, work_dir=None):
     work_dir = work_dir if work_dir is not None else job.fileStore.getLocalTempDir()
-    store = IOStore.get("aws:us-east-1:molmimic-eppic-interfaces")
-    interactome = EPPICInteractome(pdbId, cathFileStoreID, store,
+    interactome = EPPICInteractome(job, pdbId, cathFileStoreID, data_stores.eppic_interfaces,
         manual_status=manual_status, work_dir=work_dir)
     interactome.run()
 
@@ -613,7 +643,7 @@ def process_pdb_group(job, pdb_group, cathFileStoreID, further_parallelize=False
 
 def merge_cath(job, cathFileStoreID, further_parallelize=False):
     work_dir = job.fileStore.getLocalTempDir()
-    store = IOStore.get("aws:us-east-1:molmimic-eppic-interfaces")
+
     store.download_input_directory("cath/{}".format(cathcode.replace(".", "/")))
 
     for file_type in ("ddi", "lli", "dli"):
@@ -628,31 +658,31 @@ def merge_cath(job, cathFileStoreID, further_parallelize=False):
             except:
                 pass
 
-def start_toil(job, cathFileStoreID, check=False, further_parallelize=True):
+def start_toil(job, cathFileStoreID, check=True, further_parallelize=True):
     work_dir = job.fileStore.getLocalTempDir()
     cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
 
-    RealtimeLogger.info("Filter CATH")
-    pdb = pd.read_hdf(cath_file, "table", columns=["pdb", "cath_domain"]).drop_duplicates()
+    # pdb = pd.read_hdf(cath_file, "table", columns=["pdb", "cath_domain"]).drop_duplicates()
+    #
+    # if check:
+    #     keys = list(data_stores.eppic_interfaces.list_input_directory())
+    #
+    #     done_pdbs = []
+    #     for pdbId, files in groupby(data_stores.eppic_interfaces.list_input_directory(), lambda k: k.split("/")[1]):
+    #         files = [os.path.splitext("".join(k.split("/")[2:]))[0] for k in files]
+    #         if len(files) > 1 and "status.json" in files:
+    #             done_pdbs.append(pdbId)
+    #
+    #     total_size = len(pdb)
+    #     pdb = pdb[~pdb["pdb"].isin(done_pdbs)]
+    #     RealtimeLogger.info("Filtered CATH ({}/{} domains)".format(len(pdb), total_size))
+    # else:
+    #     RealtimeLogger.info("Running CATH ({} domains)".format(len(pdb)))
+    # pdb = pdb.assign(group=pdb["pdb"].str[:3])
+    # pdb_groups = pdb.groupby("group")["pdb"].apply(list)
+    # map_job(job, process_pdb_group, pdb_groups, cathFileStoreID, further_parallelize)
 
-    if check:
-        store = IOStore.get("aws:us-east-1:molmimic-eppic-interfaces")
-        keys = list(store.list_input_directory())
-
-        done_pdbs = []
-        for pdbId, files in groupby(store.list_input_directory(), lambda k: k.split("/")[1]):
-            files = [os.path.splitext("".join(k.split("/")[2:]))[0] for k in files]
-            if len(files) > 1 and "status" in files:
-                done_pdbs.append(pdbId)
-
-        pdb = pdb[~pdb["pdb"].isin(done_pdbs)]
-
-    RealtimeLogger.info("Filtered CATH {}".format(len(pdb)))
-    pdb = pdb.assign(group=pdb["pdb"].str[:3])
-    pdb_groups = pdb.groupby("group")["pdb"].apply(list)
-    map_job(job, process_pdb_group, pdb_groups, cathFileStoreID, further_parallelize)
-
-    #map_job(job, process_pdb, pdb["pdb"], cathFileStoreID)
+    map_job(job, process_pdb, ["101m"], cathFileStoreID)
 
     #job.addFollowOnJobFn(run_cath_hierarchy, merge_cath, None, cathFileStoreID)
 
@@ -668,8 +698,7 @@ if __name__ == "__main__":
     options.targetTime = 1
 
     if not os.path.isfile("cath.h5"):
-        in_store = IOStore.get("aws:us-east-1:molmimic-cath")
-        in_store.read_input_file("cath-domain-description-file-small.h5", "cath.h5")
+        eppic_interfaces.read_input_file("cath-domain-description-file-small.h5", "cath.h5")
 
     with Toil(options) as workflow:
         cathFileURL = 'file://' + os.path.abspath("cath.h5")

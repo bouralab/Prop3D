@@ -92,16 +92,19 @@ def SubprocessChain(commands, output=subprocess.PIPE):
         raise RuntimeError
     return final_proc.communicate()
 
-def safe_remove(files):
+def safe_remove(files, warn=False):
     if isinstance(files, str):
-        files = [str]
+        files = [files]
 
     for f in files:
         if isinstance(f, str) and os.path.exists(f):
             try:
                 os.remove(f)
-            except (OSError, FileNotFoundError):
+            except (OSError, FileNotFoundError) as e:
+                if warn: print("Unable to remove", f, e)
                 pass
+        else:
+            if warn: print("File DNE", f)
 
 @contextmanager
 def silence_stdout():

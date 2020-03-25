@@ -18,7 +18,9 @@ from Bio import SeqIO
 
 from toil.job import JobFunctionWrappingJob
 
-from toil.realtimeLogger import RealtimeLogger
+#from toil.realtimeLogger import RealtimeLogger
+from molmimic.util.toil import RealtimeLogger_ as RealtimeLogger
+
 
 from botocore.exceptions import ClientError
 
@@ -31,7 +33,7 @@ from molmimic.util.iostore import IOStore
 from molmimic.util.toil import map_job
 from molmimic.util.hdf import get_file
 from molmimic.util import SubprocessChain, safe_remove
-from molmimic.util.pdb import get_first_chain, get_all_chains, PDB_TOOLS
+from molmimic.util.pdb import get_first_chain, get_all_chains, PDB_TOOLS, s3_download_pdb
 from molmimic.util.cath import download_cath_domain
 
 from molmimic.generate_data import data_stores
@@ -114,20 +116,33 @@ def extract_domain(pdb_file, cath_domain, sfam_id, rename_chain=None,
             raise RuntimeError("Error processing PDB: {}".format(input))
 
     chain = cath_domain[4]
+    all_chains = list(get_all_chains(input))
 
     commands = [
         #Pick first model
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_selmodel.py"), "-1", input],
+        [sys.executable, os.path.join(PDB_TOOLS, "pdb_selmodel.py"), "-1", input]
+    ]
+    prep_steps = ["pdb_selmodel.py -1 {}".format(input)]
+
+    if chain in all_chains:
         #Select desired chain
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_selchain.py"), "-{}".format(chain)],
+        commands.append([sys.executable, os.path.join(PDB_TOOLS, "pdb_selchain.py"), "-{}".format(chain)])
+        prep_steps.append("pdb_selchain.py -{}".format(chain))
+    elif len(all_chains) == 1 and all_chains[0] == " ":
+        #No chain specified, rechain
+        commands.append([sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-"+chain[:1]])
+        prep_steps.append( "pdb_chain.py -{}".format(chain[:1]))
+    else:
+        raise RuntimeError("Invalid PDB, chain specified ({}) not in chains ({})".format(chain, all_chains))
+
+    commands += [
         #Remove altLocs
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_delocc.py")],
         #Remove HETATMS
         [sys.executable, os.path.join(PDB_TOOLS, "pdb_striphet.py")],
     ]
 
-    prep_steps = ["pdb_selmodel.py -1 {}".format(input), "pdb_selchain.py -{}".format(chain),
-        "pdb_delocc.py", "pdb_striphet.py"]
+    prep_steps += ["pdb_delocc.py", "pdb_striphet.py"]
 
     if rslices is not None:
         #Slice up chain with given ranges
@@ -138,15 +153,21 @@ def extract_domain(pdb_file, cath_domain, sfam_id, rename_chain=None,
     commands += [[sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]]
     prep_steps += ["pdb_tidy.py"]
 
-    if rename_chain is not None:
+    if rename_chain is not None and (isinstance(rename_chain, str) or \
+      (isinstance(rename_chain, bool) and rename_chain)):
         #Rename chain to given name if set in arguments
-        new_chain = "-{}".format("1" if isinstance(rename_chain, bool) and rename_chain \
-            else rename_chain)
+
+        if isinstance(rename_chain, bool) and rename_chain:
+            new_chain = "-1"
+        else:
+            new_chain = "-{}".format(rename_chain)
+
         commands.append([sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"),
             new_chain])
         prep_steps += ["pdb_chain.py {}".format(new_chain)]
 
     #Run all commands
+    print("Running", prep_steps)
     with open(domain_file, "w") as output:
         SubprocessChain(commands, output)
 
@@ -211,6 +232,7 @@ def prepare_domain(pdb_file, chain, cath_domain, sfam_id=None,
     errors = []
     files_to_remove = []
     for attempt, fixer in enumerate((None, scwrl, modeller)):
+        RealtimeLogger.info("Running Fixer: {} {}".format(fixer, attempt))
         try:
             #If failed 1st time, add correct sidechain rotamers (SCWRL)
             #If failed 2nd time, turn CA models into full atom models (MODELLER)
@@ -228,14 +250,14 @@ def prepare_domain(pdb_file, chain, cath_domain, sfam_id=None,
 
         try:
             #Protonate PDB, Minimize structure, and assign partial charges
-            protonated_pdb = pdb2pqr.create_tidy_pqr(
-                fixed_pdb, keep_occ_and_b=True, ff="parse", chain=True,)
+            protonated_pdb = pdb2pqr.debump_add_h(fixed_pdb, ff="parse")
             break
         except Exception as error:
             #Failed, try again with different fixer
             tb = traceback.format_exc()
             errors.append(tb)
             RealtimeLogger.info("Pdb2pqr failed: {}".format(tb))
+
 
     else:
         #Completely failed, raise error
@@ -306,9 +328,11 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
         raise
     except KeyError as e:
         if get_from_pdb:
-            raise NotImplementedError("Download from PDB is not finishied")
-            all_sdoms = pd.read_hdf(str(pdb_info_file), "table")
-            sdom = all_sdoms[all_sdoms.cath_domain==sdi]
+            #raise NotImplementedError("Download from PDB is not finishied")
+            cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
+            all_domains = filter_hdf(cath_file, "table", pdb=cath_domain[:4], chain=cath_domain[4])
+            curr_domain_segments = all_domains[all_domains["cath_domain"]==cath_domain]
+            curr_domain_segments = curr_domain_segments.sort_values("nseg")[["srange_start", "srange_stop"]]
             all_domains = all_sdoms[all_sdoms.cath_domain.str.startswith(sdi[:5])].cath_domain.drop_duplicates()
             if len(all_domains) == 1 and force_rslices is None:
                 #Use full chain
@@ -317,11 +341,16 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
                 rslices = force_rslices
             else:
                 rslices = ["{}:{}".format(st, en) for st, en in \
-                    sdom.sort_values("nseg")[["srange_start", "srange_stop"]]\
-                    .drop_duplicates().itertuples(index=False)]
+                    curr_domain_segments.drop_duplicates().itertuples(index=False)]
 
-            pdb_file_base = os.path.join(pdb[1:3].lower(), "pdb{}.ent.gz".format(pdb.lower()))
-            pdb_file = os.path.join(work_dir, "pdb{}.ent.gz".format(pdb.lower()))
+            try:
+                domain_file = s3_download_pdb(cath_domain[:4], work_dir=work_dir)
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except:
+                #Cannot download
+                tb = traceback.format_exc()
+                raise PrepareProteinError(cath_domain, "s3download", tb)
 
         else:
             #Cannot download
@@ -354,6 +383,7 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
             cath_key+".raw.prep")
 
         files_to_remove.append(domain_file)
+        files_to_remove.append(prep_steps_file)
         RealtimeLogger.info("Finished extracting domain: {}".format(domain_file))
 
     chain = cath_domain[4]
@@ -377,6 +407,7 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
             print(step, file=fh)
     data_stores.prepared_cath_structures.write_output_file(prep_steps_file,
         cath_key+".prep")
+    files_to_remove.append(prep_steps_file)
 
     if cleanup:
         safe_remove(files_to_remove)

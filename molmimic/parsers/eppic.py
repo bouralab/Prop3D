@@ -18,6 +18,7 @@ from molmimic.util.iostore import IOStore
 from molmimic.util import natural_keys, reset_ip
 from molmimic.parsers.json import JSONApi
 from molmimic.parsers.pdbe import PDBEApi
+from molmimic.parsers.container import Container
 
 from toil.realtimeLogger import RealtimeLogger
 
@@ -48,8 +49,18 @@ class EPPICApi(JSONApi):
 
         self.pdb = pdb.lower()
         self.sequences = self.get_sequences()
-        self.chains = {chain:rep.repChain for rep in self.sequences.itertuples() \
-            for chain in rep.memberChains.split(",")}
+
+        RealtimeLogger.info("Running sequences {}".format(self.sequences))
+        # self.chains = {chain:rep.repChain for rep in self.sequences.itertuples() \
+        #     for chain in rep.memberChains.split(",")}
+
+        self.chains = {}
+        for rep in self.sequences.itertuples():
+            RealtimeLogger.info("Running rep {}".format(rep))
+            for chain in rep.memberChains.split(","):
+                RealtimeLogger.info("Running chain {}".format(chain))
+                self.chains[chain] = rep.repChain
+
         self.use_representative_chains = use_representative_chains
 
         self._interface_chains = {}

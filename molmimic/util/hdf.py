@@ -4,6 +4,8 @@ import sys
 import toil
 import pandas as pd
 
+from toil.realtimeLogger import RealtimeLogger
+
 def get_file(job, prefix, path_or_fileStoreID, work_dir=None, return_type=False):
     if isinstance(path_or_fileStoreID, str) and os.path.isfile(path_or_fileStoreID):
         if return_type:
@@ -46,7 +48,7 @@ def filter_hdf(hdf_path, dataset, column=None, value=None, columns=None,
         where = None
 
     try:
-        df = pd.read_hdf(str(hdf_path), dataset, where=where, columns=columns)
+        df = pd.read_hdf(str(hdf_path), dataset, where=where, columns=columns, mode="r")
         if df.shape[0] == 0: raise KeyError
         if drop_duplicates:
             df = df.drop_duplicates()
@@ -58,7 +60,13 @@ def filter_hdf(hdf_path, dataset, column=None, value=None, columns=None,
 def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None,
   chunksize=500, drop_duplicates=False, **query):
     df = None
-    for _df in pd.read_hdf(str(hdf_path), dataset, chunksize=chunksize):
+    store = pd.HDFStore(str(hdf_path), mode="r")
+    nrows = store.get_storer(dataset).nrows
+
+    #for _df in pd.read_hdf(str(hdf_path), dataset, chunksize=chunksize):
+    for i in range(nrows//chunksize + 1):
+        _df = store.select(dataset, start=i*chunksize, stop=(i+1)*chunksize)
+
         if len(query) > 0:
             try:
                 filtered_df = _df.query("("+") & (".join(["{}=={}".format(c, v) for c, v in list(query.items())])+")")

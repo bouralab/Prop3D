@@ -9,6 +9,11 @@ from molmimic.util.iostore import IOStore
 
 from toil.realtimeLogger import RealtimeLogger
 
+class RealtimeLogger_:
+    @staticmethod
+    def info(*args, **kwds):
+        print(args, kwds)
+
 def partitions(l, partition_size):
     """
     >>> list(partitions([], 10))
@@ -50,11 +55,36 @@ def map_job(job, func, inputs, *args, **kwds):
     num_partitions = 100
     partition_size = int(ceil(len(inputs)/num_partitions))
     if partition_size > 1:
+        RealtimeLogger.info("MAP_JOB: total: {}; paritions_size: {}".format(
+            len(inputs), partition_size
+        ))
         for partition in partitions(inputs, partition_size):
             job.addChildJobFn(map_job, func, partition, *args, **kwds)
     else:
+        RealtimeLogger.info("MAP_JOB: Running: {}".format(len(inputs)))
         for sample in inputs:
             job.addChildJobFn(func, sample, *args, **kwds)
+
+def map_job_follow_ons(job, func, inputs, *args, **kwds):
+    # num_partitions isn't exposed as an argument in order to be transparent to the user.
+    # The value for num_partitions is a tested value
+    num_partitions = 100
+    partition_size = int(ceil(len(inputs)/num_partitions))
+    # if partition_size > 1:
+    #     for partition in partitions(inputs, partition_size):
+    #         job.addChildJobFn(map_job, func, partition, *args, **kwds)
+    # else:
+    #     for sample in inputs:
+    #         job.addChildJobFn(func, sample, *args, **kwds)
+
+    run_samples, follow_on_samples = inputs[:partition_size], inputs[partition_size:]
+    RealtimeLogger.info("MAP_JOB: total: {}; paritions_size: {}; num_paritions: {}; num_run: {}".format(
+        len(inputs), partition_size, len(follow_on_samples), len(run_samples)
+    ))
+    for sample in run_samples:
+        job.addChildJobFn(func, sample, *args, **kwds)
+    if partition_size > 1:
+        job.addFollowOnJobFn(map_job, func, follow_on_samples, *args, **kwds)
 
 def map_job_rv(job, func, inputs, *args):
     """

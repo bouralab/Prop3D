@@ -1,11 +1,11 @@
 import os, sys
+import glob
 import json
 import shutil
 import subprocess
-from molmimic.util import silence_stdout, silence_stderr
 
 from molmimic.parsers.container import Container
-from molmimic.util import SubprocessChain
+from molmimic.util import SubprocessChain, safe_remove, silence_stdout, silence_stderr
 from molmimic.util.pdb import is_ca_model, get_first_chain, get_all_chains, \
     PDB_TOOLS
 
@@ -67,7 +67,8 @@ class MODELLER(Container):
     PARAMETERS = [("modeller_file", "path:in")]
 
     def automodel(self, template_id, target_id, pir_file, num_models=5,
-      extra_modeller_code=None, automodel_command="automodel", return_best=True):
+      extra_modeller_code=None, automodel_command="automodel", return_best=True,
+      clean=1):
         """
         Parameters
         ----------
@@ -101,9 +102,9 @@ class MODELLER(Container):
         modeller_file = self.make_modeller_file()
 
         self.running_automodel = True
-        outputs = self(modeller_file=modeller_file)
+        with silence_stdout(), silence_stderr():
+            outputs = self(modeller_file=modeller_file)
         self.running_automodel = False
-        print(outputs)
 
         try:
             with open(os.path.join(self.work_dir, "{}.dope_scores".format(target_id))) as fh:
@@ -111,10 +112,27 @@ class MODELLER(Container):
         except (IOError, FileNotFoundError):
             raise RuntimeError("Error running modeller, no dope score file found")
 
-        if return_best:
-            return self.select_best_model(dope_scores)
+        files_to_remove = []
+        if clean>0:
+            files_to_remove.append(modeller_file)
+            files_to_remove += glob.glob(os.path.join(self.work_dir,
+                "{}.*".format(target_id)))
+        if clean>1:
+            files_to_remove.append(self.pir_file)
+            for t in self.template_id:
+                files_to_remove += glob.glob(os.path.join(self.work_dir,
+                    "{}.*".format(t)))
+        files_to_remove = set(files_to_remove)
 
-        return dope_scores
+        if return_best:
+            output = self.select_best_model(dope_scores)
+            files_to_remove -= set([output])
+        else:
+            output = dope_scores
+
+        safe_remove(files_to_remove)
+
+        return output
 
     def select_best_model(self, results):
         if len(results["scores"]) == 0:
@@ -134,8 +152,6 @@ class MODELLER(Container):
             except OSError:
                 pass
 
-        print(best_pdb, best_model["score"])
-
         return best_pdb
 
     def local(self, *args, **kwds):
@@ -151,7 +167,7 @@ class MODELLER(Container):
         return self.remodel_structure(template_pdb, chain=chain,
             num_models=num_models, return_best=return_best)
 
-    def remodel_structure(self, template_pdb, chain=None, num_models=5, return_best=True):
+    def remodel_structure(self, template_pdb, chain=None, num_models=5, return_best=True, clean=True):
         if chain is None:
             chain = get_first_chain(template_pdb)
 
@@ -181,7 +197,7 @@ class MODELLER(Container):
 
         return self.automodel(template_id, target_id, pir_file,
             num_models=num_models, extra_modeller_code=ca_model_text,
-            automodel_command="CaModel", return_best=return_best)
+            automodel_command="CaModel", return_best=return_best, clean=2 if clean else 0)
 
     def make_pir(self, template_id, template_chain, template_seq, target_id,
       target_chain, target_seq):

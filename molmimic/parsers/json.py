@@ -52,7 +52,7 @@ class WebService(object):
     def __get__(self, key):
         return self.get(key)
 
-    def get(self, key, attempts=None):
+    def get(self, key, attempts=None, last_source=None):
         if attempts is None:
             attempts = self.max_attempts
 
@@ -69,18 +69,21 @@ class WebService(object):
             self.extension(key)))
 
         #Check if file should be download or get from store
-        if os.path.isfile(fname):
+        if os.path.isfile(fname) and not last_source=="local":
             #File already exists or previosly downloaded in this session
             RealtimeLogger.info("API read from file")
+            source = "local"
             should_remove = False #If previosly downloaded in this session, it will not remove
-        elif self.store.exists(key):
+        elif self.store.exists(key) and not last_source=="IOStore":
             RealtimeLogger.info("API get from store")
             self.store.read_input_file(key, fname)
+            source = "IOStore"
             should_remove = True
         else:
             should_remove = True
             if self._download:
                 rc = self.download(key, fname)
+                source = "webservice"
                 if not rc:
                     RealtimeLogger.info("DOWNLOAD API -- FAILED")
                     #Error no EPPIC file
@@ -103,7 +106,7 @@ class WebService(object):
             RealtimeLogger.info("Failed reading, {} bc {}".format(fname, e))
 
             if attempt > 0:
-                return self.get(key, attempts=attempts-1)
+                return self.get(key, attempts=attempts-1, last_source=source)
             else:
                 raise KeyError("Key '{}' is an invalid file".format(key))
         print("About to parse", fname, key)
@@ -112,7 +115,6 @@ class WebService(object):
         except (SystemExit, KeyboardInterrupt) as e:
             raise
         except ValueError as e:
-            raise
             rerun = False
             try:
                 with open(fname) as f:
@@ -127,7 +129,7 @@ class WebService(object):
                 pass
 
             if rerun:
-                return self.get(key, attempts=attempts-1)
+                return self.get(key, attempts=attempts-1, last_source=source)
             else:
                 RealtimeLogger.info("Not restarting")
                 raise KeyError("Key '{}' is an invalid file".format(key))

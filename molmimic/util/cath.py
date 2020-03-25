@@ -11,6 +11,13 @@ from molmimic.generate_data import data_stores
 
 from toil.realtimeLogger import RealtimeLogger
 
+def fix_cathcode(c):
+    if isinstance(cathcode, (int, float, str)):
+        try:
+            return int(c)
+        except ValueError:
+            if isinstance(cathcode, str) and cathcode in ["None", "all"]:
+                return None
 def run_cath_hierarchy(job, cathcode, func, cathFileStoreID, **kwds):
     work_dir = job.fileStore.getLocalTempDir()
     further_parallelize = kwds.get("further_parallelize", True)
@@ -19,43 +26,82 @@ def run_cath_hierarchy(job, cathcode, func, cathFileStoreID, **kwds):
     if isinstance(cathcode, (int, float, str)):
         #Start with Class if given int, float, or string
         try:
-            cathcode = [int(cathocde)]
+            cathcode = [int(cathcode)]
         except ValueError:
-            raise ValueError("Invaid cathcode: {}".format(cathcode))
-    elif isinstance(cathcode, (list, tuple)) and len(cathcode)>0:
-        if isinstance(cathcode[0], (list, tuple)):
+            if isinstance(cathcode, str) and cathcode in ["None", "all"]:
+                #Start from the top
+                cathcode = []
+            else:
+                raise ValueError("Invaid cathcode: {}".format(cathcode))
+    elif isinstance(cathcode, (list, tuple)):
+        if len(cathcode)>0 and isinstance(cathcode[0], (list, tuple)):
             #Multiple CATH codes
             map_job(job, run_cath_hierarchy, cathcode, func, cathFileStoreID, **kwds)
             return
+        elif len(cathcode)==1 and cathcode[0] in [None, "None", "all"]:
+            cathcode = []
+        else:
+            #This is correct, e.g.
+            #    Full cath code: [2., 40., 60., 10.]
+            #    Jast class: [2.]
+            #    or all superfamilies: []
+            try:
+                cathcode = list(map(int, cathcode))
+            except ValueError:
+                raise ValueError("Invaid cathcode: {}".format(cathcode))
+
     elif cathcode is None:
         #Start from the top
         cathcode = []
     else:
         raise ValueError("Invaid cathcode: {}".format(cathcode))
 
+    RealtimeLogger.info("Running cathcode: {}".format(cathcode))
 
     cath_names = ["class", "architechture", "topology", "homology"]
     if len(cathcode) < level:
-        cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
+        cathStoreID = kwds.get("cathCodeStoreID", cathFileStoreID)
+        cath_file = job.fileStore.readGlobalFile(cathStoreID, cache=True)
+
+        remove_store = False
+        if "cathCodeStoreID" not in kwds:
+            cathcodes = filter_hdf_chunks(
+                cath_file,
+                "table",
+                columns=cath_names,
+                drop_duplicates=True)
+            safe_remove(cath_file, warn=True)
+            cath_file = os.path.join(work_dir, "cathCodeStore.h5")
+            cathcodes.to_hdf(cath_file, "table", format="table",
+                table=True, complevel=9, complib="bzip2", min_itemsize=1024)
+            kwds["cathCodeStoreID"] = job.fileStore.writeGlobalFile(cath_file)
+            remove_store = True
+            del cathcodes
+
         cathcode = dict(zip(cath_names, cathcode))
         cath_names = cath_names[:len(cathcode)+1]
-
         cathcodes = filter_hdf_chunks(
             cath_file,
             "table",
             columns=cath_names,
             drop_duplicates=True,
             **cathcode)[cath_names]
+
+        safe_remove(cath_file, warn=True)
+
     else:
         cathcodes = pd.DataFrame([cathcode], columns=cath_names)
 
     if cathcodes.shape[1] < level:
-        map_job(job, run_cath_hierarchy, cathcodes.values, func, cathFileStoreID, **kwds)
+        map_job(job, run_cath_hierarchy, cathcodes.values.tolist(), func,
+            cathFileStoreID, **kwds)
     else:
         sfams = (cathcodes.astype(int).astype(str)+"/").sum(axis=1).str[:-1].tolist()
         RealtimeLogger.info("Running sfam {}".format(cathcode))
         kwds.pop("further_parallelize", None)
         kwds.pop("level", None)
+        if "cathCodeStoreID" in kwds:
+            del kwds["cathCodeStoreID"]
         map_job(job, func, sfams, cathFileStoreID, **kwds)
 
 def download_cath_domain(cath_domain, sfam_id=None, work_dir=None):

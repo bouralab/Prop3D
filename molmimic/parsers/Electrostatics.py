@@ -8,7 +8,7 @@ from docker.errors import ImageNotFound, ContainerError
 
 from molmimic.util import silence_stdout, silence_stderr, SubprocessChain, safe_remove
 from molmimic.util.pdb import get_all_chains, extract_chains, get_atom_lines, \
-    replace_occ_b, PDB_TOOLS
+    replace_occ_b, PDB_TOOLS, split_xyz
 from molmimic.util.pdb import remove_ter_lines as _remove_ter_lines
 from molmimic.parsers.psize import Psize
 
@@ -21,14 +21,12 @@ memory = Memory(verbose=0)
 class APBS(Container):
     IMAGE = 'docker://edraizen/apbs:latest'
     LOCAL = ["apbs"]
-    PARAMETERS = [("in_file", "path:in")]
+    PARAMETERS = [("in_file", "path:in")]#, (":out_file", "path:out")]
     RETURN_FILES = True
 
-    def atom_potentials_from_pdb(self, pdb_file, force_field="amber",
-      whitespace=False, chain=True, with_charge=True):
+    def atom_potentials_from_pdb(self, pdb_file, force_field="amber", with_charge=True):
         pdb2pqr = Pdb2pqr(work_dir=self.work_dir, job=self.job)
-        pqr_file = pdb2pqr.create_tidy_pqr(pdb_file, force_field=force_field,
-            whitespace=whitespace, chain=chain, remove_ter_lines=True)
+        pqr_file = pdb2pqr.create_pqr(pdb_file, force_field=force_field, whitespace=True, chain=True)
         atom_pot_file = self.atom_potentials_from_pqr(pqr_file)
 
         if with_charge:
@@ -38,7 +36,7 @@ class APBS(Container):
             output = {atom:potential for (atom, charge), potential in \
                 zip(pdb2pqr.parse_pqr(pqr_file), self.parse_atom_pot_file(atom_pot_file))}
 
-        self.files_to_remove.append(pqr_file)
+        self.files_to_remove += [pqr_file, atom_pot_file]
         self.clean()
 
         return output
@@ -54,6 +52,7 @@ class APBS(Container):
         try:
             self.running_atom_potentials = True
             atom_pot_file = self(in_file=input_file)
+            print("Done APBS", atom_pot_file, out_file, os.path.isfile(out_file))
             self.running_atom_potentials = False
         except RuntimeError as e:
             if "Problem opening virtual socket" in str(e):
@@ -87,8 +86,8 @@ class APBS(Container):
     def write_apbs_electrostatics_input(self, pqr_file, ouput_input_prefix=None,
       output_prefix=None):
         base = os.path.basename(pqr_file)
-        ouput_input_prefix = ouput_input_prefix or base+".apbs_input"
-        output_prefix = output_prefix or base+".apbs_output.txt"
+        ouput_input_prefix = os.path.join(self.work_dir, ouput_input_prefix or base+".apbs_input")
+        output_prefix = os.path.join(self.work_dir, output_prefix or base+".apbs_output.txt")
         pot_path = self.format_out_path(None, output_prefix)
         with open(ouput_input_prefix, "w") as f:
             contents = self.make_apbs_electrostatics_input(pqr_file, pot_path[:-4])
@@ -140,6 +139,9 @@ class APBS(Container):
 
         return contents
 
+class MissingAtomsError(ValueError):
+    pass
+
 class Pdb2pqr(Container):
     IMAGE = 'docker://edraizen/pdb2pqr:latest'
     LOCAL = ["/usr/share/pdb2pqr/pdb2pqr.py"]
@@ -153,13 +155,57 @@ class Pdb2pqr(Container):
 
     def __call__(self, *args, **kwds):
         try:
+            print(args, kwds)
             return Container.__call__(self, *args, **kwds)
         except Exception as e:
+            self.clean()
             if "ValueError: This PDB file is missing too many" in str(e):
-                return None
+                raise MissingAtomsError(str(e)[13:])
             raise
 
-    def create_tidy_pqr(self, pdb_file, remove_ter_lines=True, keep_occ_and_b=None, **kwds):
+    def create_pqr(self, pdb_file, remove_ter_lines=True, whitespace=False,
+      chain=False, **kwds):
+        """Run pdb2pqr for a given pdb_file.
+
+        Parameters
+        ----------
+        pdb_file : str
+            Path to pdb file
+        remove_ter_lines : bool
+            Remove TER lines before running since pdb2pqr may choke on them.
+            Default True.
+        **kwds:
+            Paramters to pass to pdb2pqr.
+
+        Returns
+        -------
+        A path the the new pqr file
+        """
+        pqr_file = "{}.pqr".format(pdb_file)
+
+        if remove_ter_lines:
+            pdb_file = _remove_ter_lines(pdb_file)
+
+        #Whitespace must be False to ensure correct PDB file
+        if whitespace:
+            kwds["whitespace"] = True
+
+        if chain:
+            kwds["chain"] = True
+
+        try:
+            output = self(pdb_file, pqr_file, **kwds)
+        except MissingAtomsError:
+            if remove_ter_lines:
+                safe_remove(pdb_file)
+            raise
+
+        if remove_ter_lines:
+            safe_remove(pdb_file)
+
+        return pqr_file
+
+    def debump_add_h(self, pdb_file, remove_ter_lines=True, keep_occ_and_b=True, **kwds):
         """Run pdb2pqr for a given pdb_file.
 
         Parameters
@@ -187,38 +233,30 @@ class Pdb2pqr(Container):
         -------
         A path the the new pqr file
         """
-
         save_chains = "".join(list(sorted(get_all_chains(pdb_file))))
-        full_pdb_path = _remove_ter_lines(pdb_file) if remove_ter_lines else pdb_file
-        pqr_file = "{}.pqr".format(os.path.basename(full_pdb_path))
 
-        #Whitespace must be False to ensure correct PDB file
-        kwds.pop("whitespace", None)
+        pqr_file = self.create_pqr(pdb_file, remove_ter_lines=remove_ter_lines,
+            keep_occ_and_b=keep_occ_and_b, whitespace=False, chain=True, **kwds)
 
-        #Make sure chain is True
-        kwds["chain"] = True
+        new_pdb = extract_chains(pqr_file, save_chains)
 
-        self(pdb_file, pqr_file, **kwds)
-
-        pqr_chains = extract_chains(pqr_file, save_chains)
-
-        cmds = [[sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), pqr_chains]]
-        tidy_file = pqr_file+".tidy"
+        cmds = [[sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py"), new_pdb]]
+        tidy_file = new_pdb+".tidy"
         with open(tidy_file, "w") as f:
             SubprocessChain(cmds, f)
 
-        safe_remove(pqr_file)
-        shutil.move(tidy_file, pqr_file)
+        safe_remove([new_pdb, pqr_file])
+        shutil.move(tidy_file, new_pdb)
 
         if keep_occ_and_b:
-            occ_b_file = replace_occ_b(pdb_file, pqr_file)
-            safe_remove(pqr_file)
-            shutil.move(occ_b_file, pqr_file)
+            occ_b_file = replace_occ_b(pdb_file, new_pdb)
+            safe_remove(new_pdb)
+            shutil.move(occ_b_file, new_pdb)
 
-        return pqr_file
+        return new_pdb
 
-    def get_charge_from_pdb_file(self, pdb_file, remove_ter_lines=True, clean=True, **kwds):
-        pqr_file = self.create_tidy_pqr(pdb_file, remove_ter_lines=True, **kwds)
+    def get_charge_from_pdb_file(self, pdb_file, remove_ter_lines=True, **kwds):
+        pqr_file = self.create_pqr(pdb_file, remove_ter_lines=remove_ter_lines, **kwds)
         return dict(self.parse_pqr(pqr_file))
 
     @staticmethod

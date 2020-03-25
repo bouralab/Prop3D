@@ -96,6 +96,8 @@ def calculate_features(job, cath_domain, cathcode, update_features=None, work_di
         safe_remove(feature_file)
         RealtimeLogger.info("Finished features for: {}".format(feature_file))
 
+    safe_remove(domain_file)
+
 def calculate_features_for_sfam(job, sfam_id, update_features, further_parallelize=True, use_cath=True):
     work_dir = job.fileStore.getLocalTempDir()
 

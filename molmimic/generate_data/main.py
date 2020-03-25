@@ -3,7 +3,7 @@ import os
 from molmimic.util.iostore import IOStore
 from molmimic.util.cath import run_cath_hierarchy
 from molmimic.util.hdf import get_file, filter_hdf_chunks
-from molmimic.util.toil import map_job
+from molmimic.util.toil import map_job, map_job_follow_ons
 
 from molmimic.generate_data.prepare_protein import process_domain
 from molmimic.generate_data.calculate_features import calculate_features
@@ -19,15 +19,18 @@ logging.getLogger('s3transfer').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 def get_domain_structure_and_features(job, cath_domain, superfamily,
-  cathFileStoreID, update_features=None, force=False):
+  cathFileStoreID, update_features=None, further_parallelize=True, force=False):
     """1) Run Feagtures depends on prepared strucutre Structure"""
     RealtimeLogger.info("get_domain_structure_and_features Process domain "+cath_domain)
 
     if force or not data_stores.prepared_cath_structures.exists(
       "{}/{}.pdb".format(superfamily, cath_domain)):
         #Get Processed domain file first
-        job.addChildJobFn(process_domain, cath_domain, superfamily,
-            cathFileStoreID=cathFileStoreID)
+        if further_parallelize:
+            job.addChildJobFn(process_domain, cath_domain, superfamily,
+                cathFileStoreID=cathFileStoreID)
+        else:
+            process_domain(job, cath_domain, superfamily, cathFileStoreID=cathFileStoreID)
 
     #Check if any feature files exist
     feat_files = ["{}/{}_{}".format(superfamily, cath_domain, ext) for ext in \
@@ -36,11 +39,14 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
 
     if force or update_features is not None or not all(feats_exist):
         #Calculate features Processed domain file
-        job.addFollowOnJobFn(calculate_features, cath_domain, superfamily,
-            update_features=update_features)
+        if further_parallelize:
+            job.addFollowOnJobFn(calculate_features, cath_domain, superfamily,
+                update_features=update_features)
+        else:
+            calculate_features(job, cath_domain, superfamily, update_features=update_features)
 
 def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
-  force=False, further_parallize=True):
+  force=False, further_parallize=False):
     cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
     cathcode = superfamily.replace("/", ".")
 
@@ -49,12 +55,23 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
         "table",
         columns=["cath_domain"],
         drop_duplicates=True,
-        cathcode=cathcode)["cath_domain"].iloc[:2]
+        cathcode=cathcode)["cath_domain"].tolist()
+
+    if not force:
+        #Get domians that have edge features uploaded (last feature file to be uploaded so we know its done)
+        done_domains = [os.path.basename(domain).split("_")[0] for domain in \
+            data_stores.cath_features.list_input_directory(superfamily) \
+            if domain.endswith("edges.txt.gz")]
+        n_domains = len(cath_domains)
+        cath_domains = list(set(cath_domains)-set(done_domains))
+        RealtimeLogger.info("Running {}/{} domains from {}".format(len(cath_domains), n_domains, cathcode))
+    else:
+        RealtimeLogger.info("Running {} domains from {}".format(len(cath_domains), cathcode))
 
     if further_parallize:
-        map_job(job, get_domain_structure_and_features, cath_domains,
+        map_job_follow_ons(job, get_domain_structure_and_features, cath_domains,
             superfamily, cathFileStoreID, update_features=update_features,
-            force=force)
+            further_parallelize=False, force=force)
     else:
         RealtimeLogger.info("Looping over domain")
         for domain in cath_domains:
@@ -62,11 +79,11 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
                 RealtimeLogger.info("Processing domain "+domain)
                 get_domain_structure_and_features(job, domain, superfamily,
                     cathFileStoreID, update_features=update_features,
-                    force=force)
+                    further_parallelize=False, force=force)
             except (SystemExit, KeyboardInterrupt):
                 raise
             except:
-                raise
+                pass
 
 def start_toil(job, cathFileStoreID, cathcode=None, update_features=None, force=False):
     RealtimeLogger.info("started")

@@ -19,17 +19,17 @@ if FORCE_LOCAL:
 elif USE_SINGULARITY:
     USE_DOCKER = False
     try:
-        rc = subprocess.check_output(["singularity"]).decode("utf-8")
-        USE_SINGULARITY = rc.startswith("USAGE: singularity")
-    except FileNotFoundError:
+        rc = subprocess.check_output(["which", "singularity"])
+        USE_SINGULARITY = True #rc.startswith("usage singularity")
+    except (subprocess.CalledProcessError, FileNotFoundError):
         USE_SINGULARITY = False
     FORCE_LOCAL = not USE_SINGULARITY
 elif USE_DOCKER:
     USE_SINGULARITY = False
     try:
-        rc = subprocess.check_output(["docker"]).decode("utf-8")
-        USE_DOCKER = rc.strip().startswith("Usage:	docker")
-    except FileNotFoundError:
+        rc = subprocess.check_output(["which", "docker"])
+        USE_DOCKER = True #rc.strip().startswith("Usage:	docker")
+    except (subprocess.CalledProcessError, FileNotFoundError):
         USE_DOCKER = False
     FORCE_LOCAL = not USE_DOCKER
 
@@ -81,7 +81,7 @@ class Container(object):
         if self.LOCAL is not None:
             assert isinstance(self.LOCAL, list)
 
-        self.work_dir = work_dir if work_dir is None else os.getcwd()
+        self.work_dir = work_dir if work_dir is not None else os.getcwd()
         self.force_local = (FORCE_LOCAL or force_local or self.IMAGE is None) and self.LOCAL is not None
         self.fallback_local = fallback_local or self.LOCAL is not None
         self.return_files = return_files or self.RETURN_FILES
@@ -198,6 +198,8 @@ class Container(object):
 
         image = pullContainer(self.IMAGE, pull_folder=CONTAINER_PATH)
 
+        print("Running parameters", parameters)
+
         try:
             with silence_stdout(), silence_stderr():
                 out = containerCall(
@@ -221,21 +223,24 @@ class Container(object):
 
         if out["return_code"]:
             self.clean()
+            self.change_paths = {}
             raise RuntimeError(message)
 
         try:
             out_files = self.check_output()
         except AssertionError:
-            print("captured output")
             self.stdout = out
             self.clean()
+            self.change_paths = {}
             raise
 
         if self.return_files:
             self.stdout = message
             self.clean()
+            self.change_paths = {}
             return out_files
 
+        self.change_paths = {}
         return message
 
     def local(self, *args, **kwds):
@@ -332,6 +337,7 @@ class Container(object):
             local_path = os.path.abspath(os.path.join(self.work_dir, os.path.basename(path)))
             if not os.path.abspath(os.path.dirname(path)) == os.path.abspath(self.work_dir):
                 shutil.copy(path, local_path)
+                self.files_to_remove.append(local_path)
             return new_path
 
     def format_out_path(self, name, path):
