@@ -23,6 +23,22 @@ def PDBTools(commands, output):
         for cmd in commands]
     SubprocessChain(cmd, output)
 
+class PDBTools(object):
+    def __init__(self, pdb_file):
+        self.pdb = pdb_file
+
+    def __get__(self, command, args):
+        available_commands = [os.path.basename(f)[:-3] for f in \
+            os.listdir(PDB_TOOLS) if f.endswith(".py")]
+        if command in available_commands or "pdb_"+command in available_commands:
+            return self.run(cmd, *args)
+        return super().__get__(command, args)
+
+    def run(self, cmd, *args):
+        cmd = [[sys.executable, os.path.join(PDB_TOOLS, "pdb_{}.py".format(cmd))]]
+        with open("{}_{}.out".format(pdb_file, cmd)) as f:
+            SubprocessChain(cmd, f)
+
 def download_pdb(id):
     from Bio import PDB
     pdbl = PDB.PDBList()
@@ -81,18 +97,25 @@ def read_pdb(file):
     return np.array([(float(line[30:38]), float(line[38:46]), float(line[46:54])) \
         for line in get_atom_lines(file)])
 
-def replace_chains(pdb_file, new_file, **chains):
+def replace_chains(pdb_file, new_file=None, new_chain=None, **chains):
     """Modified from pdbotools"""
+    assert new_chain is not None or len(chains)>0
     coord_re = re.compile('^(ATOM|HETATM)')
+    if new_file is None:
+        name, ext = os.path.splitext(pdb_file)
+        new_file = "{}.{}.pdb".format(name, new_chain if new_chain is not None \
+            else "".join(chains.keys()))
 
     with open(pdb_file) as f, open(new_file, "w") as new:
         for line in f:
+            line = line.rstrip()
             if coord_re.match(line) and line[21] in chains:
                 print(line[:21] + chains[line[21]] + line[22:], file=new)
+            elif coord_re.match(line) and new_chain is not None and isinstance(new_chain, str):
+                print(line[:21] + new_chain + line[22:], file=new)
             else:
                 print(line, file=new)
 
-    print("NEW FILE", new_file)
     assert os.path.isfile(new_file), new_file
     return new_file
 
@@ -143,7 +166,6 @@ def rottrans(moving_pdb, matrix_file, new_file=None):
     coords = np.dot(coords, M)+t
     def get_coords(mat):
         for x, y, z in mat:
-            print("LINE:{:8.3f}{:8.3f}{:8.3f}".format(x, y, z))
             yield "{:8.3f}{:8.3f}{:8.3f}".format(x, y, z)
     return update_xyz(moving_pdb, coords, updated_pdb=new_file, process_new_lines=get_coords)
 
@@ -180,8 +202,27 @@ def delocc_pdb(pdb_file, updated_pdb=None):
     with open(updated_pdb, "w") as f:
         subprocess.call([sys.executable, os.path.join(PDB_TOOLS, "pdb_delocc.py"), pdb_file], stdout=f)
 
-    with open(updated_pdb) as f:
-        print("UPDATED PDB", f.read())
+    return updated_pdb
+
+def reres_pdb(pdb_file, resid=1, chain=None, updated_pdb=None):
+    if updated_pdb is None:
+        updated_pdb = "{}.reres.pdb".format(os.path.splitext(pdb_file)[0])
+
+    cmd = [sys.executable, os.path.join(PDB_TOOLS, "pdb_reres.py")] #, pdb_file]
+
+    if chain is not None:
+        if chain == "all":
+            cmd += ["-chain"]
+        else:
+            cmd += ["-chain", str(chain)]
+
+    cmd += ["-resid", str(resid)]
+
+    with open(pdb_file) as p, open(updated_pdb, "w") as f:
+        out, err = subprocess.Popen(cmd, stdin=p, stdout=f, stderr=subprocess.PIPE).communicate()
+        if err:
+            raise RuntimeError(err)
+
     return updated_pdb
 
 def remove_ter_lines(pdb_file, updated_pdb=None):

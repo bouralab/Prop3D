@@ -92,6 +92,8 @@ class WebService(object):
                 RealtimeLogger.info("DOWNLOAD API -- NO DOWNLOAD")
                 raise KeyError("Key '{}' does not exist".format(key))
 
+        print("Done download")
+
         #Check if file contains data -- important because some files contain error messages
         try:
             with open(fname) as f:
@@ -105,11 +107,11 @@ class WebService(object):
 
             RealtimeLogger.info("Failed reading, {} bc {}".format(fname, e))
 
-            if attempt > 0:
+            if attempts > 0:
                 return self.get(key, attempts=attempts-1, last_source=source)
             else:
                 raise KeyError("Key '{}' is an invalid file".format(key))
-        print("About to parse", fname, key)
+        RealtimeLogger.info("Donwlaod step 5")
         try:
             result = self.parse(fname, key)
         except (SystemExit, KeyboardInterrupt) as e:
@@ -128,7 +130,9 @@ class WebService(object):
             except (OSError, FileNotFoundError):
                 pass
 
-            if rerun:
+            RealtimeLogger.info("Donwlaod step 6 {}".format(rerun))    
+
+            if rerun and attempts > 0:
                 return self.get(key, attempts=attempts-1, last_source=source)
             else:
                 RealtimeLogger.info("Not restarting")
@@ -154,15 +158,22 @@ class WebService(object):
 
         try:
             with requests.get(url, stream=True) as r, open(fname, 'wb') as f:
+                RealtimeLogger.info("Donwlaod step 1")
                 r.raw.read = partial(r.raw.read, decode_content=True)
                 copyfileobj(r.raw, f)
+                RealtimeLogger.info("Donwlaod step 2")
         except Exception as e:
             RealtimeLogger.info("API Download Error {}: {}".format(type(e), e))
             return False
 
+        RealtimeLogger.info("Donwlaod step 3")
+        print("Downlaod 11")
+
         if self.should_add_to_store(key, fname):
             #Save to store
             self.store.write_output_file(fname, key)
+
+        RealtimeLogger.info("Donwlaod step 4")
 
         return True
 

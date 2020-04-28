@@ -56,7 +56,7 @@ class EPPICApi(JSONApi):
 
         self.chains = {}
         for rep in self.sequences.itertuples():
-            RealtimeLogger.info("Running rep {}".format(rep))
+            RealtimeLogger.info("Running rep {} {}".format(pdb, rep))
             for chain in rep.memberChains.split(","):
                 RealtimeLogger.info("Running chain {}".format(chain))
                 self.chains[chain] = rep.repChain
@@ -65,6 +65,15 @@ class EPPICApi(JSONApi):
 
         self._interface_chains = {}
         self._chain_residues = {} if not use_representative_chains else None
+
+    def parse(self, file_path, key):
+        result = super().parse(file_path, key)
+        if len(result) == 1 and isinstance(result[0], dict) and len(result[0]) == 1 and "uid" in result[0]:
+            #Reset to download again
+            RealtimeLogger.info("LOAD {} {} {} {}".format(type(result), len(result), type(result[0]), len(result[0])))
+
+            raise ValueError("incomplete data")
+        return result
 
     def _get_chain_residues(self, chain):
         if not self.use_representative_chains:
@@ -89,6 +98,21 @@ class EPPICApi(JSONApi):
                 raise
             except:
                 pass
+
+        try:
+            RealtimeLogger.info("Start line {}".format(line))
+            result = json.loads(line)
+            RealtimeLogger.info("Result {}".format(result))
+            if len(result) == 1 and isinstance(result[0], dict) and "uid" in result[0]:
+                rerun = True
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except:
+            import traceback
+            tb = traceback.format_exc()
+            RealtimeLogger.info("Failed {}".format(tb))
+            rerun = True
+
         return rerun
 
     def get_interfaces(self, bio=False):

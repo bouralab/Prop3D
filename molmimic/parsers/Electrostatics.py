@@ -10,6 +10,7 @@ from molmimic.util import silence_stdout, silence_stderr, SubprocessChain, safe_
 from molmimic.util.pdb import get_all_chains, extract_chains, get_atom_lines, \
     replace_occ_b, PDB_TOOLS, split_xyz
 from molmimic.util.pdb import remove_ter_lines as _remove_ter_lines
+from molmimic.util.pdb import get_first_chain, replace_chains
 from molmimic.parsers.psize import Psize
 
 from molmimic.parsers.container import Container
@@ -25,18 +26,29 @@ class APBS(Container):
     RETURN_FILES = True
 
     def atom_potentials_from_pdb(self, pdb_file, force_field="amber", with_charge=True):
+        remove_pdb = False
+        if get_first_chain(pdb_file).isdigit():
+            #APBS requires chains A-Z
+            pdb_file = replace_chains(pdb_file, new_chain="A")
+            remove_pdb = True
+
         pdb2pqr = Pdb2pqr(work_dir=self.work_dir, job=self.job)
-        pqr_file = pdb2pqr.create_pqr(pdb_file, force_field=force_field, whitespace=True, chain=True)
+        pqr_file = pdb2pqr.create_pqr(pdb_file, force_field=force_field,
+            whitespace=True, chain=True, reres=True)
         atom_pot_file = self.atom_potentials_from_pqr(pqr_file)
 
         if with_charge:
             output = {atom:(charge, potential) for (atom, charge), potential in \
-                zip(pdb2pqr.parse_pqr(pqr_file), self.parse_atom_pot_file(atom_pot_file))}
+                zip(pdb2pqr.parse_pqr(pqr_file),
+                    self.parse_atom_pot_file(atom_pot_file))}
         else:
             output = {atom:potential for (atom, charge), potential in \
-                zip(pdb2pqr.parse_pqr(pqr_file), self.parse_atom_pot_file(atom_pot_file))}
+                zip(pdb2pqr.parse_pqr(pqr_file),
+                    self.parse_atom_pot_file(atom_pot_file))}
 
         self.files_to_remove += [pqr_file, atom_pot_file]
+        if remove_pdb:
+            self.files_to_remove.append(pdb_file)
         self.clean()
 
         return output
@@ -52,7 +64,6 @@ class APBS(Container):
         try:
             self.running_atom_potentials = True
             atom_pot_file = self(in_file=input_file)
-            print("Done APBS", atom_pot_file, out_file, os.path.isfile(out_file))
             self.running_atom_potentials = False
         except RuntimeError as e:
             if "Problem opening virtual socket" in str(e):
@@ -155,7 +166,6 @@ class Pdb2pqr(Container):
 
     def __call__(self, *args, **kwds):
         try:
-            print(args, kwds)
             return Container.__call__(self, *args, **kwds)
         except Exception as e:
             self.clean()

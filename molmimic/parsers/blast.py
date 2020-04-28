@@ -9,7 +9,7 @@ class Uniref(WebService):
     def __init__(self, uniprot_store, work_dir=None, download=True,
       max_attempts=2, job=None):
         self.job = job
-        super(WebService, self).__init__("ftp://ftp.uniprot.org/pub/databases/uniprot/uniref/",
+        super().__init__("ftp://ftp.uniprot.org/pub/databases/uniprot/uniref/",
             uniprot_store, work_dir=work_dir, download=download, clean=False,
             max_attempts=max_attempts)
 
@@ -25,7 +25,7 @@ class Uniref(WebService):
 
     def get_uniref100_db(self):
         make_blast_db = MakeBlastDB(work_dir=self.work_dir, job=self.job)
-        name = "uiref100"
+        name = "uniref100"
         try:
             db_files = [self.get(name+"."+ext) for ext in make_blast_db.blast_db_ext]
         except KeyError:
@@ -35,7 +35,7 @@ class Uniref(WebService):
                 out_file="uniref100", title="uniref100")
             safe_remove(uniref100_file_gz)
             for db_file in db_files:
-                store.write_output_file(db_file, "blast/{}".format(os.path.basename(v))
+                store.write_output_file(db_file, "blast/{}".format(os.path.basename(v)))
 
         return db_files
 
@@ -46,7 +46,7 @@ class MakeBlastDB(BLAST):
     PARAMETERS = ["-in", ("in_file", "path:in"),
                   (":dbtype:prot", "str", "-dbtype {}"),
                   "-parse_seqids",
-                  "-out", ("out_file", "path:out")
+                  "-out", ("out_file", "path:out"),
                   (":title", "str", "-title {}")]
     ENTRYPOINT = "makeblastdb"
     RETURN_FILES = True

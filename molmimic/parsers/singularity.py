@@ -182,19 +182,15 @@ def apiSingularityCall(job,
         command = runscript+[pipe_prefix + command]
         logger.debug("Calling singularity with: " + repr(command))
 
-    # If 'parameters' is a normal list, join all elements into a single string
-    # element, quoting and escaping each element.
-    # Example: ['echo','the Oread'] becomes: ["echo 'the Oread'"]
-    # Note that this is still a list, and the docker API prefers this as best
-    # practice:
-    # http://docker-py.readthedocs.io/en/stable/containers.html
+    # If 'parameters' is a normal list, join all elements into a parameters list.
+    # Insert the runscript if given
     elif len(parameters) > 0 and isinstance(parameters, list) and runscript is not None:
         if isinstance(runscript, str):
             runscript = [runscript]
         # else: #runscript is None:
         #     pass
             #runscript = ['/bin/bash', '-c']
-        command = ' '.join((quote(arg) for arg in parameters))
+        command = runscript+[quote(arg) for arg in parameters]
         logger.debug("Calling singularity with: " + repr(command))
 
     # If the 'parameters' lists are empty, they are respecified as None, which

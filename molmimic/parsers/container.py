@@ -198,8 +198,6 @@ class Container(object):
 
         image = pullContainer(self.IMAGE, pull_folder=CONTAINER_PATH)
 
-        print("Running parameters", parameters)
-
         try:
             with silence_stdout(), silence_stderr():
                 out = containerCall(

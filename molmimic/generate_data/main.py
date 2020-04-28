@@ -46,7 +46,7 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
             calculate_features(job, cath_domain, superfamily, update_features=update_features)
 
 def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
-  force=False, further_parallize=False):
+  force=False, further_parallize=True):
     cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
     cathcode = superfamily.replace("/", ".")
 
@@ -88,9 +88,30 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
 def start_toil(job, cathFileStoreID, cathcode=None, update_features=None, force=False):
     RealtimeLogger.info("started")
 
-    #Start CATH hiearchy
-    run_cath_hierarchy(job, cathcode, process_superfamily, cathFileStoreID,
-        update_features=update_features, force=force)
+    cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
+
+    cath_domains = filter_hdf_chunks(
+        cath_file,
+        "table",
+        columns=["cath_domain", "cathcode"],
+        drop_duplicates=True)
+
+    done_domains = [os.path.basename(domain).split("_")[0] for domain in \
+        data_stores.cath_features.list_input_directory() \
+        if domain.endswith("edges.txt.gz")]
+
+    domains_to_run = cath_domains[~cath_domains["cath_domain"].isin(done_domains)]
+    RealtimeLogger.info("Domains to run: {}".format(len(domains_to_run)))
+
+    if len(domains_to_run) > 500:
+        #Start CATH hiearchy
+        run_cath_hierarchy(job, cathcode, process_superfamily, cathFileStoreID,
+            update_features=update_features, force=force)
+    else:
+        superfamilies = domains_to_run["cathcode"].drop_duplicates().str.replace(".", "/")
+        RealtimeLogger.info("Superfamilies to run: {}".format(len(superfamilies)))
+        map_job(job, process_superfamily, superfamilies, cathFileStoreID,
+            update_features=update_features, force=force)
 
     #Build Interactome
     #job.addChildJobFn()

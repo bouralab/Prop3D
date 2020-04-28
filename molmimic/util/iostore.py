@@ -849,7 +849,7 @@ class S3IOStore(IOStore):
 
         """
 
-        raise NotImplementedError()
+        return self.s3.head_object(Bucket=self.bucket_name, Key=path)['ContentLength']
 
     @backoff
     def get_number_of_items(self, path=None):

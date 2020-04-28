@@ -34,6 +34,7 @@ class DSSP(Container):
                     dssp = self.__call__(in_file=delocc_file, out_file=out_file)
                 except RuntimeError as e:
                     raise
+            raise
 
         result = bioDSSP(bioPDB[0], dssp, file_type='DSSP')
 

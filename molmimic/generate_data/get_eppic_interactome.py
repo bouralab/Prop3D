@@ -292,9 +292,7 @@ class EPPICInteractome(object):
         self.skip_intIds = self.status.finished_interfaces()
 
         #Start new connection EPPIC api
-        eppic_store = IOStore.get("aws:us-east-1:molmimic-eppic-service")
-        pdbe_store = IOStore.get("aws:us-east-1:molmimic-pdbe-service")
-        self.eppic = EPPICApi(pdbId.lower(), eppic_store, pdbe_store,
+        self.eppic = EPPICApi(pdbId.lower(), data_stores.eppic_store, data_stores.pdbe_store,
             use_representative_chains=False, work_dir=work_dir)
 
     def run(self):
@@ -620,7 +618,7 @@ def process_pdb(job, pdbId, cathFileStoreID, manual_status=False, work_dir=None)
         manual_status=manual_status, work_dir=work_dir)
     interactome.run()
 
-def process_pdb_group(job, pdb_group, cathFileStoreID, further_parallelize=False):
+def process_pdb_group(job, pdb_group, cathFileStoreID, further_parallelize=True):
     work_dir = job.fileStore.getLocalTempDir()
 
     if further_parallelize:
@@ -658,31 +656,38 @@ def merge_cath(job, cathFileStoreID, further_parallelize=False):
             except:
                 pass
 
-def start_toil(job, cathFileStoreID, check=True, further_parallelize=True):
+def start_toil(job, cathFileStoreID, force=False, split_groups=True, further_parallelize=True):
     work_dir = job.fileStore.getLocalTempDir()
     cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
 
-    # pdb = pd.read_hdf(cath_file, "table", columns=["pdb", "cath_domain"]).drop_duplicates()
-    #
-    # if check:
-    #     keys = list(data_stores.eppic_interfaces.list_input_directory())
-    #
-    #     done_pdbs = []
-    #     for pdbId, files in groupby(data_stores.eppic_interfaces.list_input_directory(), lambda k: k.split("/")[1]):
-    #         files = [os.path.splitext("".join(k.split("/")[2:]))[0] for k in files]
-    #         if len(files) > 1 and "status.json" in files:
-    #             done_pdbs.append(pdbId)
-    #
-    #     total_size = len(pdb)
-    #     pdb = pdb[~pdb["pdb"].isin(done_pdbs)]
-    #     RealtimeLogger.info("Filtered CATH ({}/{} domains)".format(len(pdb), total_size))
-    # else:
-    #     RealtimeLogger.info("Running CATH ({} domains)".format(len(pdb)))
-    # pdb = pdb.assign(group=pdb["pdb"].str[:3])
-    # pdb_groups = pdb.groupby("group")["pdb"].apply(list)
-    # map_job(job, process_pdb_group, pdb_groups, cathFileStoreID, further_parallelize)
+    pdb = pd.read_hdf(cath_file, "table", columns=["pdb", "cath_domain"]).drop_duplicates()
 
-    map_job(job, process_pdb, ["101m"], cathFileStoreID)
+    if not force:
+        keys = list(data_stores.eppic_interfaces.list_input_directory())
+
+        all_files = list(data_stores.eppic_interfaces.list_input_directory("pdb"))
+        done_pdbs = [f.split("/")[1] for f in all_files if "status.json" in f]
+
+        # done_pdbs = []
+        # for pdbId, files in groupby(data_stores.eppic_interfaces.list_input_directory(), lambda k: k.split("/")[1]):
+        #     files = [os.path.splitext("".join(k.split("/")[2:]))[0] for k in files]
+        #     if len(files) > 1 and "status.json" in files:
+        #         done_pdbs.append(pdbId)
+
+        total_size = len(pdb)
+        pdb = pdb[~pdb["pdb"].isin(done_pdbs)]
+        RealtimeLogger.info("Filtered CATH ({}/{} domains)".format(len(pdb), total_size))
+    else:
+        RealtimeLogger.info("Running CATH ({} domains)".format(len(pdb)))
+
+    if split_groups:
+        pdb = pdb.assign(group=pdb["pdb"].str[:3])
+        pdb_groups = pdb.groupby("group")["pdb"].apply(list)
+        map_job(job, process_pdb_group, pdb_groups, cathFileStoreID, further_parallelize)
+    else:
+        map_job(job, process_pdb, pdb["pdb"], cathFileStoreID)
+
+    #map_job(job, process_pdb, ["4ht5"], cathFileStoreID)
 
     #job.addFollowOnJobFn(run_cath_hierarchy, merge_cath, None, cathFileStoreID)
 
@@ -691,7 +696,7 @@ if __name__ == "__main__":
     from toil.job import Job
 
     parser = Job.Runner.getDefaultArgumentParser()
-    parser.add_argument("--check", default=False, action="store_true")
+    parser.add_argument("--force", default=False, action="store_true")
     options = parser.parse_args()
     options.logLevel = "DEBUG"
     options.clean = "always"
@@ -703,7 +708,7 @@ if __name__ == "__main__":
     with Toil(options) as workflow:
         cathFileURL = 'file://' + os.path.abspath("cath.h5")
         cathFileID = workflow.importFile(cathFileURL)
-        workflow.start(Job.wrapJobFn(start_toil, cathFileID, options.check))
+        workflow.start(Job.wrapJobFn(start_toil, cathFileID, options.force))
 
     # status_key = "pdb/{}/status.json".format(pdbId)
     # status_file = os.path.join(work_dir, "{}_status.json".format(pdbId))

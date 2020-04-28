@@ -60,7 +60,7 @@ class PrepareProteinError(RuntimeError):
         store.write_output_file(fail_file, "errors/"+os.path.basename(fail_file))
         safe_remove(fail_file)
 
-def extract_domain(pdb_file, cath_domain, sfam_id, rename_chain=None,
+def extract_domain(pdb_file, cath_domain, sfam_id, chain=None, rename_chain=None,
   striphet=True, rslices=None, work_dir=None):
     """Extract a domain from a protein structure and cleans the output to make
     it in standard PDB format. No information in changed or added
@@ -115,7 +115,7 @@ def extract_domain(pdb_file, cath_domain, sfam_id, rename_chain=None,
         if f.read() == "":
             raise RuntimeError("Error processing PDB: {}".format(input))
 
-    chain = cath_domain[4]
+    chain = cath_domain[4] if chain is None else chain
     all_chains = list(get_all_chains(input))
 
     commands = [
