@@ -19,7 +19,8 @@ from molmimic.common.features import default_atom_feature_df, default_residue_fe
 
 class Structure(object):
     def __init__(self, path, cath_domain, input_format="pdb",
-                 feature_mode="r", features_path=None, residue_feature_mode="r"):
+                 feature_mode="r", features_path=None, residue_feature_mode="r",
+                 reset_chain=False, volume=264):
         self.path = path
         if not os.path.isfile(self.path):
             raise InvalidPDB("Cannot find file {}".format(self.path))
@@ -41,6 +42,7 @@ class Structure(object):
         self.pdb = cath_domain[:4]
         self.chain = cath_domain[4]
         self.domNo = cath_domain[5:]
+        self.volume = volume
 
         try:
             self.structure = parser.get_structure(self.cath_domain, self.path)
@@ -56,7 +58,10 @@ class Structure(object):
         if len(all_chains) > 1:
             raise InvalidPDB("Only accepts PDBs with 1 chain in {} {}".format(self.cath_domain, self.path))
 
-        self.id = "{}{}{:02d}".format(self.pdb, self.chain, int(self.domNo))
+        if reset_chain:
+            self.chain = all_chains[0].id
+
+        self.id = self.cath_domain #"{}{}{:02d}".format(self.pdb, self.chain, int(self.domNo))
         self.n_residue_features = len(residue_features)
         self.n_atom_features = len(atom_features)
 
@@ -158,20 +163,32 @@ class Structure(object):
                 continue
             yield a
 
-    def save_pdb(self, path=None, file_like=False):
+    def save_pdb(self, path=None, header=None, file_like=False, rewind=True):
         lines = not path and not file_like
         if path is None:
             path = StringIO()
+
+        if header is not None:
+            new_header = ""
+            for line in header.splitlines():
+                if not line.startswith("REMARK"):
+                    line = "REMARK {}\n".format(line)
+                new_header += line
+            old_header = self.structure.header
+            self.structure.header = new_header
 
         writer = PDB.PDBIO()
         writer.set_structure(self.structure)
         writer.save(path)
 
-        if file_like:
+        if file_like and rewind:
             path.seek(0)
 
         if lines:
             path = path.read()
+
+        if header is not None:
+            self.structure.header = old_header
 
         return path
 
@@ -250,29 +267,52 @@ class Structure(object):
             self.mean_coord_updated = True
         return self.mean_coord
 
-    def shift_coords_to_origin(self):
-        mean_coord = self.get_mean_coord()
-        coords = self.get_coords()-mean_coord
+    def get_max_coord(self):
+        return np.max(self.get_coords(), axis=0)
+
+    def get_min_coord(self):
+        return np.min(self.get_coords(), axis=0)
+
+    def get_max_length(self, buffer=5):
+        return int(np.ceil(np.linalg.norm(self.get_max_coord()-self.get_min_coord())))+buffer
+
+    def shift_coords(self, new_center=None, from_origin=True):
+        """if new_center is None, it will shift to the origin"""
+        coords = self.get_coords()
+        if from_origin or new_center is None:
+            mean_coord = self.get_mean_coord()
+            coords -= mean_coord
+        if new_center is not None:
+            coords += new_center
         self.update_coords(coords)
         self.mean_coord_updated = False
         return np.mean(coords, axis=0)
 
+    def shift_coords_to_origin(self):
+        return self.shift_coords()
+
     def shift_coords_to_volume_center(self):
-        mean_coord = self.get_mean_coord()
-        coords = self.get_coords()-mean_coord
-        coords += np.array([self.volume/2]*3)
-        self.update_coords(coords)
-        self.mean_coord_updated = False
-        return np.mean(coords, axis=0)
+        return self.shift_coords(np.array([self.volume/2]*3))
+
+    def resize_volume(self, new_volume, shift=True):
+        self.volume = new_volume
+        if shift:
+            self.shift_coords_to_volume_center()
 
     def get_coords(self, include_hetatms=False, exclude_atoms=None):
         return np.array([a.get_coord() for a in self.get_atoms(
             include_hetatms=include_hetatms, exclude_atoms=exclude_atoms)])
 
-    def orient_to_pai(self, flip_axis=(0.2, 0.2, 0.2)):
+    def orient_to_pai(self, random_flip=False, flip_axis=(0.2, 0.2, 0.2)):
+        self.shift_coords_to_origin()
+
         coords = PCA(n_components = 3).fit_transform(self.get_coords())
-        coords = flip_around_axis(coords, axis=flip_axis)
+        if random_flip:
+            coords = flip_around_axis(coords, axis=flip_axis)
+
         self.update_coords(coords)
+
+        self.shift_coords_to_volume_center()
 
     def rotate(self, rvs=None, num=1):
         """Rotate structure in randomly in place"""

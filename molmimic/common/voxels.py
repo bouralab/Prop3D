@@ -16,7 +16,7 @@ from molmimic.common.features import atom_features_by_category, number_of_featur
 class ProteinVoxelizer(Structure):
     def __init__(self, path, cath_domain, input_format="pdb",
       volume=264, voxel_size=1.0, rotate=True, features_path=None,
-      residue_feature_mode=None, use_features=None):
+      residue_feature_mode=None, use_features=None, ligand=False):
         super().__init__(path, cath_domain,
             input_format=input_format, feature_mode="r",
             features_path=features_path,
@@ -31,9 +31,13 @@ class ProteinVoxelizer(Structure):
         self.atom_tree = None
 
         self.use_features = use_features
+        self.ligand = ligand
 
         if rotate is None:
             self.shift_coords_to_volume_center()
+            self.set_voxel_size(self.voxel_size)
+        elif rotate == "pai":
+            self.orient_to_pai()
             self.set_voxel_size(self.voxel_size)
         else:
             next(self.rotate(rotate))
@@ -103,7 +107,7 @@ class ProteinVoxelizer(Structure):
       include_full_protein=True, only_aa=False, only_atom=False,
       use_deepsite_features=False, non_geom_features=False,
       only_surface=True, autoencoder=False, return_voxel_map=False,
-      return_serial=False, return_b=False, nClasses=2):
+      return_serial=False, return_b=False, nClasses=2, simple_fft=None):
         """Map atoms to sparse voxel space.
 
         Parameters
@@ -148,7 +152,7 @@ class ProteinVoxelizer(Structure):
             only_atom=only_atom,
             non_geom_features=non_geom_features,
             use_deepsite_features=use_deepsite_features,
-            coarse_grained=False)
+            coarse_grained=False) if simple_fft is None else 1
 
         data_voxels = defaultdict(lambda: np.zeros(nFeatures if self.use_features is None else len(self.use_features)))
         truth_voxels = {} #defaultdict(list)
@@ -185,7 +189,7 @@ class ProteinVoxelizer(Structure):
                 skipped += 1
                 continue
 
-            if only_surface:
+            if only_surface and simple_fft is None:
                 features, is_buried = self.get_features_for_atom(
                     atom,
                     only_aa=only_aa,
@@ -197,6 +201,8 @@ class ProteinVoxelizer(Structure):
                     skipped += 1
                     skipped_inside.append((atom, features, is_buried))
                     continue
+            elif simple_fft is not None:
+                features = self.simple_fft_scoring_features(atom, mode=simple_fft)
             else:
                 features = self.get_features_for_atom(
                     atom,
@@ -439,6 +445,51 @@ class ProteinVoxelizer(Structure):
         except ValueError:
             pass
 
+    def simple_fft_scoring_features(self, atom_or_residue, mode="simple", b=3):
+        """Rp=−1  on a surface layer and Rp=1 on the core of the receptor,
+        Lp=1 on the entire ligand, and Rp=Lp=0 everywhere else. It is clear that
+        this scoring function, which is essentially the one used by
+        Katchalski-Katzir et al. (5), reaches its minimum on a conformation in
+        which the ligand maximally overlaps with the surface layer of the receptor,
+        thus providing optimal shape complementarity. https://doi.org/10.1073/pnas.1603929113"""
+
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            residue_buried = self.atom_features.loc[atom_or_residue.serial_number, "residue_buried"]
+            charge = self.atom_features.loc[atom_or_residue.serial_number, "charge"]
+            electrostatic_potential = self.atom_features.loc[atom_or_residue.serial_number, "electrostatic_potential"]
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            residue_buried = self.residue_features.loc[atom_or_residue.get_id(), "residue_buried"]
+            charge = self.residue_features.loc[atom_or_residue.get_id(), "charge"]
+            electrostatic_potential = self.residue_features.loc[atom_or_residue.get_id(), "electrostatic_potential"]
+        else:
+            raise RuntimeError("Must be Atom or Residue")
+
+        if mode in [True, "simple"]:
+            if not self.ligand:
+                if residue_buried:
+                    features = np.array([-15, 0])
+                else:
+                    features = np.array([1, 0])
+            else:
+                #features = np.array([1])
+                if residue_buried:
+                    features = np.array([1])
+                else:
+                    features = np.array([0])
+
+            return features
+
+        elif mode == "zdock":
+            psc_elec = np.array([
+                3.5**2 if residue_buried else 3.5, #Same for ligand
+                charge if not self.ligand else 0
+            ])
+
+            return psc_elec
+
+        else:
+            print("Mode is", mode, mode in [True])
+
     def get_vdw_grid_coords_for_atom(self, atom):
         dist = self.get_vdw(atom)[0]
         neighbors = self.voxel_tree.query_ball_point(atom.coord, r=dist)
@@ -467,6 +518,10 @@ class ProteinVoxelizer(Structure):
         for r, M in super().rotate(rvs=rvs, num=num):
             self.set_voxel_size(self.voxel_size)
             yield r, M
+
+    def resize_volume(self, new_volume, shift=True):
+        super().resize_volume(new_volume, shift=shift)
+        self.set_voxel_size(self.voxel_size)
 
     def set_voxel_size(self, voxel_size=None):
         self.voxel_size = voxel_size or 1.0

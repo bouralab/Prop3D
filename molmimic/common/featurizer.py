@@ -28,14 +28,15 @@ from molmimic.common.features import atom_features, residue_features, \
 
 class ProteinFeaturizer(Structure):
     def __init__(self, path, cath_domain, job, work_dir,
-      input_format="pdb", force_feature_calculation=False, update_features=None):
+      input_format="pdb", force_feature_calculation=False, update_features=None, **kwds):
         feature_mode = "w+" if force_feature_calculation else "r"
         super(ProteinFeaturizer, self).__init__(
             path, cath_domain,
             input_format=input_format,
             feature_mode=feature_mode,
             residue_feature_mode=feature_mode,
-            features_path=work_dir)
+            features_path=work_dir,
+            **kwds)
         self.job = job
         self.work_dir = work_dir
         self.update_features = update_features
@@ -494,13 +495,13 @@ class ProteinFeaturizer(Structure):
             is_atom = False
             residue = atom_or_residue
         else:
-            raise RuntimeError("Input must be Atom or Residue")
+            raise RuntimeError("Input must be Atom or Residue, not {}".format(atom_or_residue))
 
         if not hasattr(self, "_dssp"):
             dssp = DSSP(work_dir=self.work_dir, job=self.job)
             self._dssp = dssp.get_dssp(self.structure, self.path)
 
-        residue_key = [self.chain, residue.get_id()]
+        residue_key = [residue.parent.get_id(), residue.get_id()] #[self.chain, residue.get_id()]
         try:
             residue_rasa = float(self._dssp[tuple(residue_key)][3])
         except KeyError as e1:
