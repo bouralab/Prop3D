@@ -56,7 +56,7 @@ class Superpose(object):
             subprocess.call(cmd, stdout=out)
 
     def clean(self):
-        for f in glob.glob(self.out_prefix+"*")):
+        for f in glob.glob(self.out_prefix+"*"):
             try:
                 os.remove(f)
             except OSError:
@@ -146,7 +146,7 @@ class MMAlign(TMAlign, Superpose):
     def _get_ending(self):
         return ".sup_all"
 
-class CEAlign(Contianer, Superpose):
+class CEAlign(Container, Superpose):
     IMAGE = "edraizen/ce:latest"
     PARAMETERS = [
         "--file1", ("fixed_pdb_file", "path:in"),
@@ -165,6 +165,9 @@ class CEAlign(Contianer, Superpose):
 
     def _get_ending(self):
         return ""
+
+class Align(TMAlign):
+    pass
 
 
 # def align(fixed_file, fixed_chain, moving_file, moving_chain, method="tmalign", force_alignment=None, extract=True, parse_postions=False, docker=True, work_dir=None, job=None):

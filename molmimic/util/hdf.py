@@ -6,7 +6,7 @@ import pandas as pd
 
 from toil.realtimeLogger import RealtimeLogger
 
-def get_file(job, prefix, path_or_fileStoreID, work_dir=None, return_type=False):
+def get_file(job, prefix, path_or_fileStoreID, work_dir=None, cache=False, return_type=False):
     if isinstance(path_or_fileStoreID, str) and os.path.isfile(path_or_fileStoreID):
         if return_type:
             return path_or_fileStoreID, "path"
@@ -17,9 +17,13 @@ def get_file(job, prefix, path_or_fileStoreID, work_dir=None, return_type=False)
         new_file = os.path.join(work_dir, prefix)
 
         if isinstance(path_or_fileStoreID, (toil.fileStores.FileID, str)):
-            with job.fileStore.readGlobalFileStream(path_or_fileStoreID) as fs, open(new_file, "wb") as nf:
-                for line in fs:
-                    nf.write(line)
+            if cache:
+                new_file = job.fileStore.readGlobalFile(
+                    path_or_fileStoreID, userPath=new_file, cache=True)
+            else:
+                with job.fileStore.readGlobalFileStream(path_or_fileStoreID) as fs, open(new_file, "wb") as nf:
+                    for line in fs:
+                        nf.write(line)
         elif hasattr(path_or_fileStoreID, "read_input_file"):
             #Might be file store itself
             path_or_fileStoreID.read_input_file(prefix, new_file)
@@ -100,6 +104,10 @@ def filter_hdf_chunks(hdf_path, dataset, column=None, value=None, columns=None,
             _df = None
     if df is None:
         raise TypeError("Unable to parse HDF")
+
+    #Make sure store is closed
+    store.close()
+
     return df
 
 def make_h5_tables(files, iostore):

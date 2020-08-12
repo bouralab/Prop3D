@@ -18,6 +18,7 @@ def fix_cathcode(c):
         except ValueError:
             if isinstance(cathcode, str) and cathcode in ["None", "all"]:
                 return None
+
 def run_cath_hierarchy(job, cathcode, func, cathFileStoreID, **kwds):
     work_dir = job.fileStore.getLocalTempDir()
     further_parallelize = kwds.get("further_parallelize", True)
@@ -87,7 +88,9 @@ def run_cath_hierarchy(job, cathcode, func, cathFileStoreID, **kwds):
             drop_duplicates=True,
             **cathcode)[cath_names]
 
-        safe_remove(cath_file, warn=True)
+        rc = safe_remove(cath_file, warn=True)
+        if not rc:
+            RealtimeLogger.info("Unable to remove file {}")
 
     else:
         cathcodes = pd.DataFrame([cathcode], columns=cath_names)
@@ -103,6 +106,8 @@ def run_cath_hierarchy(job, cathcode, func, cathFileStoreID, **kwds):
         if "cathCodeStoreID" in kwds:
             del kwds["cathCodeStoreID"]
         map_job(job, func, sfams, cathFileStoreID, **kwds)
+
+    del cathcodes
 
 def download_cath_domain(cath_domain, sfam_id=None, work_dir=None):
     """Download CATH domain from CATh API. Raises KeyError is cath_domain doesn't

@@ -1,68 +1,87 @@
 import os, sys
+import glob
 
-from molmimic.parser.container import Container
+import pandas as pd
 
-try:
-	from toil.lib.docker import apiDockerCall
-except ImportError:
-	apiDockerCall = None
-	import subprocess
+from toil.realtimeLogger import RealtimeLogger
+
+from molmimic.parsers.container import Container
 
 class USEARCH(Container):
-	IMAGE = 'edraizen/usearch:latest'
-	LOCAL = ["usearch"]
-	RETURN_FILES = True
-	PARAMETERS = [(":")]
+    IMAGE = 'docker://edraizen/usearch:latest'
+    LOCAL = ["usearch"]
+    RETURN_FILES = True
 
-def run_usearch(parameters, work_dir=None, docker=True, job=None):
-	if work_dir is None:
-		work_dir = os.getcwd()
+class ClusterFast(USEARCH):
+    ARG_START = "-"
+    PARAMETERS = [#"-cluster_fast",
+        ("fasta_file", "path:in", ["-cluster_fast", "{}"]),
+        (":id", "str"),
+        (":centroids", "path:out"),
+        (":uc", "path:out"),
+        (":consout", "path:out"),
+        (":msaout", "path:out:ignore"),
+        (":sort", "str"),
+        (":threads", "str")
+    ]
 
-	if docker and apiDockerCall is not None and job is not None:
-		_parameters = []
-		outfiles = []
-		for i, p in enumerate(parameters):
-			if p.startswith("{i}"):
-				full = p[3:]
-				short = os.path.basename(full)
-				if not os.path.abspath(os.path.dirname(full)) == os.path.abspath(work_dir):
-					shutil.copy(full, work_dir)
-				_parameters.append(os.path.join("/data", short))
-			elif p.startswith("{o}"):
-				full = p[3:]
-				short = os.path.basename(full)
-				_parameters.append(os.path.join("/data", short))
-				outfiles.append(os.path.join(work_dir, short))
-			else:
-				_parameters.append(p)
+    def __call__(self, *args, **kwds):
+        output = super().__call__(*args, **kwds)
 
-		try:
-			apiDockerCall(job,
-						  image='edraizen/usearch:latest',
-						  working_dir="/data",
-                          volumes={work_dir:{"bind":"/data", "mode":"rw"}},
-						  parameters=_parameters,
-						  entrypoint="/opt/usearch/usearch")
-		except (SystemExit, KeyboardInterrupt):
-			raise
-		except:
-			raise
-	else:
-		new_parameters = []
-		outfiles = []
-		for i, p in enumerate(parameters):
-			if p.startswith("{i}"):
-				new_parameters.append(p[3:])
-			elif p.startswith("{o}"):
-				new_parameters.append(p[3:])
-				outfiles.append(p[3:])
-			else:
-				new_parameters.append(p)
-		command = ["usearch"]+new_parameters
+        RealtimeLogger.info("FINISHED UCLUST {}".format(output))
+        if "msaout" in kwds and isinstance(output, dict):
+            name = output["msaout"]
+            RealtimeLogger.info("Similar files: {}".format([f for f in os.listdir(self.work_dir) if "all_binding_sites" in f][:5]))
+            output["msaout"] = list(glob.glob(os.path.join(self.work_dir, output["msaout"]+"*")))
+            RealtimeLogger.info("Number of MSAOUT: {} {}".format(name, len(output["msaout"])))
+        return output
 
-		try:
-			subprocess.check_output(command, stderr=subprocess.PIPE)
-		except subprocess.CalledProcessError:
-			raise RuntimeError("Unable to minimize file {}".format(pqr_file))
+    def cluster(self, fasta_file, id=0.9, centroids=True, uc=True, msa=True, cons=False, parse_uc=True, sort=None, threads=None):
+        prefix = os.path.join(self.work_dir, os.path.splitext(os.path.basename(fasta_file))[0])
 
-	return outfiles
+        RealtimeLogger.info("CLUSTER: msa={}; centroids={};, uc={}; cons={}".format(msa, centroids, uc, cons))
+
+        parameters = {"fasta_file":fasta_file, "id":id}
+        if centroids:
+            parameters["centroids"] = os.path.join(self.work_dir, "{}_clusterfast.centroids".format(prefix))
+
+        if uc:
+            parameters["uc"] = os.path.join(self.work_dir, "{}_clusterfast.uc".format(prefix))
+
+        if msa:
+            parameters["msaout"] = os.path.join(self.work_dir, "{}_clusterfast_msa.fasta.".format(prefix))
+
+        if cons:
+            parameters["consout"] = os.path.join(self.work_dir, "{}_clusterfast_cons.fasta".format(prefix))
+
+        if isinstance(threads, int):
+            parameters["threads"] = str(threads)
+
+        RealtimeLogger.info("RUNNING UCLUST with {}".format(parameters))
+
+        cluster_output = self(**parameters)
+
+        if parse_uc and "uc" in cluster_output:
+            cluster_output["uc"] = self.parse_uc_file(cluster_output["uc"])
+
+        return cluster_output
+
+    @staticmethod
+    def parse_uc_file(uclust_file):
+        #Convert uclust to h5
+        uclust = pd.read_table(str(uclust_file), comment="#", header=None, names=[
+            "record_type",
+            "cluster",
+            "length",
+            "pctId",
+            "strand",
+            "unk1",
+            "unk2",
+            "alignment",
+            "label_query",
+            "label_target"
+        ])
+        del uclust["unk1"]
+        del uclust["unk2"]
+
+        return uclust

@@ -180,6 +180,20 @@ def rottrans_from_matrix(moving_pdb, M, t, new_file=None):
             yield "".join(("{:<8.3f}".format(i)[:8] for i  in xyz))
     return update_xyz(moving_pdb, coords, updated_pdb=new_file, process_new_lines=get_coords)
 
+def rottrans_from_symop(moving_pdb, symmetry_operation, new_file=None):
+    if symmetry_operation in [None, "X,Y,Z"]:
+        return moving_pdb
+
+    sym_ops = [dim.split("+") for dim in symmetry_operation.split(",")]
+    rot, trans = zip(*sym_ops)
+    trans = map(float, trans)
+
+    rot_mat = np.eye(3)
+    for i, (r,d) in enumerate(zip(rot, ("X","Y","Z"))):
+        rot_mat[i,i] = float(r.replace(d, "1"))
+
+    return rottrans_from_matrix(moving_pdb, rot_mat, trans, new_file=new_file)
+
 def tidy(pdb_file, replace=False, new_file=None):
     _new_file = pdb_file+".tidy.pdb" if new_file is None else new_file
     with open(_new_file, "w") as f:

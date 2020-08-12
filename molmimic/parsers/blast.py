@@ -44,10 +44,10 @@ class BLAST(Container):
 
 class MakeBlastDB(BLAST):
     PARAMETERS = ["-in", ("in_file", "path:in"),
-                  (":dbtype:prot", "str", "-dbtype {}"),
+                  (":dbtype:prot", "str"),
                   "-parse_seqids",
                   "-out", ("out_file", "path:out"),
-                  (":title", "str", "-title {}")]
+                  (":title", "str")]
     ENTRYPOINT = "makeblastdb"
     RETURN_FILES = True
 

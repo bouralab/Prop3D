@@ -1,63 +1,483 @@
 import os
 import shutil
 import tempfile
+import shutil
+import re
+from io import StringIO
 
-try:
-    from toil.lib.docker import apiDockerCall
-except ImportError:
-    apiDockerCall = None
-    import subprocess
-    maxcluster_path = os.path.dirname(os.path.dirname(subprocess.check_output(["which", "maxcluster"])))
+from joblib import Parallel, delayed
+import pandas as pd
+
+from molmimic.parsers.container import Container
+from molmimic.util import safe_remove
+from molmimic.util.toil import partition, map_job, map_job_rv, map_job_rv_list, loop_job_rv
+from molmimic.util.iostore import IOStore
+from molmimic.util.hdf import get_file
+
+from toil.realtimeLogger import RealtimeLogger
+from toil.fileStores import FileID
+
+def start_one_vs_all_jobs(job, file_list, C=1, P=10, intermediate_file_store=None, further_parallelize=True, cores=1, mem="72G", memory="72G", **kwds):
+    work_dir = job.fileStore.getLocalTempDir()
+    if not isinstance(file_list, (list, tuple)):
+        file_list_file = get_file(job, "file_list", file_list, work_dir=work_dir, cache=True)
+        with open(file_list_file) as fh:
+            pdbs = [pdb.rstrip() for pdb in fh]
+    else:
+        pdbs = file_list
+
+    pdbs = list(enumerate(pdbs))[:-1]
+
+    if not further_parallelize or cores > 1:
+        #Run sequentially or parallelize via joblib if multiple cores
+        RealtimeLogger.info("Starting distributed start_one_vs_all_jobs 222 loop")
+        dist_files = list(loop_job_rv(job, one_vs_all, pdbs, file_list,
+            intermediate_file_store=intermediate_file_store,
+            cores=cores, memory=memory, **kwds))
+    else:
+        #Parallelize with toil
+        RealtimeLogger.info("Starting distributed start_one_vs_all_jobs 222 parallel")
+        map_job(job, one_vs_all, pdbs, file_list,
+            intermediate_file_store=intermediate_file_store,
+            cores=cores, memory=mem, **kwds) #list(enumerate(file_list))
+    return #job.addFollowOnJobFn(cluster_from_distances, file_list, dist_files,
+        #C=C, P=P, intermediate_file_store=intermediate_file_store, cores=cores,
+        #mem=mem, **kwds).rv()
+
+def one_vs_all(job, exp_pdb, file_list, *args, work_dir=None, intermediate_file_store=None, cores=20, memory="72G", **kwds):
+    if work_dir is None:
+        work_dir = job.fileStore.getLocalTempDir()
+    RealtimeLogger.info("Comparing {} vs all".format(exp_pdb))
+    print("Comparing {} vs all".format(exp_pdb))
+    mc = MaxCluster(job=job, work_dir=work_dir, intermediate_file_store=intermediate_file_store, **kwds.get("container_kwds", {}))
+    return mc.one_vs_all(exp_pdb, file_list, *args, **kwds)
+
+def cluster_from_distances(job, file_list, distance_file, C=1, P=10, work_dir=None, intermediate_file_store=None, cores=20, memory="72G", **kwds):
+    if work_dir is None:
+        work_dir = job.fileStore.getLocalTempDir()
+    mc = MaxCluster(job=job, work_dir=work_dir, intermediate_file_store=intermediate_file_store)
+    return mc.cluster_from_distances(file_list, distance_file, C=C, P=P, **kwds)
 
 class MaxCluster(Container):
-    IMAGE = 'edraizen/maxcluster:latest'
-    PARAMETERS = [("l", "make_file_list", "-l {}"), ("e", "path:in", "-e {}"),
-        ("p", "path:in", "-p {}"), ("F", "path:in", "-F {}"), ("M", "path:in", "-M {}"),
-        ("log", "path:out", "-log {}"), ("R", "path:out", "-R {}"),
-        ("Rl", "path:out", "-Rl {}"), ("Ru", "path:out", "-Ru {}")]
+    IMAGE = 'docker://edraizen/maxcluster:latest'
+    RULES = {"make_file_list": "make_file_list"}
+    ARG_START = "-"
+    PARAMETERS = [
+        #Structure Comparison
+        (":l", "make_file_list"),
+        (":e", "path:in"),
+        (":p", "path:in"),
 
-    def make_file_list(self, key, file_list):
+        (":L", "str"),
+        (":d", "str"),
+        (":N", "str"),
+        (":rmsd", "store_true"),
+        (":gdt", "str"),
+        (":av", "store_true"),
+        (":TSF", "str"),
+        (":rankMS", "store_true"),
+        (":noscore", "store_true"),
+        (":bb", "store_true"),
+        (":urmsd", "store_true"),
+        (":maxRMSD", "store_true"),
+        (":TM", "store_true"),
+        (":seed", "str"),
+        (":all", "store_true"),
+        (":super", "str"),
+        (":nourmsd", "store_true"),
+        (":noalign", "store_true"),
+        (":lws", "str"),
+        (":sequence_independent", "store_true", ["-in"]),
+        (":matrix", "store_true"),
+        (":opt", "str"),
+        (":open", "str"),
+        (":aff", "str"),
+
+        #Clustering
+        (":C", "str"),
+        (":T", "str"),
+        (":Tm", "str"),
+        (":a", "str"),
+        (":is", "str"),
+        (":ms", "str"),
+        (":s", "str"),
+        (":P", "str"),
+        (":R", "path:out"),
+        (":Rl", "path:out"),
+        (":Ru", "path:out"),
+        (":F", "path:in"),
+        (":M", "path:in"),
+
+        (":log", "path:out"),
+
+        #Contact Maps
+        (":contact", "store_true"),
+        (":dist", "str"),
+        (":gap", "str"),
+
+        #MaxSubDom
+        (":O", "str"),
+        (":mS", "str"),
+        (":mP", "str"),
+        (":i", "str"),
+    ]
+
+    def create_output_name(self, kwds, prefix="MaxCluster", suffix=".log"):
+        fname = prefix
+        for k, v in kwds.items():
+            if k in ["e", "p", "F", "M"] or (k=="l" and isinstance(v, str) and os.path.isfile(v)):
+                fname += "_{}={}".format(k, os.path.splitext(os.path.basename(v))[0])
+            elif k == "l":
+                #A list
+                fname += "_l={}".format(len(v))
+            elif k in ["log", "R", "Rl", "Ru"]:
+                #Skip log
+                pass
+            else:
+                fname += "_{}={}".format(k, v)
+        fname += suffix
+        return fname
+
+    def __call__(self, *args, **kwds):
+        log_file = self.create_output_name(kwds, suffix="")
+
+        original_return_files = self.return_files
+
+        for k, ext in [("log", ".log"), ("R", ".dist"), ("Rl", ".distlite"), ("Ru", ".udist")]:
+            if k in kwds and isinstance(kwds[k], bool):
+                if kwds[k]:
+                    kwds[k] = log_file+ext
+                else:
+                    del kwds[k]
+
+        if "R" in kwds or "Rl" in kwds or "Ru" in kwds:
+            self.return_files = True
+            if "log" not in kwds:
+                kwds["log"] = log_file+".log"
+
+        if "log" in kwds:
+            self.return_files = True
+            output = super().__call__(*args, **kwds)
+            self.log_file = kwds["log"]
+        else:
+            output = super().__call__(*args, **kwds)
+            self.log_file = io.StringIO(output)
+
+        self.return_files = original_return_files
+
+        return output
+
+    def make_file_list(self, key, file_list, format_in_path=True):
         updated_file_list = self.tempfile()
-        with open(file_list) as old, hopen(updated_file_list, "w") as new:
-            for pdb in old:
-                print(self.format_in_path(None, pdb.rstrip()), file=new)
-        return file_list
 
-    def all_vs_all(self, pdbs):
+        if isinstance(file_list, str) and os.path.isfile(file_list):
+            with open(file_list) in fh:
+                file_list = [pdb.rstrip() for pdb in fh]
+
+        if not isinstance(file_list, (list, tuple)):
+            raise RuntimeError("file_list must be list, tuple, or path to file")
+
+        self.n_structures = len(file_list)
+
+        with open(updated_file_list, "w") as new:
+            for pdb in file_list:
+                print(self.format_in_path(None, pdb.rstrip(),
+                    move_files_to_work_dir=False), file=new)
+
+        if format_in_path:
+            return self.format_in_path(None, updated_file_list)
+
+        return updated_file_list
+
+    def all_vs_all(self, file_list, C=1, P=10, distributed="auto", distance="auto", cores=1, memory="1G", **kwds):
+        if isinstance(file_list, str):
+            with open(file_list) as fh:
+                n_structures = sum(1 for pdb in fh)
+        else:
+             n_structures = len(file_list)
+
+        if distributed == "auto":
+            distributed = n_structures > 10000
+
+        RealtimeLogger.info("Start all vs all: distributed={}".format(distributed))
+
+        if distributed:
+            RealtimeLogger.info("MAKING FILE LIST")
+            file_list_key = "maxcluster_intermediates/dist/file_list"
+
+            save_file_list = True
+            if self.intermediate_file_store.exists(file_list_key):
+                file_list = self.tempfile()
+                self.intermediate_file_store.read_input_file(file_list_key, file_list)
+                save_file_list = False
+            else:
+                file_list = self.make_file_list(None, file_list, format_in_path=False)
+
+            if save_file_list:
+                self.intermediate_file_store.write_output_file(file_list, file_list_key)
+
+            RealtimeLogger.info("DONE MAKING FILE LIST {}".format(file_list))
+
+            if False: #cores > 1:
+                #Parallelize with joblib
+                kwds["C"] = C
+                kwds["P"] = P
+                kwds["l"] = file_list
+                kwds["log"] = kwds.get("log", True)
+                kwds["work_dir"] = self.work_dir
+                kwds["distance"] = distance
+                kwds["intermediate_file_store"] = self.intermediate_file_store
+                kwds["container_kwds"] = dict(
+                    return_files=self.return_files,
+                    force_local=self.force_local,
+                    fallback_local=self.fallback_local,
+                    detach=self.detach)
+                log_files = Parallel(n_jobs=cores, backend="multiprocessing")(
+                    delayed(one_vs_all)(self.job, (i, f), file_list, **kwds) \
+                        for i, f in enumerate(file_list))
+                return log_files
+
+            else:
+                #Parallelize through toil
+                file_list = self.job.fileStore.writeGlobalFile(file_list)
+                RealtimeLogger.info("Starting distributed toil start_one_vs_all_jobs")
+                if kwds.get("further_parallize", True):
+                    return self.job.addChildJobFn(start_one_vs_all_jobs, file_list, C=C,
+                        P=P, distance=distance,
+                        intermediate_file_store=self.intermediate_file_store.store_string,
+                        cores=cores, mem=memory, memory="1G", **kwds).rv()
+                else:
+                    return self.job.addChildJobFn(start_one_vs_all_jobs, file_list, C=C,
+                        P=P, distance=distance,
+                        intermediate_file_store=self.intermediate_file_store.store_string,
+                        cores=cores, memory=memory, **kwds).rv()
+        else:
+            kwds["C"] = C
+            kwds["P"] = P
+            kwds["l"] = file_list
+            kwds["log"] = kwds.get("log", True)
+            if distance=="auto" or distance.lower() not in ["maxsub", "tm", "rmsd"]:
+                #Default to maxsub, no options, unless:
+                if n_structures > 2000:
+                    kwds["rmsd"] = True
+            elif distance.lower() == "tm":
+                kwds["TM"] = True
+            elif distance.lower() == "rmsd":
+                kwds["rmsd"] = True
+            else:
+                #Maxsub was chosen no options
+                pass
+
+            output = self(**kwds)
+
+            if isinstance(output, dict):
+                for arg, path in output.items():
+                    RealtimeLogger.info("OUTFILE: {}={}".format(arg, path))
+                    try:
+                        self.intermediate_file_store.write_output_file(path,
+                            "maxcluster_intermediates/{}/{}".format(arg, os.path.basename(path)))
+                    except:
+                        output[arg] = self.job.fileStore.writeGlobalFile(path)
+            elif isinstance(output, (list, tuple)):
+                for i, path in enumerate(output[:]):
+                    try:
+                        self.intermediate_file_store.write_output_file(path,
+                            "maxcluster_intermediates/{}/{}".format(arg, ps.path.basename(path)))
+                    except:
+                        output[i] = self.job.fileStore.writeGlobalFile(path)
+
+
+            return output
+
+    def one_vs_all(self, exp_pdb, file_list, distance="auto", save_distance_file=False, **kwds):
+        in_all_vs_all = False
+        if isinstance(exp_pdb, (list, tuple)):
+            if len(exp_pdb) == 2:
+                in_all_vs_all = True
+                exp_index, exp_pdb = exp_pdb
+            else:
+                raise RuntimeError("Must be path to pdb or (experent number, path)")
+        else:
+            exp_index = None
+
+        if not os.path.isfile(exp_pdb):
+            return
+
+        if not isinstance(file_list, (list, tuple)):
+            file_list = get_file(self.job, "file_list", file_list, work_dir=self.work_dir, cache=True)
+            with open(file_list) as fh:
+                file_list = [pdb.rstrip() for pdb in fh]
+
+        if exp_index is None:
+            try:
+                exp_index = file_list.index(exp_pdb)
+            except IndexError:
+                exp_index = -1
+
+        kwds["e"] = exp_pdb
+        if in_all_vs_all:
+            #Only perform comparisons for indexes exp_index+1 or higher
+            RealtimeLogger.info("MaxCLuster {}: {} {}".format(exp_index, len(file_list[exp_index+1:]), len(file_list)))
+            kwds["l"] = file_list[exp_index+1:]
+        else:
+            kwds["l"] = file_list
+
+        if in_all_vs_all or save_distance_file:
+            kwds["log"] = True
+
+        if "R" in kwds:
+            del kwds["R"]
+
+        if distance=="auto" or distance.lower() not in ["maxsub", "tm", "rmsd"]:
+            #Default to maxsub, no options, unless:
+            if len(file_list) > 2000:
+                kwds["rmsd"] = True
+        elif distance.lower() == "tm":
+            kwds["TM"] = True
+        elif distance.lower() == "rmsd":
+            kwds["rmsd"] = True
+        else:
+            #Maxsub was chosen no options
+            pass
+
+        if len(kwds["l"]) > 2000 and kwds.get("bb", False) and kwds.get("in", False):
+            is_split = True
+            num_partitions = 4
+            partition_size = int(ceil(len(kwds["l"])/num_partitions))
+            partitions = partition(kwds["l"], partition_size)
+        else:
+            is_split = False
+            paritions = [kwds["l"]]
+
+        del kwds["l"]
+        out_files = []
+        for partition in partitions(inputs, partition_size):
+            kwds["l"] = partition
+
+            output = self(**kwds)
+
+            if in_all_vs_all:
+                try:
+                    if hasattr(self.log_file, 'read'):
+                        log_file_name = os.path.join(self.work_dir, self.create_output_name(kwds, suffix=".log"))
+                        with open(log_file_name, "w") as fh:
+                            shutil.copyfileobj(self.log_file, fh)
+                        self.log_file.seek(0)
+                    else:
+                        log_file_name = self.log_file
+
+                    distances = self.get_distances(log_file_name, file_list,
+                        use_rmsd=kwds.get("rmsd", False))
+
+                    dist_file_name = self.tempfile()
+                    dist_key = "maxcluster_intermediates/dist/{}.dist".format(exp_index)
+
+                    distances.to_csv(dist_file_name, header=False, index=False)
+                    self.intermediate_file_store.write_output_file(dist_file_name, dist_key)
+
+                    safe_remove(dist_key)
+                    safe_remove(log_file_name)
+
+                except (SystemExit, KeyboardInterrupt):
+                    if not hasattr(self.log_file, 'read'):
+                        save_remove(self.log_file)
+                    raise
+                except:
+                    import traceback as tb
+                    msg = tb.format_exc()
+                    RealtimeLogger.info("FAILED MAXCLUSTER All VS ALL: {}".format(msg))
+                    return output
+
+            out_files.append(self.out_files)
+
+        if is_split:
+            return out_files
+        else:
+            return out_files[0]
+
+    def one_vs_one(self, exp_pdb, ref_pdb, **kwds):
         pass
 
-    def one_vs_all(self, exp_index, exp_pdb, file_list, args, kwds):
-        if "rmsd" in args:
-            distance_type = "RMSD"
+    def cluster_from_distances(self, file_list, distance_file, C=1, P=10, distributed=False, **kwds):
+        if isinstance(distance_file, (list, tuple)):
+            #Flatten promised return values
+            from toil.fileStores import FileID
+            distance_fileIDs = list(map_job_rv_list(distance_file))
+            if len(distance_fileIDs) == 0:
+                #Using intermediate_file_store
+                use_intermediate_file_store = True
+                distance_fileIDs = self.intermediate_file_store.list_input_directory("maxcluster_intermediates/dist")
+
+            distance_file = os.path.join(self.work_dir, "MaxCluster-all_vs_all.dist")
+            with open(distance_file, "w") as fh:
+                if isinstance(distance_file[0], FileID):
+                    for fileID in distance_fileIDs:
+                        shutil.copyfileobj(
+                            self.job.fileStore.readGlobalFileStream(fileID), fh)
+                        self.job.fileStore.deleteGlobalFile(fileID)
+                elif use_intermediate_file_store:
+                    download_file_store = not hasattr(self.intermediate_file_store, "path_prefix")
+
+                    for distance_fname in distance_fileIDs:
+                        if download_file_store:
+                            distance_fname_local = os.path.join(self.work_dir, os.path.basename(distance_fname))
+                            self.intermediate_file_store.read_input_file(distance_fname, distance_fname_local)
+                        else:
+                            distance_fname_local = distance_fname_local
+                        with open(distance_fname_local) as dist_file:
+                            for distance_fname in distance_fileIDs:
+                                with open(distance_fname) as dist_file:
+                                    shutil.copyfileobj(dist_file, fh)
+                        if download_file_store:
+                            safe_remove(distance_fname_local)
+                            self.intermediate_file_store.remove_file(distance_fname)
+                else:
+                    with open(distance_file) as fh:
+                        for distance_fname in distance_fileIDs:
+                            with open(distance_fname) as dist_file:
+                                shutil.copyfileobj(dist_file, fh)
+
+        kwds["C"] = C
+        kwds["P"] = P
+        kwds["l"] = file_list
+        if kwds.get("rmsd", False):
+            kwds["F"] = distance_file
         else:
-            distance_type = "MaxSub"
+            kwds["M"] = distance_file
 
-        pdbs_file_and_dist_re = re.compile("^INFO  : \d+\. (.+) vs. (.+)  Pairs=.+, RMSD=([ \d\.]+), MaxSub=([ \d\.]+),")
+        return self(**kwds)
 
-        if not os.path.isfile(exp_pdb): return
-        kwds["e"] = exp_pdb
-        log_file = run_maxcluster(*args, **kwds)
-
-        with open(file_list) as fh:
-            pdbs = [pdb.rstrip() for pdb in fh]
+    @staticmethod
+    def get_distances(log_file, file_list, use_rmsd=False):
+        if use_rmsd:
+            pdbs_file_and_dist_re = re.compile("^INFO  : \d+\. (?P<PDB1>.+) vs. (?P<PDB2>.+)  RMSD=(?P<RMSD>[ \d\.]+) (Pairs=(?P<Pairs>.+), rRMSD=(?P<rRMSD>[\d\.]+) ((?P<rRMSD_Zscore>[ \d\.]+))), URMSD=(?P<URMSD>[ \d\.]+) (rURMSD=(?P<rURMSD>[ \d\.]+))")
+            dist_cols = ["PDB1", "PDB2", "RMSD", "Pairs", "rRMSD", "rRMSD_Zscore", "URMSD", "rURMSD"]
+        else:
+            pdbs_file_and_dist_re = re.compile("^INFO  : \d+\. (?P<PDB1>.+) vs. (?P<PDB2>.+)  Pairs=(?P<Pairs>.+), RMSD=(?P<RMSD>[ \d\.]+), MaxSub=(?P<MaxSub>[ \d\.]+), TM=(?P<TM>[ \d\.]+), MSI=(?P<MSI>[ \d\.]+)")
+            dist_cols = ["PDB1", "PDB2", "Pairs", "RMSD", "MaxSub", "TM", "MSI"]
 
         results = []
         with open(log_file) as log:
             for i, line in enumerate(log):
-                if i<5: continue
                 m = pdbs_file_and_dist_re.match(line)
                 if m:
-                    moving_pdb, rmsd, maxsub = m.groups(2), m.groups(3), m.groups(4)
-                    distance = float(rmsd.strip() if distance_type == "RMSD" else maxsub)
-                    moving_index = pdbs.index(moving_pdb)
-                    results.append((exp_index, moving_index, distance))
+                    groups = m.groupdict()
+                    groups["PDB1"] = file_list.index(groups["PDB1"])
+                    groups["PDB2"] = file_list.index(groups["PDB2"])
+                    results.append([groups[k].strip() if isinstance(groups[k], str) \
+                        else groups[k] for k in dist_cols])
 
-        return results
+        distances = pd.DataFrame(results, columns=dist_cols)
+
+        return distances
 
 
-    def get_centroid(self, log_file=None):
+    @classmethod
+    def get_centroid(cls, log_file=None):
+        if hasattr(cls.log_file):
+            log_file = cls.log_file
         if log_file is None:
-            log_file = self.log_file
+            raise RuntimeError("Invalid log file")
 
         parse_centroids = False
         best_centroid_size = None
@@ -82,9 +502,12 @@ class MaxCluster(Container):
 
         return best_centroid_file
 
-    def get_clusters(self, log_file=None):
+    @classmethod
+    def get_clusters(cls, log_file=None):
+        if hasattr(cls.log_file):
+            log_file = cls.log_file
         if log_file is None:
-            log_file = self.log_file
+            raise RuntimeError("Invalid log file")
 
         clusters = []
         parse_clusters = False
@@ -96,24 +519,43 @@ class MaxCluster(Container):
                     next(log)
                 elif parse_clusters and line.startswith("INFO  : ="):
                     break
-                elif parse_centroids:
+                elif parse_clusters:
                     fields = line.rstrip().split()
                     cluster, pdb_file = fields[-2], fields[-1]
                     clusters.append((pdb_file, int(cluster)))
-        clusters = pd.DataFrame(clusters, names=["pdb_file", "structure_clusters"])
+        clusters = pd.DataFrame(clusters, columns=["pdb_file", "structure_clusters"])
         return clusters
 
-    def get_hierarchical_tree(self, log_file=None):
+    @classmethod
+    def get_hierarchical_tree(cls, log_file=None):
+        #https://stackoverflow.com/questions/31033835/newick-tree-representation-to-scipy-cluster-hierarchy-linkage-matrix-format
+        if hasattr(cls.log_file):
+            log_file = cls.log_file
         if log_file is None:
-            log_file = self.log_file
+            raise RuntimeError("Invalid log file")
 
         import networkx as nx
+        import pandas as pd
         nx_tree = nx.DiGraph()
+        tree = nx.Graph()
+        Z = []
         parse_tree = False
+
+        pdbs = {}
+        nodes = {}
+
+        class Node(object):
+            def __init__(self, pdb1, pdb2, distance):
+                self.pdb1 = pdb1
+                self.pdb2 = pdb2
+                self.distance = distance
+
+            def __str__(self):
+                return "({}, {})".format(self.pdb1, self.pdb2)
+
 
         with open(log_file) as log:
             for line in log:
-                job.log("LINE: {}".format(line.rstrip()))
                 if not parse_tree and line.startswith("INFO  : Hierarchical Tree"):
                     parse_tree = True
                     next(log)
@@ -121,29 +563,95 @@ class MaxCluster(Container):
                 elif parse_tree and line.startswith("INFO  : ="):
                     break
                 elif parse_tree:
+                    print(line)
                     _, node, info = line.rstrip().split(":")
                     node = int(node.strip())
                     nx_tree.add_node(node)
 
                     fields = [f.strip() for f in info.split()]
-                    item2, item2 = list(map(int, fields[:2]))
+                    item1, item2 = list(map(int, fields[:2]))
                     distance = float(fields[2])
 
                     if item1>0 and item2>0:
                         pdb1, pdb2 = fields[3:5]
-                        nx_tree.add_node(item1, pdb=pdb1)
-                        nx_tree.add_node(item2, pdb=pdb2)
-                    elif item1>0 and item2<0:
+                        pdbs[item1] = pdb1[:7]
+                        pdbs[item2] = pdb2[:7]
+                        nodes[node] = Node(pdb1[:7], pdb2[:7], distance)
+                        #nx_tree.add_node(item1, pdb=pdb1)
+                        #nx_tree.add_node(item2, pdb=pdb2)
+                    elif item1>0 and item2<=0:
                         #Node 2 already in graph
                         pdb1 = fields[3]
-                        nx_tree.add_node(item1, pdb=pdb1)
-                    elif item1<0 and item2>0:
+                        pdbs[item1] = pdb1[:7]
+                        nodes[node] = Node(pdb1[:7], nodes[item2], distance)
+                        #nx_tree.add_node(item1, pdb=pdb1)
+                    elif item1<=0 and item2>0:
                         #Node 1 already in graph
                         pdb2 = fields[3]
-                        nx_tree.add_node(item2, pdb=pdb2)
+                        pdbs[item2] = pdb2[:7]
+                        nodes[node] = Node(nodes[item1], pdb2[:7], distance)
+                        #nx_tree.add_node(item2, pdb=pdb2)
+                    else:
+                        nodes[node] = Node(nodes[item1], nodes[item2], distance)
+
+                    #Z.append([])
+
+                    Z.append([node, item1, item2, distance])
 
                     nx_tree.add_edge(node, item1)
                     nx_tree.add_edge(node, item2)
+                    tree.add_edge(item1, item2)
+
+            root_node = min(nodes.items(), key=lambda x: x[0])
+
+            Z = pd.DataFrame(Z, columns=["Node", "Item1", "Item2", "Distance"])
+
+            Z = Z.assign(count=0)
+            for i in range(len(Z)):
+                row = Z.iloc[i]
+                count = Z[Z["Node"]==row["Item1"]].iloc[0]["count"] if row["Item1"]<=0 else 1
+                count += Z[Z["Node"]==row["Item2"]].iloc[0]["count"] if row["Item2"]<=0 else 1
+                Z.loc[Z["Node"]==row["Node"], "count"] = count
+
+            print(Z)
+
+            Z2 = Z.copy()
+            top = Z[["Item1", "Item2"]].max().max()+1
+            print("TOP", top)
+            update_nodes = -1*Z[Z[["Item1", "Item2"]]<=0]+top
+            new_item1 = update_nodes.dropna(subset=["Item1"])["Item1"]
+            new_item2 = update_nodes.dropna(subset=["Item2"])["Item2"]
+            Z.loc[new_item1.index, "Item1"] = new_item1
+            Z.loc[new_item2.index, "Item2"] = new_item2
+            Z = Z.drop(columns=["Node"])
+
+            import numpy as np
+            dist = np.zeros((top-1, top-1))
+            _dist = Z2[(Z2["Item1"]>0)&(Z2["Item2"]>0)]
+            dist[_dist["Item1"], _dist["Item2"]] = _dist["Distance"]
+
+        return nx_tree, tree, Z, dist, root_node
+
+    def get_distances_and_transformations(self, distance_file):
+        pdbs = {}
+        dist_mat1 = dist_mat2 = None
+        with open(distance_file) as f:
+            for line in f:
+                if line.startswith("PDB"):
+                    num, pdb = line.strip().split()[2:]
+                    pdbs[num] = pdb
+                elif line.startswith("# Transformtion"):
+                    dist_mat1 = dist_mat2 = pd.empty((len(pdbs), len(pdbs)))
+                elif line.startswith("TRANS") and dist_mat1 is not None:
+                    fields = line.rstrip().split()
+                    dist_mat1[int(fields[1]), int(fields[2])] = float(fields[3])
+                    dist_mat1[int(fields[2]), int(fields[1])] = float(fields[3])
+                    dist_mat2[int(fields[1]), int(fields[2])] = float(fields[4])
+                    dist_mat2[int(fields[1]), int(fields[2])] = float(fields[4])
+
+        from sklearn.cluster import KMeans
+        kmeans1_2 = KMeans(init='k-means++', n_clusters=2, n_init=10)
+
 
 def get_aligned_residues(file_list, transformation_file):
     with open(file_list) as fl:
@@ -170,31 +678,36 @@ def get_msa(file_list, transformation_file, log_file):
     positions = get_aligned_residues(file_list, transformation_file)
 
 
-def make_distance_file(distances, file_list):
-    with open(file_list) as fh:
-        pdbs = [pdb.rstrip() for pdb in fh]
 
-    distances_file = "distances"
-    with open(distances_file) as fh:
+def make_distance_file(distances, file_list, fh, header=True, entries=True):
+    if header:
+        from scipy.special import comb
+
+        if isinstance(file_list, str) and os.path.isfile(file_list):
+            with open(file_list) in fh:
+                file_list = [pdb.rstrip() for pdb in fh]
+
         print("""###################################
 # Maxcluster Distance Matrix File
 ###################################""", file=fh)
-        print("SIZE :", len(pdbs)*len(pdbs), file=fh)
+        print("SIZE :", int(comb(len(file_list), 2)), file=fh)
         print("""##########################
 # Chain records
 # PDB  : <ID> <Filename>
 ##########################""", file=fh)
 
-        for i, pdb in enumerate(pdbs):
-            print("PDB : {0: >6}".format(i), pdb, file=fh)
+    for i, pdb in enumerate(file_list):
+        print("PDB : {0: >6}".format(i), pdb, file=fh)
 
-        print("""###################################
+    print("""###################################
 # Distance records
 # DIST : <ID1> <ID2> <Distance>
 ###################################""", file=fh)
 
-        for pdb1, pdb2, dist in distances:
-            print("DIST : {0: >6} {1: >6} {2:.4f}".format(pdb1, pdb2, dist), file=fh)
+    if entries:
+        for row in distances.itertuples():
+            print("DIST : {0: >6} {1: >6} {2}".format(row.PDB1,
+                row.PDB2, row.RMSD), file=fh)
 
 def parallel_cluster():
     kwds["M"] = make_distance_file()
@@ -209,7 +722,7 @@ def parallel(file_list, args, kwds, joblib=True):
     if joblib:
         all_vs_all = [one_vs_one for _vs_all in Parallel(n_jobs=-1)(delayed(one_vs_all) \
             (exp_index, exp_pdb, file_list, args, kwds) for exp_index, exp_pdb in \
-            enumerate(pdbs) for one_vs_one in _vs_all)
+            enumerate(pdbs) for one_vs_one in _vs_all)]
 
 # def run_maxcluster(*args, **kwds):
 #     work_dir = kwds.pop("work_dir", None)

@@ -13,14 +13,18 @@ from chempy import cpv
 import numpy as np
 from collections import defaultdict, Counter
 
-from scipy import spatial
+import sys
+print(sys.executable)
+#sys.path.append("/Users/ed4bu/anaconda3/lib/python3.6/site-packages/")
+
+from scipy.spatial import cKDTree
 
 import sys
 molpath = os.path.realpath(os.path.join(os.path.dirname(pymol.__script__), "..", ".."))
 sys.path.append(molpath)
 
 
-from molmimic.torch_model.torch_loader import IBISDataset
+#from molmimic.torch_model.torch_loader import IBISDataset
 
 
 #############################################################################
@@ -62,17 +66,20 @@ def start_cgo():
         ]
 
 class CGO(object):
-    def __init__(self, name=None, ):
+    def __init__(self, name=None, lw=2.0, style=LINES):
         self.name = name or "gridbox_" + str(randint(0,10000))
         while self.name in cmd.get_names():
             self.name += "_{}".format(randint(0,10000))
-        self.cgo = []
+        self.cgo = [LINEWIDTH, float(lw)]
+        self.num_box = 0
+        #BEGIN, style,]
 
-    def add_box(self, i, j, k, voxel=1.0, lw=2.0, r=1.0, g=0.0, b=0.0, style=LINES):
+    def add_box(self, i, j, k, voxel=1.0, lw=2.0, r=1.0, g=0.0, b=0.0, a=0.1, style=LINES):
         self.cgo += [
             LINEWIDTH, float(lw),
             BEGIN, style,
-            COLOR, r, g, b,
+            ALPHA, a,
+            COLOR, r, g, b, #a,
             VERTEX, i, j, k,
             VERTEX, i, j, k+voxel,
             VERTEX, i, j+voxel, k,
@@ -100,7 +107,7 @@ class CGO(object):
             END
         ]
 
-    def add_cube(self, i, j, k, r=1.0, g=0.0, b=0.0, a=0.4, voxel=1.0):
+    def add_cube(self, i, j, k, r=1.0, g=0.0, b=0.0, a=0.2, voxel=1.0):
         # r = voxel/2.
         # r *= 3 ** -.5
         # x = i+r
@@ -108,7 +115,7 @@ class CGO(object):
         # z = k+r
         x, y,z = i, j, k
 
-        settings = {'COLOR':[r,g,b], 'INVERT':True}
+        settings = {'COLOR':[r,g,b], 'ALPHA':a, 'INVERT':True}
 
         # YZ Plane
         self.cgo += make_plane_points(name='p1', l1=[x, y+voxel, z], l2=[x, y, z], l3=[x, y, z+voxel], center=False, makepseudo=False, settings=settings)
@@ -244,7 +251,7 @@ def update_selection(old, new):
     else:
         return "{} and {}".format(old, new)
 
-def drawgridbox(selection="(all)", volume=256.0, voxel_size=1.0, lw=2.0, r=1.0, g=1.0, b=1.0, show_binding_sites=True, oversample=False, undersample=False):
+def drawgridbox(selection="(all)", volume=256.0, voxel_size=1.0, lw=2.0, r=1.0, g=1.0, b=1.0, alpha=0.4, show_binding_sites=False, oversample=False, undersample=False, show_bonded=False):
     """
     DESCRIPTION
         Given selection, draw a grid box around it.
@@ -299,8 +306,8 @@ def drawgridbox(selection="(all)", volume=256.0, voxel_size=1.0, lw=2.0, r=1.0, 
     r = 256/2.
     min_coord = com-np.floor(r)
     max_coord = com+np.ceil(r)
-    drawBoundingBox(minX=min_coord[0], minY=min_coord[1], minZ=min_coord[2],
-                    maxX=max_coord[0], maxY=max_coord[1], maxZ=max_coord[2])
+    # drawBoundingBox(minX=min_coord[0], minY=min_coord[1], minZ=min_coord[2],
+    #                 maxX=max_coord[0], maxY=max_coord[1], maxZ=max_coord[2])
 
     model = cmd.get_model(selection)
 
@@ -346,7 +353,7 @@ def drawgridbox(selection="(all)", volume=256.0, voxel_size=1.0, lw=2.0, r=1.0, 
         zs = np.arange(0, extent_z.shape[0]+1)
 
         mx, my, mz = np.meshgrid(xs, ys, zs)
-        voxel_tree = spatial.cKDTree(list(zip(mx.ravel(), my.ravel(), mz.ravel())))
+        voxel_tree = cKDTree(list(zip(mx.ravel(), my.ravel(), mz.ravel())))
 
         for a in model.atom:
             vdw = vdw_radii.get(a.name.strip()[0].title(), 2.0)
@@ -358,17 +365,26 @@ def drawgridbox(selection="(all)", volume=256.0, voxel_size=1.0, lw=2.0, r=1.0, 
                 voxel = voxel-shift_by
                 all_coords[tuple(voxel.tolist())] += 1
 
-        bonded_boxes = CGO(name="bonded")
-        nonbonded_boxes = CGO(name="nonbonded", r=0.0, b=1.0)
+        if show_bonded:
+            bonded_boxes = CGO(name="bonded")
+            nonbonded_boxes = CGO(name="nonbonded") #r=0.0, b=1.0
+        else:
+            boxes = CGO(name="voxels")
 
         for voxel, count in list(all_coords.items()):
-            if count > 1:
-                bonded_boxes.add_box(voxel[0], voxel[1], voxel[2], voxel_size)
+            if show_bonded:
+                if count > 1:
+                    bonded_boxes.add_box(voxel[0], voxel[1], voxel[2], voxel_size, r=.34, g=0.5, b=.82, a=alpha)
+                else:
+                    nonbonded_boxes.add_box(voxel[0], voxel[1], voxel[2], voxel_size, r=.34, g=0.5, b=.82, a=alpha) #, r=0.0, b=1.0)
             else:
-                nonbonded_boxes.add_box(voxel[0], voxel[1], voxel[2], voxel_size)
+                boxes.add_box(voxel[0], voxel[1], voxel[2], voxel_size, r=.34, g=0.5, b=.82, a=alpha)
 
-        nonbonded_boxes.load()
-        bonded_boxes.load()
+        if show_bonded:
+            nonbonded_boxes.load()
+            bonded_boxes.load()
+        else:
+            boxes.load()
 
     cmd.rotate()
 

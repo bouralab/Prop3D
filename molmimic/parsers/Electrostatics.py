@@ -157,12 +157,14 @@ class Pdb2pqr(Container):
     IMAGE = 'docker://edraizen/pdb2pqr:latest'
     LOCAL = ["/usr/share/pdb2pqr/pdb2pqr.py"]
     PARAMETERS = [
-        (":force_field:amber", None, "--ff={}"),
+        (":force_field:amber", None, "ff"),
         (":whitespace", "store_true"),
         (":chain", "store_true"),
         ("in_file", "path:in"),
         ("out_file", "path:out")]
     RETURN_FILES = True
+    ARG_START = "--"
+    ARG_SEP = "="
 
     def __call__(self, *args, **kwds):
         try:

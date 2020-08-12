@@ -5,6 +5,10 @@ import os
 from math import ceil
 import tarfile
 from contextlib import closing
+
+from joblib import Parallel, delayed
+
+from molmimic.util import safe_remove, safe_call
 from molmimic.util.iostore import IOStore
 
 from toil.realtimeLogger import RealtimeLogger
@@ -86,7 +90,22 @@ def map_job_follow_ons(job, func, inputs, *args, **kwds):
     if partition_size > 1:
         job.addFollowOnJobFn(map_job, func, follow_on_samples, *args, **kwds)
 
-def map_job_rv(job, func, inputs, *args):
+def loop_job_rv(job, func, inputs, *args, cores=1, mem="2G", **kwds):
+    if cores > 1:
+        RealtimeLogger.info("Looping over domain in PARALLEL with {} cores".format(cores))
+        for rv in Parallel(n_jobs=cores)(delayed(safe_call)(job, func, i, *args, **kwds) for i in inputs):
+            yield rv
+    else:
+        RealtimeLogger.info("Looping over domain")
+
+        for input in inputs:
+            yield safe_call(job, func, input, *args, **kwds)
+
+def loop_job(job, func, inputs, *args, cores=1, mem="2G", **kwds):
+    [None for _ in loop_job_rv(job, func, inputs, *args, cores=cores, mem=mem, **kwds)]
+    return
+
+def map_job_rv(job, func, inputs, *args, **kwds):
     """
     Spawns a tree of jobs to avoid overloading the number of jobs spawned by a single parent.
     This function is appropriate to use when batching samples greater than 1,000.
@@ -99,23 +118,41 @@ def map_job_rv(job, func, inputs, *args):
     # num_partitions isn't exposed as an argument in order to be transparent to the user.
     # The value for num_partitions is a tested value
     num_partitions = 100
-    partition_size = len(inputs) / num_partitions
+    partition_size = int(ceil(len(inputs)/num_partitions))
     if partition_size > 1:
-        promises = [job.addChildJobFn(map_job, func, partition, *args).rv() \
+        promises = [job.addChildJobFn(map_job, func, partition, *args, **kwds).rv() \
             for partition in partitions(inputs, partition_size)]
     else:
-        promises = [job.addChildJobFn(func, sample, *args).rv() for sample in inputs]
+        promises = [job.addChildJobFn(func, sample, *args, **kwds).rv() for sample in inputs]
 
     return promises
 
 def map_job_rv_list(promises, *path):
     for p in promises:
+        if p is None:
+            continue
         rv = p.rv()
         if isinstance(rv, list) and len(rv) > 0:
             for p1 in map_job_rv_list(rv):
-                yield p1
+                if p1 is not None:
+                    yield p1
         else:
-            yield p
+            if p is not None:
+                yield p
+
+def finish_group(job, key, store):
+    work_dir = job.fileStore.getLocalTempDir()
+    store = IOStore.get(store)
+
+    done_file = os.path.join(work_dir, "DONE")
+    done_key = "{}/DONE".format(key)
+
+    with open(done_file, "w") as fh:
+        pass
+
+    store.write_output_file(done_file, done_key)
+
+    safe_remove(done_file)
 
 
 def consolidate_output(job, config, output):

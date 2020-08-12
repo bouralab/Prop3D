@@ -614,11 +614,16 @@ class EPPICInteractome(object):
 
 def process_pdb(job, pdbId, cathFileStoreID, manual_status=False, work_dir=None):
     work_dir = work_dir if work_dir is not None else job.fileStore.getLocalTempDir()
-    interactome = EPPICInteractome(job, pdbId, cathFileStoreID, data_stores.eppic_interfaces,
-        manual_status=manual_status, work_dir=work_dir)
-    interactome.run()
+    try:
+        interactome = EPPICInteractome(job, pdbId, cathFileStoreID, data_stores.eppic_interfaces,
+            manual_status=manual_status, work_dir=work_dir)
+        interactome.run()
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except:
+        return
 
-def process_pdb_group(job, pdb_group, cathFileStoreID, further_parallelize=True):
+def process_pdb_group(job, pdb_group, cathFileStoreID, further_parallelize=False):
     work_dir = job.fileStore.getLocalTempDir()
 
     if further_parallelize:
@@ -656,11 +661,17 @@ def merge_cath(job, cathFileStoreID, further_parallelize=False):
             except:
                 pass
 
-def start_toil(job, cathFileStoreID, force=False, split_groups=True, further_parallelize=True):
+def start_toil(job, cathFileStoreID, force=False, split_groups=False, filter_obsolete=True,
+  further_parallelize=True):
     work_dir = job.fileStore.getLocalTempDir()
     cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
 
     pdb = pd.read_hdf(cath_file, "table", columns=["pdb", "cath_domain"]).drop_duplicates()
+
+    if filter_obsolete:
+        obsolete = pd.read_csv("http://ftp.rcsb.org/pub/pdb/data/status/obsolete.dat",
+            delim_whitespace=True, names=range(6), skiprows=1)[2].str.lower()
+        pdb = pdb[~pdb.isin(obsolete)]
 
     if not force:
         keys = list(data_stores.eppic_interfaces.list_input_directory())

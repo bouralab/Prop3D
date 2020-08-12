@@ -2,6 +2,8 @@ import os
 import sys
 import re
 import subprocess
+import requests
+import shutil
 from contextlib import contextmanager
 
 def atof(text, use_int=False):
@@ -96,15 +98,42 @@ def safe_remove(files, warn=False):
     if isinstance(files, str):
         files = [files]
 
+    success = []
     for f in files:
         if isinstance(f, str) and os.path.exists(f):
             try:
                 os.remove(f)
+                success.append(True)
             except (OSError, FileNotFoundError) as e:
-                if warn: print("Unable to remove", f, e)
+                success.append(False)
                 pass
         else:
-            if warn: print("File DNE", f)
+            success.append(False)
+
+    from toil.realtimeLogger import RealtimeLogger
+    
+    if isinstance(files, str):
+        return success[0]
+
+    return success
+
+def safe_call(job, func, input, *args, **kwds):
+    try:
+        return func(job, input, *args, **kwds)
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except:
+        raise
+
+def download_file(url, local_filename=None):
+    if local_filename is None:
+        local_filename = url.split('/')[-1]
+    with requests.get(url, stream=True) as r:
+        with open(local_filename, 'wb') as f:
+            r.raw.read = functools.partial(response.raw.read, decode_content=True)
+            shutil.copyfileobj(r.raw, f)
+
+    return local_filename
 
 @contextmanager
 def silence_stdout():
@@ -123,6 +152,10 @@ def silence_stderr():
         yield new_target
     finally:
         sys.stderr = old_target
+
+def getcwd():
+    """Get current working directory. Uses shell to avoid drive mapping names from python"""
+    return subprocess.check_output("pwd", shell=True).decode("utf-8").strip()
 
 def izip_missing(iterA, iterB, **kwds):
     """Iterate through two iterables, while making sure they are in the same

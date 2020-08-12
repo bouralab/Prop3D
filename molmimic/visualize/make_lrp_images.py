@@ -4,7 +4,7 @@ sys.path.append("/usr/local/Cellar/pymol/2.3.0/libexec/lib/python3.7/site-packag
 
 from pymol import cmd
 
-def make_lrp_image(pdb, sfam, prefix):
+def make_lrp_image(pdb, prefix, sfam=None):
     print("Running", sfam, pdb)
 
     pdb_file = os.path.join(prefix, "{}-lrp-total_relevance.pdb".format(pdb))
@@ -22,19 +22,21 @@ def make_lrp_image(pdb, sfam, prefix):
     #cmd.bg_color("opaque_background")
     #cmd.set("ray_opaque_background", "off")
 
-    if sfam == "ig":
-        #Based on 1TEN orientation in doi:10.1006/jmbi.1994.1582
-        cmd.load(os.path.join(prefix, "1TEN.pdb"), "target")
-    elif sfam == "ob":
-        #Based on 1c4q.A orientation in https://doi.org/10.1002/pro.3742
-        cmd.load(os.path.join(prefix, "1c4qA.pdb"), "target")
-    elif sfam == "sh3":
-        #Based on 1kq2.A orientation in https://doi.org/10.1002/pro.3742
-        cmd.load(os.path.join(prefix, "1kq2A.pdb"), "target")
+    if sfam is not None:
+        if sfam == "ig":
+            #Based on 1TEN orientation in doi:10.1006/jmbi.1994.1582
+            cmd.load(os.path.join(prefix, "1TEN.pdb"), "target")
+        elif sfam == "ob":
+            #Based on 1c4q.A orientation in https://doi.org/10.1002/pro.3742
+            cmd.load(os.path.join(prefix, "1c4qA.pdb"), "target")
+        elif sfam == "sh3":
+            #Based on 1kq2.A orientation in https://doi.org/10.1002/pro.3742
+            cmd.load(os.path.join(prefix, "1kq2A.pdb"), "target")
 
-    #cmd.align(pdb, "target")
-    cmd.cealign("target", pdb)
-    cmd.delete("target")
+        #cmd.align(pdb, "target")
+        cmd.cealign("target", pdb)
+        cmd.delete("target")
+        
     cmd.center(pdb)
     cmd.zoom(pdb, buffer=8.0)
     cmd.refresh()

@@ -67,3 +67,65 @@ maxASA = {"A": 129.0, "R": 274.0, "N": 195.0, "D": 193.0, "C": 167.0, "E": 223.0
           "Q": 225.0, "G": 104.0, "H": 224.0, "I": 197.0, "K": 201.0, "L": 236.0,
           "M": 224.0, "F": 240.0, "P": 159.0, "S": 155.0, "T": 172.0, "W": 285.0,
           "Y": 263.0, "V": 174.0}
+
+import io
+import pandas as pd
+
+aa = pd.read_csv(io.StringIO("""aa3\taa1\tmass\tformula\tname
+ALA\tALA\tA\t 71.078\t   C3 H5 N O1\t                         Alanine
+ARG\tARG\tR\t157.194\t C6 H13 N4 O1\t                        Arginine
+ASN\tASN\tN\t114.103\t  C4 H6 N2 O2\t                      Asparagine
+ASP\tASP\tD\t114.079\t   C4 H4 N O3\t                   Aspartic Acid
+CYS\tCYS\tC\t103.143\t C3 H5 N O1 S\t                         Cystein
+GLN\tGLN\tQ\t117.126\t  C4 H9 N2 O2\t                       Glutamine
+GLU\tGLU\tE\t128.106\t   C5 H6 N O3\t                   Glutamic Acid
+GLY\tGLY\tG\t 57.051\t   C2 H3 N O1\t                         Glycine
+HIS\tHIS\tH\t137.139\t  C6 H7 N3 O1\t                       Histidine
+ILE\tILE\tI\t113.158\t  C6 H11 N O1\t                      Isoleucine
+LEU\tLEU\tL\t113.158\t  C6 H11 N O1\t                         Leucine
+LYS\tLYS\tK\t129.180\t C6 H13 N2 O1\t                          Lysine
+MET\tMET\tM\t131.196\t C5 H9 N O1 S\t                      Methionine
+PHE\tPHE\tF\t147.174\t   C9 H9 N O1\t                   Phenylalanine
+PRO\tPRO\tP\t 97.115\t   C5 H7 N O1\t                         Proline
+SER\tSER\tS\t 87.077\t   C3 H5 N O2\t                          Serine
+THR\tTHR\tT\t101.104\t   C4 H7 N O2\t                       Threonine
+TRP\tTRP\tW\t186.210\tC11 H10 N2 O1\t                      Tryptophan
+TYR\tTYR\tY\t163.173\t   C9 H9 N O2\t                        Tyrosine
+VAL\tVAL\tV\t 99.131\t   C5 H9 N O1\t                          Valine
+ABA\tABA\tX\t 85.104\t  C4 H7 N1 O1\t         alpha-aminobutyric acid
+ASH\tASH\tD\t115.087\t   C4 H5 N O3\t           Aspartic acid Neutral
+CIR\tCIR\tR\t157.170\t C6 H11 N3 O2\t                      citrulline
+CME\tCME\tC\t179.260\tC5 H9 N O2 S2\ts,s-(2-hydroxyethyl)thiocysteine
+CMT\tCMT\tC\t115.154\t C4 H5 N O1 S\t                o-methylcysteine
+CSD\tCSD\tC\t134.134\t C3 H4 N O3 S\t         s-cysteinesulfinic acid
+CSO\tCSO\tC\t119.142\t C3 H5 N O2 S\t               s-hydroxycysteine
+CSW\tCSW\tC\t135.142\t C3 H5 N O3 S\t              cysteine-s-dioxide
+CSX\tCSX\tC\t119.142\t C3 H5 N O2 S\t                  s-oxy cysteine
+CYM\tCYM\tC\t102.135\t C3 H4 N O1 S\t                Cystein Negative
+CYX\tCYX\tC\t102.135\t C3 H4 N O1 S\t                  Cystein SSbond
+DDE\tDDE\tH\t280.346\tC13 H22 N5 O2\t                     diphthamide
+GLH\tGLH\tG\t129.114\t   C5 H7 N O3\t          Glutatmic acid Neutral
+HID\tHID\tH\t137.139\t  C6 H7 N3 O1\t                       Histidine
+HIE\tHIE\tH\t137.139\t  C6 H7 N3 O1\t                       Histidine
+HIP\tHIP\tH\t138.147\t  C6 H8 N3 O1\t              Histidine Positive
+HSD\tHSD\tH\t137.139\t  C6 H7 N3 O1\t                       Histidine
+HSE\tHSE\tH\t137.139\t  C6 H7 N3 O1\t                       Histidine
+HSP\tHSP\tH\t138.147\t  C6 H8 N3 O1\t              Histidine Positive
+IAS\tIAS\tD\t115.087\t   C4 H5 N O3\t                   beta-aspartyl
+KCX\tKCX\tK\t172.182\t C7 H12 N2 O3\t       lysine nz-carboxylic acid
+LYN\tLYN\tK\t129.180\t C6 H13 N2 O1\t                  Lysine Neutral
+MHO\tMHO\tM\t147.195\t C5 H9 N O2 S\t                 s-oxymethionine
+MLY\tMLY\tK\t156.225\t C8 H16 N2 O1\t               n-dimethyl-lysine
+MSE\tMSE\tM\t178.091\tC5 H9 N O1 SE\t                selenomethionine
+OCS\tOCS\tC\t151.141\t C3 H5 N O4 S\t           cysteinesulfonic acid
+PFF\tPFF\tF\t165.164\t C9 H8 F N O1\t        4-fluoro-l-phenylalanine
+PTR\tPTR\tY\t243.153\tC9 H10 N O5 P\t               o-phosphotyrosine
+SEP\tSEP\tS\t167.057\t C3 H6 N O5 P\t                   phosphoserine
+TPO\tTPO\tT\t181.084\t C4 H8 N O5 P\t                phosphothreonine
+"""), sep="\t")
+
+def three_to_one(aa_name):
+    try:
+        return aa.loc[aa_name]["aa1"]
+    except KeyError:
+        return "X"

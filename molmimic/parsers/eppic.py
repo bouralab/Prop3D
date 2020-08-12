@@ -19,6 +19,7 @@ from molmimic.util import natural_keys, reset_ip
 from molmimic.parsers.json import JSONApi
 from molmimic.parsers.pdbe import PDBEApi
 from molmimic.parsers.container import Container
+from molmimic.util.pdb import s3_download_pdb
 
 from toil.realtimeLogger import RealtimeLogger
 
@@ -217,7 +218,9 @@ class EPPICApi(JSONApi):
         result = None
         for seq_chains in seq.itertuples():
             repChain = seq_chains.memberChains.split(",")[0]
-            seq_chain_clustered = pd.DataFrame(seq_chains.residueInfos).dropna()
+            seq_chain_clustered = pd.DataFrame(seq_chains.residueInfos)
+            seq_chain_clustered = seq_chain_clustered.dropna(subset=["pdbResidueNumber"])
+
             for memberChain in seq_chains.memberChains.split(","):
                 if self.use_representative_chains:
                     seq_chain = seq_chain_clustered.assign(chain=memberChain)
@@ -240,17 +243,76 @@ class EPPICApi(JSONApi):
         return entropy_scores
 
 class EPPICLocal(Container):
-    IMAGE = "docker://edraizen/eppic-cli"
+    IMAGE = "docker://edraizen/eppic"
     PARAMETERS = [
         "-i", ("input_file", "path:in"),
-        (":s", "store_true", "-s"),
-        (":p", "store_true", "-p"),
-        (":l", "store_true", "-l"),
+        (":s", "store_true"),
+        (":p", "store_true"),
+        (":l", "store_true"),
     ]
+    ARG_START = "-"
 
-    def get_entropy_scores(self, pdb_file, maxEntropy=1):
-        self(input_file=pdb_file, s=True)
-        entropy_file = os,path.join(self.work_dir, "{}.entropies".format(
+    def __init__(self, pdb, eppic_local_store=None, job=None, return_files=False,
+      force_local=False, fallback_local=False, work_dir=None):
+        super().__init__(job=job, return_files=return_files, force_local=force_local,
+            fallback_local=fallback_local, work_dir=work_dir)
+
+        if eppic_local_store is None:
+            eppic_local_store = data_stores.eppic_local_store
+
+        self.pdb = pdb
+
+        if not os.path.isfile(input) and len(input)==4:
+            if eppic_local_store.exists(self.pdb.lower()):
+                self.eppic_files = [os.path.basename(f) for f in \
+                    eppic_local_store.list_input_directory(self.pdb.lower())]
+            else:
+                self.eppic_files = []
+        else:
+            self.eppic_files = None
+
+        self._interface_chains = {}
+        self._chain_residues = {} if not use_representative_chains else None
+
+    def run(self, s=True, p=True, l=True):
+        if not os.path.isfile(self.pdb) and len(pdb)==4:
+            if len(self.eppic_files) == 0:
+                pdb_file = s3_download_pdb(self.pdb)
+                self(input_file=pdb_file, s=s, p=p, l=l)
+                self.eppic_files = [os.path.basename(f) for f in \
+                    glob.glob("{}.*".format(os.path.splitext(self.pdb)[0]))]
+                for f in self.eppic_files:
+                    eppic_local_store.write_output_file(f, "{}/{}".format(self.pdb.lower(), f))
+            else:
+                for f in self.eppic_files:
+                    eppic_local_store.read_input_file(f, os.path.join(self.work_dir, f))
+        else:
+            #If not pdb id, just run and dont store/check in s3
+            self(input_file=self.pdb, s=s, p=p, l=l)
+
+    def get_interfaces(self, bio=True):
+        score_file = "{}.scores".format(self.pdb)
+        assert os.path.isfile(score_file)
+        interfaces = pd.read_csv(score_file, whitespace_delim=True)
+
+        if interfaces.empty:
+            return None
+
+        if bio:
+            interfaces = interfaces[interfaces["call"]=="bio"]
+
+        #No residue information so no need to trasnform pdbResNums
+
+        chains = interfaces["chains"].str.split("+", expabd=True).T.to_dict("list")
+        self._interface_chains.update(chains)
+
+        return stringify(interfaces)
+
+
+
+    def get_entropy_scores(self, maxEntropy=1):
+        self.run()
+        entropy_file = os.path.join(self.work_dir, "{}.entropies".format(
             os.path.splitext(os.path.basename(pdb_file))))
         assert os.path.isfile(entropy_file), "Failed running EPPIC"
         residueInfo = pd.read_csv(entropy_file, delimeter="\t", comment="#",

@@ -273,8 +273,15 @@ class Structure(object):
     def get_min_coord(self):
         return np.min(self.get_coords(), axis=0)
 
-    def get_max_length(self, buffer=5):
-        return int(np.ceil(np.linalg.norm(self.get_max_coord()-self.get_min_coord())))+buffer
+    def get_max_length(self, buffer=0, pct_buffer=0):
+        length = int(np.ceil(np.linalg.norm(self.get_max_coord()-self.get_min_coord())))
+        if pct_buffer!=0:
+            length += int(np.ceil(length*pct_buffer))
+        else:
+            length += buffer
+        if length%2 == 1:
+            length += 1
+        return length
 
     def shift_coords(self, new_center=None, from_origin=True):
         """if new_center is None, it will shift to the origin"""

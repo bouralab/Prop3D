@@ -3,11 +3,19 @@ import sys
 import subprocess
 import tempfile
 import shutil
+from datetime import datetime
+from io import StringIO
+from collections import OrderedDict
+from subprocess import CalledProcessError
 
 from toil.realtimeLogger import RealtimeLogger
+from toil.job import Job
 from molmimic.util import silence_stdout, silence_stderr
+from molmimic.util.iostore import IOStore
 
 CONTAINER_PATH = os.environ.get("CONTAINER_PATH", os.environ["HOME"])
+
+os.environ["ALLOWABLE_CONTAINER_PATHS"] = "/project"
 
 FORCE_LOCAL = os.environ.get("FORCE_LOCAL", "false")[0].lower()=="t"
 USE_SINGULARITY = os.environ.get("USE_SINGULARITY", "true")[0].lower()=="t"
@@ -49,6 +57,9 @@ if USE_DOCKER or FORCE_LOCAL:
     #Docker automatically caches image, no need to save
     def pullContainer(image, pull_folder=""): return image
 
+class StoreTrueValue(object):
+    pass
+
 class Container(object):
     """
 
@@ -74,17 +85,24 @@ class Container(object):
     RULES = {}
     ENTRYPOINT = None
     RETURN_FILES = False
+    ARG_START = ""
+    ARG_SEP = " "
 
-    def __init__(self, job=None, return_files=False, force_local=False, fallback_local=False, work_dir=None):
+    def __init__(self, job=None, return_files=False, force_local=False, fallback_local=False,
+      intermediate_file_store=None, work_dir=None, detach=False):
         assert (self.IMAGE, self.LOCAL).count(None) <= 1, "Must define container or local path"
 
         if self.LOCAL is not None:
             assert isinstance(self.LOCAL, list)
 
+        if job is None:
+            job = Job()
+
         self.work_dir = work_dir if work_dir is not None else os.getcwd()
         self.force_local = (FORCE_LOCAL or force_local or self.IMAGE is None) and self.LOCAL is not None
         self.fallback_local = fallback_local or self.LOCAL is not None
         self.return_files = return_files or self.RETURN_FILES
+        self.detach = detach
         self.job = job
         self.rules = {
             str: lambda k, v: str(v),
@@ -93,9 +111,18 @@ class Container(object):
             "None": lambda k, v: v,
             "path:in": self.format_in_path,
             "path:out": self.format_out_path,
+            "path:out:ignore": self.format_out_path_ignore,
             "path:in:stdin": "format_in_std_in",
             "store_true": "store_true"}
         self.rules.update(self.RULES)
+
+        if intermediate_file_store is not None:
+            self.intermediate_file_store = IOStore.get(intermediate_file_store)
+        else:
+            self.intermediate_file_store = IOStore.get("file:{}-{}".format(
+                self.__class__.__name__,
+                datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+            ))
 
         self.parameters = []
         self.param_names = []
@@ -113,8 +140,9 @@ class Container(object):
         self.number_of_parameters = 0
         self.number_of_optional_parameters = 0
 
-        self.change_paths = {}
+        self.change_paths = OrderedDict()
         self.files_to_remove = []
+        self.skip_output_file_checks = []
 
         self.is_local = False
         self.stdin = None
@@ -143,7 +171,10 @@ class Container(object):
                         optional = True
 
                     if len(p) == 3:
-                        if isinstance(p[2], str) and len(p[2])>0:
+                        is_arg = lambda a: isinstance(a, str) and len(a)>0
+                        if is_arg(p[2]):
+                            formatter = p[2]
+                        elif isinstance(p[2], (list, tuple)) and all([is_arg(a) for a in p[2]]):
                             formatter = p[2]
                         else:
                             #Formatter is probably None, which means the parameter
@@ -207,7 +238,8 @@ class Container(object):
                     working_dir="/data",
                     volumes={self.work_dir:{"bind":"/data", "mode":"rw"}},
                     parameters=parameters,
-                    return_result=True)
+                    return_result=True,
+                    detach=self.detach)
         except (SystemExit, KeyboardInterrupt):
             raise
         except:
@@ -215,30 +247,54 @@ class Container(object):
                 import traceback as tb
                 RealtimeLogger.error(tb.format_exc())
                 return self.local(*args, **kwds)
+            self.clean()
+            self.change_paths = OrderedDict()
             raise
 
-        message = "".join(out["message"])
+        if self.detach:
+            message = ""
 
-        if out["return_code"]:
-            self.clean()
-            self.change_paths = {}
-            raise RuntimeError(message)
+            try:
+                for line in out:
+                    message += line
+                    RealtimeLogger.info("CONTAINER OUT: {}".format(line.rstrip()))
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except:
+                #Singularity raises subprocess.CalledProcessError, but not sure about Docker
+                self.clean()
+                self.change_paths = OrderedDict()
+                raise RuntimeError(message)
+
+        else:
+            if USE_SINGULARITY:
+                message = "".join(out["message"])
+
+                if out["return_code"]:
+                    self.clean()
+                    self.change_paths = OrderedDict()
+                    raise RuntimeError(message)
+            else:
+                #Docker already handled error above
+                message = out
+
+        RealtimeLogger.info("FInished Running {}".format(message))
 
         try:
             out_files = self.check_output()
         except AssertionError:
             self.stdout = out
             self.clean()
-            self.change_paths = {}
+            self.change_paths = OrderedDict()
             raise
 
         if self.return_files:
             self.stdout = message
             self.clean()
-            self.change_paths = {}
+            self.change_paths = OrderedDict()
             return out_files
 
-        self.change_paths = {}
+        self.change_paths = OrderedDict()
         return message
 
     def local(self, *args, **kwds):
@@ -287,7 +343,9 @@ class Container(object):
             else:
                 raise RuntimeError
 
-        parameters = self.parameters[:]
+        RealtimeLogger.info("RUN with {} and {}".format(args, kwds))
+
+        parameters = [[p] for p in self.parameters]
         for k, v in kwds.items():
             try:
                 idx = self.params_to_update[k]
@@ -310,23 +368,44 @@ class Container(object):
             try:
                 formatter = self.parameter_formatters[k]
                 if formatter is not None:
-                    parameters[idx] = formatter.format(val)
+                    parameters[idx] = self.arg_formatter(k, val, formatter)
                 else:
-                    parameters[idx] = None
+                    parameters[idx] = [None]
             except KeyError:
                 try:
                     formatter = self.optional_parameter_formatters[k]
                     if formatter is not None:
-                        parameters[idx] = formatter.format(val)
+                        parameters[idx] = self.arg_formatter(k, val, formatter)
                     else:
-                        parameters[idx] = None
+                        parameters[idx] = [None]
                 except KeyError:
-                    parameters[idx] = val
+                    parameters[idx] = self.arg_formatter(k, val, "{}")
 
-        return [p for p in parameters if p is not None]
+        return [p for parameter in parameters for p in parameter if p is not None and isinstance(p, str)]
 
-    def format_in_path(self, name, path):
-        if self.is_local:
+    def arg_formatter(self, key, value, formatter):
+        RealtimeLogger.info("SETUP ARG: {} {} {}".format(key, value, formatter))
+        if isinstance(formatter, (list, tuple)):
+            #Assume correct formatting
+            args = []
+            for part in formatter:
+                if formatter.count("{}") == 1:
+                    args.append(part.format(value))
+                elif formatter.count("{}") == 2:
+                    args.append(part.format(key, value))
+                else:
+                    args.append(part.format(key=key, value=value))
+            return args
+
+        if isinstance(value, StoreTrueValue):
+            return ["{}{}".format(self.ARG_START, key)]
+        elif self.ARG_SEP == " ":
+            return ["{}{}".format(self.ARG_START, key), formatter.format(value)]
+        else:
+            return ["{}{}{}{}".format(self.ARG_START, key, self.ARG_SEP, formatter.format(value))]
+
+    def format_in_path(self, name, path, move_files_to_work_dir=True):
+        if self.is_local or not move_files_to_work_dir or any(path.startswith(p) for p in os.environ.get("ALLOWABLE_CONTAINER_PATHS").split(":")):
             if not os.path.isfile(path):
                 raise RuntimeError("{} is not found".format(path))
             return os.path.abspath(path)
@@ -341,17 +420,21 @@ class Container(object):
     def format_out_path(self, name, path):
         path = os.path.abspath(path)
 
-        if not os.path.dirname(path):
+        if not os.path.isdir(os.path.dirname(path)):
             raise RuntimeError("parent dir of {} is not found".format(path))
 
         if self.is_local:
-            self.change_paths[path] = path
+            self.change_paths[name] = (path, path)
             return os.path.abspath(path)
         else:
             new_path = os.path.join("/data", os.path.basename(path))
             fix_path = os.path.join(self.work_dir, os.path.basename(path))
-            self.change_paths[fix_path] = path
+            self.change_paths[name] = (fix_path, path)
             return new_path
+
+    def format_out_path_ignore(self, name, path):
+        self.skip_output_file_checks.append(name)
+        return self.format_out_path(name, path)
 
     def format_in_std_in(self, name, path):
         if not self.is_local:
@@ -363,20 +446,29 @@ class Container(object):
 
     def store_true(self, name, value):
         if value:
-            return "--{}".format(name)
+            return StoreTrueValue()
+        return None
 
     def check_output(self):
-        out_files = []
-        for out_path, change_path in self.change_paths.items():
-            assert os.path.isfile(out_path), "Outfile '{}' not found. ".format(
-                out_path) + "Could not change to '{}': {}".format(
-                    change_path, os.listdir(self.work_dir))
+        out_files = OrderedDict()
+        for name, (out_path, change_path) in self.change_paths.items():
+            if name not in self.skip_output_file_checks:
+                assert os.path.isfile(out_path), "Outfile '{}' not found. ".format(
+                    out_path) + "Could not change to '{}': {}".format(
+                        change_path, os.listdir(self.work_dir))
+            if name in self.skip_output_file_checks:
+                RealtimeLogger.info("Not moving file, same dir={}; {}=>{}".format(
+                    os.path.abspath(out_path) != os.path.abspath(change_path),
+                    name, change_path
+                ))
             if os.path.abspath(out_path) != os.path.abspath(change_path):
                 shutil.move(out_path, change_path)
-            out_files.append(change_path)
+
+            out_files[name] = change_path
 
         if len(out_files) == 1:
-            return out_files[0]
+            self.out_files = out_files
+            return out_files.popitem()[0]
 
         return out_files
 
@@ -387,8 +479,15 @@ class Container(object):
             except OSError:
                 pass
 
-    def tempfile(self):
-        tfile = tempfile.NamedTemporaryFile(dir=self.work_dir, delete=False)
+    @classmethod
+    def tempfile(cls, work_dir=None):
+        if work_dir is None:
+            if hasattr(cls, "work_dir"):
+                work_dir = cls.work_dir
+            else:
+                work_dir = os.getcwd()
+
+        tfile = tempfile.NamedTemporaryFile(dir=work_dir, delete=False)
         tfile.close()
         return tfile.name
 

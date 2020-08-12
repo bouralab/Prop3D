@@ -9,9 +9,9 @@ import pandas as pd
 import freesasa
 import numpy as np
 
-from molmimic.parsers.superpose import align
-from molmimic.parsers.zrank import run_zrank
-from molmimic.generate_data.util import read_pdb, replace_chains, extract_chains, rottrans, get_all_chains
+from molmimic.parsers.superpose import Align
+from molmimic.parsers.zrank import ZRank
+from molmimic.util.pdb import read_pdb, replace_chains, extract_chains, rottrans, get_all_chains
 
 from toil.realtimeLogger import RealtimeLogger
 
@@ -42,7 +42,7 @@ class Complex(Select):
     parser = Bio.PDB.PDBParser(QUIET=1)
     writer = Bio.PDB.PDBIO()
 
-    def __init__(self, pdb, chain1="M", chain2="I", face1=None, face2=None, temp=25.0, method=None, work_dir=None, job=None):
+    def __init__(self, pdb, chain1="M", chain2="I", face1=None, face2=None, d_cutoff=5.5, temp=25.0, method=None, work_dir=None, get_stats=False, job=None):
         selection = "{} {}".format(chain1, chain2)
         self.work_dir = work_dir or os.getcwd()
         self.job = job
@@ -67,7 +67,7 @@ class Complex(Select):
             self.face2 = None
 
         self.prodigy = Prodigy(self.s, selection, temp, strict=False)
-        self.prodigy.predict(distance_cutoff=5.5, acc_threshold=0.05)
+        self.prodigy.predict(distance_cutoff=d_cutoff, acc_threshold=0.05)
 
         try:
             self.interface = set([r.id for rs in calculate_ic(self.s,
@@ -98,7 +98,10 @@ class Complex(Select):
             self.neighbors_id[key.id[1]] = sorted([res.id[1] for res in \
                 self.neighbors[chain1][key]])
 
-        self.results = self._get_stats()
+        if get_stats:
+            self.results = self._get_stats()
+        else:
+            self.results = pd.Series()
         self["method"] = method
 
     def __getitem__(self, item):
@@ -206,9 +209,9 @@ class Complex(Select):
         return pd.Series({"Rg_1":r1, "Rg_2":r2, "Rg_interface":rI})
 
     def zrank(self):
-        zrank_initial_score = run_zrank(self.pdb, work_dir=self.work_dir, job=self.job)
-        zrank_refinement_score = run_zrank(self.pdb, refinement=True,
-            work_dir=self.work_dir, job=self.job)
+        zrank = ZRank(work_dir=self.work_dir, job=self.job)
+        zrank_initial_score = ZRank.rank(self.pdb)
+        zrank_refinement_score = ZRank.rank(self.pdb, refinement=True)
         return pd.Series({
             "zrank_initial_score": zrank_initial_score,
             "zrank_refinement_score": zrank_refinement_score
@@ -285,7 +288,8 @@ class Complex(Select):
         return int(residue.id in self.interface)
 
     def L_RMS(self, other):
-        f, rmsd, tm_score, _ = align(
+        aligner = Align()
+        f, rmsd, tm_score, _ = aligner.align(
             self.pdb, self.chain1+self.chain2,
             other.pdb, other.chain1+other.chain2,
             work_dir=self.work_dir,
@@ -298,7 +302,8 @@ class Complex(Select):
             return None, None
         interface1 = self.save_interface()
         interface2 = moving.save_interface()
-        f, rmsd, tm_score, _ = align(
+        aligner = Align()
+        f, rmsd, tm_score, _ = aligner.align(
             interface1, self.chain1+self.chain2,
             interface2, moving.chain1+moving.chain2,
             work_dir=self.work_dir,
@@ -309,7 +314,8 @@ class Complex(Select):
         return rmsd, tm_score
 
     def MM_TM_score(self, other):
-        f, mm_rmsd, mm_tm_score, _ = align(
+        aligner = Align()
+        f, mm_rmsd, mm_tm_score, _ = aligner.align(
             self.pdb, self.chain1+self.chain2,
             other.pdb, other.chain1+other.chain2,
             method="mmalign",

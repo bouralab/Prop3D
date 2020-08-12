@@ -30,7 +30,13 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
             job.addChildJobFn(process_domain, cath_domain, superfamily,
                 cathFileStoreID=cathFileStoreID)
         else:
-            process_domain(job, cath_domain, superfamily, cathFileStoreID=cathFileStoreID)
+            try:
+                process_domain(job, cath_domain, superfamily, cathFileStoreID=cathFileStoreID)
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except:
+                #Failed, do not proceed in calculating features
+                return
 
     #Check if any feature files exist
     feat_files = ["{}/{}_{}".format(superfamily, cath_domain, ext) for ext in \
@@ -43,7 +49,13 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
             job.addFollowOnJobFn(calculate_features, cath_domain, superfamily,
                 update_features=update_features)
         else:
-            calculate_features(job, cath_domain, superfamily, update_features=update_features)
+            try:
+                calculate_features(job, cath_domain, superfamily, update_features=update_features)
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except:
+                #Failed 
+                return
 
 def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
   force=False, further_parallize=True):

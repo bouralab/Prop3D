@@ -78,6 +78,59 @@ def build_biounit(moving_mol, mol_pdb, mol_chain, moving_int, int_pdb, int_chain
     del remarks
     del quat
 
+def build_sym_transforms(moving_mol, mol_pdb, mol_chain, moving_int, int_pdb, int_chain,
+  sym_op=None, return_matrices=False, work_dir=None):
+
+    if work_dir is None:
+        work_dir = os.getcwd()
+
+    #Get BioUnit info for interactint domain (since inferred are Superimposed into it)
+    pdbId = int_pdb
+
+    if sym_op == "X,Y,Z":
+        return moving_int
+    elif sym_op is not None:
+        _sym_op = [dim.split("+") dim in sym_op.split(",")]
+        _sym_op_rot, sym_op_trans = zip(*_sym_op)
+        sym_op_trans = np.array(sym_op_trans, dtype=float)
+
+        sym_op_rot = np.eye(3)
+        for i, (r,d) in enumerate(zip(_sym_op_rot, ("X","Y","Z"))):
+            sym_op_rot[i,i] = float(r.replace(d, "1"))
+
+    pdb_file, format = s3_download_pdb(pdbId)
+
+    assert format == "pdb"
+
+    remarks = pdbremarks(pdb_file)
+    if 290 not in remarks:
+        raise RuntimeError("No REMARK 350")
+    sym_ops = get_sym_ops(remarks[350])
+
+    transformed_pdbs = []
+    for i, transform in enumerate(quat):
+        if sym_op is not None and sym_op_rot==transform["M_au"]:
+            for j in range(3):
+                for pm in (1, -1):
+                    t = np.array([t+pm if j=jj else t for r in transform["M_au"]])
+                    if sym_op_trans == t:
+                        if return_matrices:
+                            return transform
+                        else:
+                            rt_int = "{}.rottrans.{}.pdb".format(os.path.splitext(moving_int)[0], sym_op)
+                            return tidy(rottrans_from_matrix(moving_int,
+                                transform["M"], transform["t", rt_int), replace=True)
+
+        else:
+            if return_matrices:
+                return transform
+            else:
+                rt_int = "{}.rottrans.{}.pdb".format(os.path.splitext(moving_int)[0], transform["op"])
+                transformed_pdbs.append(tidy(rottrans_from_matrix(moving_int,
+                    transform["M"], transform["t", rt_int), replace=True))
+
+    return transformed_pdbs
+
 def pdbremarks(filename):
     '''
     Read REMARK lines from PDB file. Return dictionary with remarkNum as key
@@ -133,3 +186,54 @@ def quat350(rem350):
             biomt.append((current_M.T, current_t))
 
     return biomt
+
+def get_sym_ops(rem290):
+    symops = {}
+    seen_symop = False
+
+    it = iter(rem290)
+
+    for line in it:
+        if line.startswith('CRYSTALLOGRAPHIC SYMMETRY:'):
+            if seenbiomolecule:
+                break
+            seenbiomolecule = True
+            for _ in range(4):
+                next(it)
+
+        elif seen_symop:
+            if line.strip() == "":
+                seen_symop = False
+
+            sym_num, sym_op = line.strip().split()
+            symops[sym_num[0]] = {"op": sym_op}
+
+            sym_op = [dim.split("+") dim in sym_op.split(",")]
+            rot, trans = zip(*sym_op)
+            trans = np.array(trans, dtype=float)
+
+            rot_mat = np.eye(3)
+            for i, (r,d) in enumerate(zip(rot, ("X","Y","Z"))):
+                rot_mat[i,i] = float(r.replace(d, "1"))
+
+            symops[sym_num[0]]["M_au"] = rot_mat
+            symops[sym_num[0]]["t_au"] = trans
+
+
+        elif line.strip().startswith("SMTRY"):
+            current_M = np.eye(3)
+            current_t = np.zeros(3)
+
+            for i in range(3):
+                l = next(it)
+                row = int(l[7])
+                sym_num = int(l[8:12])
+                vec = l[12:].split()
+                vec = map(float, vec)
+                current_M[i, :] = vec[:-1]
+                current_t[i] = vec[-1]
+
+            symops[sym_num]["M"] = current_M
+            symops[sym_num]["t"] = current_t
+
+    return symops

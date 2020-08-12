@@ -36,7 +36,7 @@ class ProteinVoxelizer(Structure):
         if rotate is None:
             self.shift_coords_to_volume_center()
             self.set_voxel_size(self.voxel_size)
-        elif rotate == "pai":
+        elif isinstance(rotate, str) and rotate == "pai":
             self.orient_to_pai()
             self.set_voxel_size(self.voxel_size)
         else:
@@ -454,7 +454,7 @@ class ProteinVoxelizer(Structure):
         thus providing optimal shape complementarity. https://doi.org/10.1073/pnas.1603929113"""
 
         if isinstance(atom_or_residue, PDB.Atom.Atom):
-            residue_buried = self.atom_features.loc[atom_or_residue.serial_number, "residue_buried"]
+            residue_buried = self.atom_features.loc[atom_or_residue.serial_number, "residue_rasa"]<0.5
             charge = self.atom_features.loc[atom_or_residue.serial_number, "charge"]
             electrostatic_potential = self.atom_features.loc[atom_or_residue.serial_number, "electrostatic_potential"]
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
@@ -471,11 +471,11 @@ class ProteinVoxelizer(Structure):
                 else:
                     features = np.array([1, 0])
             else:
-                #features = np.array([1])
-                if residue_buried:
-                    features = np.array([1])
-                else:
-                    features = np.array([0])
+                features = np.array([1, 0])
+                # if residue_buried:
+                #     features = np.array([-15, 0])
+                # else:
+                #     features = np.array([1, 0])
 
             return features
 

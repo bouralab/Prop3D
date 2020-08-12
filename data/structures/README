@@ -1,1 +1,0 @@
-This directory will contain all structures from the IBIS dataset split by chain, protonated using pdb2pqr, and minimized using rosetta. All structural domains are also split from all chains. For information how to create these files, please see README in the data directory.

@@ -330,6 +330,9 @@ class IOStore(object):
 
         """
 
+        if isinstance(store_string, (IOStore, FileS3IOStore)):
+            return store_string
+
         # Code adapted from toil's common.py loadJobStore()
 
         if store_string[0] in "/.":
@@ -358,6 +361,18 @@ class IOStore(object):
                 path_prefix = ""
 
             return S3IOStore(region, bucket_name, path_prefix)
+        elif store_type == "file-aws":
+            # Break out the AWS & File arguments
+            region, bucket_name, local_path = store_arguments.split(":")
+
+            if "/" in bucket_name:
+                # Split the bucket from the path
+                bucket_name, path_prefix = bucket_name.split("/", 1)
+            else:
+                # No path prefix
+                path_prefix = ""
+
+            return FileS3IOStore(region, bucket_name, path_prefix, local_path)
         elif store_type == "azure":
             # Break out the Azure arguments.
             account, container = store_arguments.split(":", 1)
@@ -390,6 +405,7 @@ class FileIOStore(IOStore):
         """
 
         self.path_prefix = self.store_name = path_prefix
+        self.store_string = "file:"+path_prefix
 
     def read_input_file(self, input_path, local_path):
         """
@@ -524,8 +540,11 @@ class FileIOStore(IOStore):
         shutil.copy2(local_path, temp_path)
 
         if os.path.exists(real_output_path):
-            # At least try to get existing files out of the way first.
-            os.unlink(real_output_path)
+            try:
+                # At least try to get existing files out of the way first.
+                os.unlink(real_output_path)
+            except FileNotFoundError:
+                pass
 
         # Rename the temp file to the right place, atomically
         os.rename(temp_path, real_output_path)
@@ -683,6 +702,9 @@ class S3IOStore(IOStore):
         self.region = region
         self.bucket_name = self.store_name = bucket_name
         self.name_prefix = name_prefix
+        self.store_string = "aws:{}:{}".format(region, bucket_name)
+        if name_prefix != "":
+            self.store_string += "/{}".format(name_prefix)
         self.s3 = None
 
     def connect(self):
@@ -861,3 +883,119 @@ class S3IOStore(IOStore):
 
     def remove_file(self, path):
         self.s3r.Object(self.bucket_name, path).delete()
+
+class FileS3IOStore(object):
+    """
+    A class that lets you get input from and send output to AWS S3 Storage but
+    checks local filesystem first
+
+    """
+
+    def __init__(self, region, bucket_name, name_prefix="", file_path_dir=""):
+        """
+        Make a new S3IOStore that reads from and writes to the given
+        container in the given account, adding the given prefix to keys. All
+        paths will be interpreted as keys or key prefixes.
+
+        """
+        self.FileIOStore = FileIOStore(os.path.join(file_path_dir, bucket_name))
+        self.S3IOStore = S3IOStore(region, bucket_name, name_prefix)
+        self.path_prefix = os.path.join(file_path_dir, bucket_name)
+        self.region = region
+        self.bucket_name = self.store_name = bucket_name
+        self.name_prefix = name_prefix
+        self.store_string = "file-aws:{}:{}".format(region, bucket_name)
+        if name_prefix != "":
+            self.store_string += "/{}".format(name_prefix)
+        self.store_string += ":{}".format(file_path_dir)
+
+
+    #@backoff
+    def read_input_file(self, input_path, local_path):
+        """
+        Get input from S3.
+        """
+        try:
+            return self.FileIOStore.read_input_file(input_path, local_path)
+        except RuntimeError:
+            self.S3IOStore.read_input_file(input_path, local_path)
+            self.FileIOStore.write_output_file(local_path, input_path)
+
+        return local_path
+
+    @backoff
+    def list_input_directory(self, input_path=None, recursive=False, with_times=False):
+        """
+        Yields each of the subdirectories and files in the given input path.
+
+        If recursive is false, yields files and directories in the given
+        directory. If recursive is true, yields all files contained within the
+        current directory, recursively, but does not yield folders.
+
+        If with_times is True, yields (name, modification time) pairs instead of
+        just names, with modification times represented as datetime objects in
+        the GMT timezone. Modification times may be None on objects that do not
+        support them.
+
+        Gives relative file/directory names.
+
+        """
+        return self.S3IOStore.list_input_directory(input_path=input_path,
+            recursive=recursive, with_times=with_times)
+
+    def download_input_directory(self, prefix, local_dir=None, postfix=None):
+        self.S3IOStore.download_input_directory(path, self.FileIOStore.path_prefix)
+        if local_dir is not None:
+            pass
+
+    def write_output_file(self, local_path, output_path):
+        """
+        Write output to S3.
+        """
+        self.FileIOStore.write_output_file(local_path, output_path)
+        self.S3IOStore.write_output_file(local_path, output_path)
+
+    @backoff
+    def exists(self, path):
+        """
+        Returns true if the given input or output file exists in the store
+        already.
+
+        """
+        exists_file = self.FileIOStore.exists(path)
+        exists_s3 = self.S3IOStore.exists(path)
+
+        if exists_s3 and not exists_file:
+            local_path = os.path.join(self.path_prefix, path)
+            robust_makedirs(os.path.dirname(local_path))
+            self.S3IOStore.read_input_file(path, local_path)
+
+        return exists_s3
+
+    def get_mtime(self, path):
+        """
+        Returns the modification time of the given file if it exists, or None
+        otherwise.
+
+        """
+
+        raise NotImplementedError()
+
+    def get_size(self, path):
+        """
+        Returns the size in bytes of the given file if it exists, or None
+        otherwise.
+
+        """
+        self.S3IOStore.get_size(path)
+
+    @backoff
+    def get_number_of_items(self, path=None):
+        """
+        Return the number of items in path if it exits, or None otherwise
+        """
+        self.S3IOStore.get_number_of_items(path)
+
+    def remove_file(self, path):
+        self.FileIOStore.remove_file(path)
+        self.S3IOStore.remove_file(path)
