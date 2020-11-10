@@ -19,7 +19,7 @@ def fix_cathcode(c):
             if isinstance(cathcode, str) and cathcode in ["None", "all"]:
                 return None
 
-def run_cath_hierarchy(job, cathcode, func, cathFileStoreID, **kwds):
+def run_cath_hierarchy(job, cathcode, func, cathFileStoreID, *args, **kwds):
     work_dir = job.fileStore.getLocalTempDir()
     further_parallelize = kwds.get("further_parallelize", True)
     level = kwds.get("level", 4)
@@ -29,15 +29,27 @@ def run_cath_hierarchy(job, cathcode, func, cathFileStoreID, **kwds):
         try:
             cathcode = [int(cathcode)]
         except ValueError:
-            if isinstance(cathcode, str) and cathcode in ["None", "all"]:
-                #Start from the top
-                cathcode = []
+            if isinstance(cathcode, str):
+                if cathcode in ["None", "all"]:
+                    #Start from the top
+                    cathcode = []
+                elif "." in cathcode:
+                    parts = cathcode.split(".")
+                    _cathcode = []
+                    for p in parts:
+                        try:
+                            _cathcode.append(int(p))
+                        except ValueError:
+                            raise ValueError("Invaid cathcode: {}".format(cathcode))
+                    cathcode = _cathcode
+                else:
+                    raise ValueError("Invaid cathcode: {}".format(cathcode))
             else:
                 raise ValueError("Invaid cathcode: {}".format(cathcode))
     elif isinstance(cathcode, (list, tuple)):
         if len(cathcode)>0 and isinstance(cathcode[0], (list, tuple)):
             #Multiple CATH codes
-            map_job(job, run_cath_hierarchy, cathcode, func, cathFileStoreID, **kwds)
+            map_job(job, run_cath_hierarchy, cathcode, func, cathFileStoreID, *args, **kwds)
             return
         elif len(cathcode)==1 and cathcode[0] in [None, "None", "all"]:
             cathcode = []
@@ -97,7 +109,7 @@ def run_cath_hierarchy(job, cathcode, func, cathFileStoreID, **kwds):
 
     if cathcodes.shape[1] < level:
         map_job(job, run_cath_hierarchy, cathcodes.values.tolist(), func,
-            cathFileStoreID, **kwds)
+            cathFileStoreID, *args, **kwds)
     else:
         sfams = (cathcodes.astype(int).astype(str)+"/").sum(axis=1).str[:-1].tolist()
         RealtimeLogger.info("Running sfam {}".format(cathcode))
@@ -105,7 +117,7 @@ def run_cath_hierarchy(job, cathcode, func, cathFileStoreID, **kwds):
         kwds.pop("level", None)
         if "cathCodeStoreID" in kwds:
             del kwds["cathCodeStoreID"]
-        map_job(job, func, sfams, cathFileStoreID, **kwds)
+        map_job(job, func, sfams, cathFileStoreID, *args, **kwds)
 
     del cathcodes
 

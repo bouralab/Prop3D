@@ -8,6 +8,7 @@ from molmimic.parsers.container import Container
 from molmimic.util import SubprocessChain, safe_remove, silence_stdout, silence_stderr
 from molmimic.util.pdb import is_ca_model, get_first_chain, get_all_chains, \
     PDB_TOOLS
+from molmimic.common.ProteinTables import three_to_one
 
 modeller_text = """import os, sys, json
 
@@ -194,6 +195,44 @@ class MODELLER(Container):
         seq = "\n".join(SubprocessChain(cmd)[0].decode("utf-8").split("\n")[1:]).strip()
 
         pir_file = self.make_pir(template_id, chain, seq, target_id, chain, seq)
+
+        return self.automodel(template_id, target_id, pir_file,
+            num_models=num_models, extra_modeller_code=ca_model_text,
+            automodel_command="CaModel", return_best=return_best, clean=2 if clean else 0)
+
+    def mutate_structure(template_pdb, mutants, chain=None, num_models=5, return_best=True, clean=True):
+        if chain is None:
+            chain = get_first_chain(template_pdb)
+
+        if chain is None:
+            raise ValueError("Invalid PDB")
+
+        prefix = os.path.splitext(os.path.basename(template_pdb))[0]
+        target_id = "{}_full_model".format(prefix)
+
+        #Rename template to specify CA model
+        template_id = "{}_ca_model".format(prefix)
+        full_template_file = os.path.join(self.work_dir, "{}.pdb".format(template_id))
+
+        if len(get_all_chains(full_template_file)) > 1:
+            with open(full_template_file, "w") as fh:
+                SubprocessChain([[sys.executable, os.path.join(PDB_TOOLS,
+                    "pdb_selchain.py"), "-{}".format(chain), full_template_file]],
+                    fh)
+        else:
+            shutil.copyfile(template_pdb, full_template_file)
+
+        original_seq = ""
+        mutant_seq = ""
+        for resn, resi in get_pdb_residues(full_template_file, include_resn=True, use_raw_resi=True):
+            original_seq += three_to_one(resi)
+            if resi in mutants:
+                mutant_seq += mutants[resi] if len(mutants[resi]) == 1 else three_to_one(mutants[resi])
+            else:
+                mutant_seq += three_to_one(resi)
+
+        pir_file = self.make_pir(template_id, chain, original_seq, target_id,
+            chain, mutant_seq)
 
         return self.automodel(template_id, target_id, pir_file,
             num_models=num_models, extra_modeller_code=ca_model_text,

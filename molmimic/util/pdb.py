@@ -80,16 +80,23 @@ def is_ca_model(pdb_file):
     except IOError:
         return False
 
-def get_pdb_residues(pdb_file):
+def get_pdb_residues(pdb_file, include_resn=False, use_raw_resi=False):
     try:
         with open(pdb_file) as f:
-            prev_res = None
+            prev_resi = None
+            prev_resn = None
             for line in f:
                 if line.startswith("ATOM"):
-                    res = natural_keys(line[22:27], use_int=True) #inlcude icode
-                    if not res == prev_res:
-                        yield res
-                    prev_res = res
+                    resi_raw = line[22:27] #inlcude icode
+                    resi = natural_keys(resi_raw, use_int=True)
+                    resn = line[17:20]
+                    if not resi == prev_resi:
+                        if include_resn:
+                            yield resn, resi_raw.strip() if use_raw_resi else resi
+                        else:
+                            yield resi_raw.strip() if use_raw_resi else resi
+                    prev_resi = resi
+                    prev_resn = resn
     except IOError:
         pass
 

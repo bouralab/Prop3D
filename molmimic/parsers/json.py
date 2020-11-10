@@ -92,8 +92,6 @@ class WebService(object):
                 RealtimeLogger.info("DOWNLOAD API -- NO DOWNLOAD")
                 raise KeyError("Key '{}' does not exist".format(key))
 
-        print("Done download")
-
         #Check if file contains data -- important because some files contain error messages
         try:
             with open(fname) as f:
@@ -130,7 +128,7 @@ class WebService(object):
             except (OSError, FileNotFoundError):
                 pass
 
-            RealtimeLogger.info("Donwlaod step 6 {}".format(rerun))    
+            RealtimeLogger.info("Donwlaod step 6 {}".format(rerun))
 
             if rerun and attempts > 0:
                 return self.get(key, attempts=attempts-1, last_source=source)

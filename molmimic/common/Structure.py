@@ -7,6 +7,7 @@ import numpy as np
 from sklearn.decomposition import PCA
 from Bio import PDB
 from Bio.PDB.NeighborSearch import NeighborSearch
+from Bio.PDB import Selection
 
 import warnings
 warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
@@ -153,6 +154,19 @@ class Structure(object):
     def get_atoms(self, include_hetatms=False, exclude_atoms=None):
         for a in self.filter_atoms(self.structure.get_atoms(), include_hetatms=include_hetatms, exclude_atoms=exclude_atoms):
             yield a
+
+    def get_surface(self, level="R"):
+        if self.atom_features["residue_buried"].astype(int).sum() == 0:
+            raise RuntimeError("Must calculate features with featurizer before running this")
+
+        surface = self.atom_features[self.atom_features["residue_buried"]==False]
+
+        surface_atoms = [a for a in self.get_atoms() if a in surface.index]
+
+        if level == "A":
+            return surface_atoms
+
+        return Selection.unfold_entities(surface_atoms, level)
 
     def filter_atoms(self, atoms, include_hetatms=False, exclude_atoms=None):
         for a in atoms:

@@ -4,19 +4,36 @@
 import os
 from math import ceil
 import tarfile
+import uuid
 from contextlib import closing
 
+import pandas as pd
 from joblib import Parallel, delayed
 
 from molmimic.util import safe_remove, safe_call
 from molmimic.util.iostore import IOStore
 
+from toil.job import Job
 from toil.realtimeLogger import RealtimeLogger
 
 class RealtimeLogger_:
     @staticmethod
     def info(*args, **kwds):
         print(args, kwds)
+
+def createToilOptions():
+    parser = Job.Runner.getDefaultArgumentParser()
+
+    if any("SLURM" in k for k in os.environ.keys()):
+        tmpDir = os.path.join(os.getcwd(), "tmp-{}".format(uuid.uuid4()))
+        if not os.path.isdir(tmpDir):
+            os.makedirs(tmpDir)
+        parser.set_defaults(workDir=tmpDir, statePollingWait=120,
+            clean="always", logLevel="DEBUG", disableAutoDeployment=True)
+
+    parser.set_defaults(clean="always", logLevel="DEBUG", targetTime=1)
+
+    return parser
 
 def partitions(l, partition_size):
     """
@@ -126,6 +143,24 @@ def map_job_rv(job, func, inputs, *args, **kwds):
         promises = [job.addChildJobFn(func, sample, *args, **kwds).rv() for sample in inputs]
 
     return promises
+
+def map_job_to_pandas(job, func, inputs, *args, **kwds):
+    # num_partitions isn't exposed as an argument in order to be transparent to the user.
+    # The value for num_partitions is a tested value
+    num_partitions = 100
+    partition_size = int(ceil(len(inputs)/num_partitions))
+    if partition_size > 1:
+        promises = [job.addChildJobFn(map_job, func, partition, *args, **kwds).rv() \
+            for partition in partitions(inputs, partition_size)]
+    else:
+        promises = [job.addChildJobFn(func, sample, *args, **kwds).rv() for sample in inputs]
+
+    df = job.addFollowOnJobFn(pandas_concat, promises).rv()
+
+    return df
+
+def pandas_concat(job, df_promises):
+    return pd.concat(df_promises, axis=0)
 
 def map_job_rv_list(promises, *path):
     for p in promises:

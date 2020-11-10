@@ -87,7 +87,7 @@ class ProteinVoxelizer(Structure):
       undersample=False, autoencoder=False):
         if self.coarse_grained:
             return self.map_residues_to_voxel_space(
-                binding_site_residues=residue_list,
+                truth_residues=residue_list,
                 include_full_protein=include_full_protein,
                 only_aa=only_aa,
                 non_geom_features=non_geom_features,
@@ -95,7 +95,7 @@ class ProteinVoxelizer(Structure):
             )
         return self.map_atoms_to_voxel_space(
             expand_atom=expand_atom,
-            binding_site_residues=residue_list,
+            truth_residues=residue_list,
             include_full_protein=include_full_protein,
             only_aa=only_aa,
             only_atom=only_atom,
@@ -103,31 +103,32 @@ class ProteinVoxelizer(Structure):
             non_geom_features=non_geom_features,
             undersample=undersample)
 
-    def map_atoms_to_voxel_space(self, binding_site_residues=None,
+    def map_atoms_to_voxel_space(self, truth_residues=None,
       include_full_protein=True, only_aa=False, only_atom=False,
       use_deepsite_features=False, non_geom_features=False,
       only_surface=True, autoencoder=False, return_voxel_map=False,
+      undersample=False,
       return_serial=False, return_b=False, nClasses=2, simple_fft=None):
         """Map atoms to sparse voxel space.
 
         Parameters
         ----------
-        binding_site_residues : list of Bio.PDB.Residue objects or None
+        truth_residues : list of Bio.PDB.Residue objects or None
             If a binding is known, add the list of Bio.PDB.Residue objects, usually
             obtained by Structure.align_seq_to_struc()
         include_full_protein : boolean
             If true, all atoms from the protein are used. Else, just the atoms from the
-            defined binding site. Only makes sense if binding_site_residues is not None
+            defined binding site. Only makes sense if truth_residues is not None
         Returns
         -------
         indices : np.array((nVoxels,3))
         data : np.array((nVoxels,nFeatures))
         """
-        assert [isinstance(binding_site_residues, (list, tuple)), autoencoder].count(True) == 1, \
-            "Only binding_site_residues or autoencoder can be set"
-        if binding_site_residues is not None:
+        assert [isinstance(truth_residues, (list, tuple)), autoencoder].count(True) == 1, \
+            "Only truth_residues or autoencoder can be set"
+        if truth_residues is not None:
             if not include_full_protein:
-                atoms = sorted((a for r in binding_site_residues for a in r),
+                atoms = sorted((a for r in truth_residues for a in r),
                     key=lambda a: a.get_serial_number())
                 atoms = list(self.filter_atoms(atoms))
                 binding_site_atoms = [a.get_serial_number() for a in atoms]
@@ -136,7 +137,7 @@ class ProteinVoxelizer(Structure):
             else:
                 atoms = list(self.get_atoms(include_hetatms=True))
                 nAtoms = len(atoms)
-                binding_site_atoms = [a.get_serial_number() for r in binding_site_residues for a in r]
+                binding_site_atoms = [a.get_serial_number() for r in truth_residues for a in r]
                 non_binding_site_atoms = []
                 atoms = list(atoms)
 
@@ -172,7 +173,10 @@ class ProteinVoxelizer(Structure):
             true_value_ = np.array([1.])
             neg_value_ = np.array([0.])
         elif nClasses == "sfams":
-            pass
+            raise RuntimeError("Sfams not implemented")
+        else:
+            true_value_ = np.array([1.])
+            neg_value_ = np.array([0.])
 
 
         for atom in atoms:
@@ -180,7 +184,7 @@ class ProteinVoxelizer(Structure):
 
             if autoencoder:
                 truth = True
-            elif binding_site_residues is None:
+            elif truth_residues is None:
                 truth = False
             else:
                 truth = atom.get_serial_number() in binding_site_atoms
@@ -213,7 +217,8 @@ class ProteinVoxelizer(Structure):
 
             features = features.astype(float)
 
-            truth_value = true_value_.copy() if truth else neg_value_.copy()
+            if not autoencoder:
+                truth_value = true_value_.copy() if truth else neg_value_.copy()
 
             for atom_grid in self.get_vdw_grid_coords_for_atom(atom):
                 atom_grid = tuple(atom_grid.tolist())
@@ -223,8 +228,9 @@ class ProteinVoxelizer(Structure):
                 except ValueError:
                     print(nFeatures, data_voxels[atom_grid].shape, features.shape)
                     raise
-                truth_voxels[atom_grid] = np.maximum(
-                    truth_value, truth_voxels.get(atom_grid, truth_value))
+                if not autoencoder:
+                    truth_voxels[atom_grid] = np.maximum(
+                        truth_value, truth_voxels.get(atom_grid, truth_value))
                 voxel_map[atom_grid].append(atom.get_parent().get_id())
                 b_factors_voxels[atom_grid] = np.maximum(
                     atom.bfactor, b_factors_voxels.get(atom_grid, atom.bfactor))
@@ -236,7 +242,7 @@ class ProteinVoxelizer(Structure):
         outputs = None
 
         try:
-            if binding_site_residues is None and not autoencoder:
+            if truth_residues is None and not autoencoder:
                 outputs = [np.array(list(data_voxels)), np.array(list(data_voxels.values()))]
             else:
                 data = np.array(list(data_voxels.values())) #Always in same order as put in
@@ -250,12 +256,12 @@ class ProteinVoxelizer(Structure):
             raise
 
         if return_voxel_map:
-            outputs.append(np.array(list(voxel_map.values())))
+            outputs.append(list(voxel_map.values()))
         else:
             outputs.append(None)
 
         if return_serial:
-            outputs.append(np.array(list(serial_number_voxels.values())))
+            outputs.append(list(serial_number_voxels.values()))
         else:
             outputs.append(None)
 
@@ -264,26 +270,26 @@ class ProteinVoxelizer(Structure):
 
         return outputs
 
-    def map_residues_to_voxel_space(self, binding_site_residues=None, include_full_protein=False, non_geom_features=True, only_aa=False, use_deepsite_features=False, undersample=False):
-        if binding_site_residues is not None:
+    def map_residues_to_voxel_space(self, truth_residues=None, include_full_protein=False, non_geom_features=True, only_aa=False, use_deepsite_features=False, undersample=False):
+        if truth_residues is not None:
             if not include_full_protein:
-                residues = binding_site_residues
-                binding_site_residues = [r.get_id()[1] for r in residues]
+                residues = truth_residues
+                truth_residues = [r.get_id()[1] for r in residues]
             else:
                 residues = self.structure.get_residues()
-                binding_site_residues = [r.get_id()[1] for r in binding_site_residues]
+                truth_residues = [r.get_id()[1] for r in truth_residues]
 
                 if undersample:
-                    non_binding_site_residues = [r.get_id()[1] for r in self.structure.get_residues() if r not in binding_site_residues]
+                    non_truth_residues = [r.get_id()[1] for r in self.structure.get_residues() if r not in truth_residues]
                     try:
-                        non_binding_site_residues = np.random.choice(non_binding_site_residues, len(binding_site_residues))
+                        non_truth_residues = np.random.choice(non_truth_residues, len(truth_residues))
                     except ValueError as e:
                         print(e)
                         #Might give over balance
-                        non_binding_site_residues = []
+                        non_truth_residues = []
         else:
             residues = self.structure.get_residues()
-            binding_site_residues = []
+            truth_residues = []
 
         nFeatures = Structure.number_of_features(
             only_aa=only_aa,
@@ -297,9 +303,9 @@ class ProteinVoxelizer(Structure):
         residues = list(residues)
 
         for residue in residues:
-            #assert not residue.get_id()[1] in binding_site_residues
-            truth = residue.get_id()[1] in binding_site_residues
-            if not truth and undersample and residue.get_id()[1] not in non_binding_site_residues:
+            #assert not residue.get_id()[1] in truth_residues
+            truth = residue.get_id()[1] in truth_residues
+            if not truth and undersample and residue.get_id()[1] not in non_truth_residues:
                 continue
 
             truth = np.array([int(truth)])
@@ -318,7 +324,7 @@ class ProteinVoxelizer(Structure):
                     raise
                 truth_voxels[residue_grid] = truth
 
-        if binding_site_residues is None:
+        if truth_residues is None:
             return np.array(list(data_voxels)), np.array(list(data_voxels.values()))
         else:
             truth = np.array([truth_voxels[grid] for grid in list(data_voxels.keys())])
@@ -356,7 +362,12 @@ class ProteinVoxelizer(Structure):
 
             if self.use_features is not None:
                 #Only use hand-selected features
-                feats = features[self.use_features]
+                try:
+                    feats = features[self.use_features]
+                except KeyError:
+                    err_keys = [feat for feat in self.use_features if feat not in features.index]
+                    raise KeyError("{} not in data: {}".format(err_keys, features.index))
+
                 if warn_if_buried:
                     return feats, is_buried
                 else:

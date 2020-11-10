@@ -133,8 +133,7 @@ def from_pdb(job, pdb, assembly, advanced_dock=False, work_dir=None):
 
         job.addChildJobFn(refine_complex, None, face1, None, face2,
             orig_complex_file, int_id=int_id, advanced_dock=False,
-            cores=1,
-            work_dir=work_dir)
+            cores=1, work_dir=work_dir)
 
         for domains in total_chains:
             pass
@@ -220,29 +219,26 @@ def extract_binding_sites(job, cath_domain, superfamily, cathFileStoreID, work_d
         fasta_fname, "binding_sites_3d/{}/{}".format(
             superfamily, os.path.basename(fasta_fname)))
 
-def cluster_binding_sites(job, key="", seq=False, no_struct=False, work_dir=None, output_dir=None):
+def cluster_binding_sites(job, cathFileStoreID, cathcode=None, seq=False, no_struct=False, work_dir=None, output_dir=None):
     if seq:
-        job.addChildJobFn(cluster_binding_site_sequences, key=key, work_dir=work_dir,
+        job.addChildJobFn(cluster_binding_site_sequences, cathcode=cathcode, work_dir=work_dir,
             output_dir=output_dir)
 
     if no_struct:
         return
 
-    # job.addChildJobFn(cluster_binding_site_structures, key=key, work_dir=work_dir,
-    #     output_dir=output_dir)
-
-    job.addChildJobFn(cluster_binding_site_structures_with_distance, "maxsub", key=key, work_dir=work_dir,
+    job.addChildJobFn(cluster_binding_site_structures, cathFileStoreID, cathcode=cathcode, work_dir=work_dir,
         output_dir=output_dir)
 
-def cluster_binding_site_sequences(job, key="", work_dir=None, output_dir=None, force=False):
+def cluster_binding_site_sequences(job, cathcode=None, work_dir=None, output_dir=None, force=False):
     for seqID in [1.0, 0.95, 0.60, 0.35]:
         cluster_file = "binding_sites_3d/sequence_clusters/all_binding_site_clusters_uc_{}.h5".format(seqID)
         if not force and data_stores.eppic_interfaces.exists(cluster_file):
             continue
         job.addChildJobFn(cluster_binding_site_sequences_with_seqID,
-            seqID, key=key, work_dir=work_dir, output_dir=output_dir)
+            seqID, cathcode=cathcode, work_dir=work_dir, output_dir=output_dir)
 
-def cluster_binding_site_sequences_with_seqID(job, seqID, key="", work_dir=None, output_dir=None, cores=20, memory="256G"):
+def cluster_binding_site_sequences_with_seqID(job, seqID, cathcode=None, work_dir=None, output_dir=None, cores=20, memory="256G"):
     #Run max cluster on all binding site structures
     #Save clusters
     if work_dir is None:
@@ -284,52 +280,69 @@ def cluster_binding_site_sequences_with_seqID(job, seqID, key="", work_dir=None,
 
     Parallel(n_jobs=cores)(delayed(save_cluster_msa_file)(f) for f in cluster_files["msaout"])
 
-    # for cluster_msa_file in cluster_files["msaout"]:
-    #     eppic_interfaces_store.write_output_file(
-    #         cluster_msa_file,
-    #         "binding_sites_3d/sequence_clusters/seqID_{}/{}.fasta".format(
-    #             seqID, os.path.basename(cluster_msa_file).split(".")[-1]
-    #         ))
-
-
-
-def cluster_binding_site_structures(job, distance, key="", work_dir=None, output_dir=None):
-    for distance in ["maxsub", "rmsd", "tm"]:
-        job.addChildJobFn(distance, key=key, work_dir=work_dir, output_dir=output_dir)
-
-def cluster_binding_site_structures_with_distance(job, distance, key="", work_dir=None, output_dir=None, cores=1, memory="1G"):
+# def cluster_binding_site_structures(job, distance, cathcode=None, work_dir=None, output_dir=None):
+#     for distance in ["maxsub", "rmsd", "tm"]:
+#         job.addChildJobFn(distance, cathcode=cathcode, work_dir=work_dir, output_dir=output_dir)
+#
+def cluster_binding_site_structures(job, cathFileStoreID, cathcode=None, work_dir=None, output_dir="", cores=1, memory="1G"):
     #Run max cluster on all binding site structures
     #Save clusters
-    if distance=="all":
-        for distance in ["maxsub", "rmsd", "tm"]:
-            job.addChildJobFn(key=key, distance=distance, work_dir=work_dir, output_dir=output_dir,)
     if work_dir is None:
         work_dir = job.fileStore.getLocalTempDir()
-
-    distance = distance.lower()
-    assert distance in ["maxsub", "rmsd", "tm"]
 
     import psutil
     RealtimeLogger.info("VIRTUAL MEM {}".format(psutil.virtual_memory()))
 
     eppic_interfaces_store = FileS3IOStore("us-east-1", "eppic-interfaces", file_path_dir=output_dir)
 
-    all_binding_sites = [os.path.join(output_dir, "eppic-interfaces", bs) for bs in \
-        eppic_interfaces_store.list_input_directory("binding_sites_3d/"+key) if bs.endswith(".pdb")]
+    # if isinstance(cathcode, (list, tuple)):
+    #     key = "/".join(cathcode)
+    # elif isinstance(cathcode, str):
+    #     key = cathcode.replace(".", "/")
+    # else:
+    #     key = ""
+    bs_path = lambda bs: os.path.join(output_dir, "eppic-interfaces", bs)
+    key = ""
+    all_binding_sites = [bs_path(bs) for bs in \
+        eppic_interfaces_store.list_input_directory("binding_sites_3d/"+key) if \
+        bs.endswith(".pdb") and os.path.isfile(bs_path(bs)) and os.path.getsize(bs_path(bs))>0]
 
     if len(all_binding_sites) == 0:
+        RealtimeLogger.info("ENDING MaxCluster since empty")
         return
 
+    RealtimeLogger.info("RUNNING MaxCluster one_vs_all")
+
+    run_cath_hierarchy(job, cathcode, cluster_binding_site_structures_in_superfamily,
+        cathFileStoreID, all_binding_sites, output_dir=output_dir)
+
+def cluster_binding_site_structures_in_superfamily(job, cathcode, cathFileStoreID, file_list, work_dir=None, output_dir="", cores=20, memory="96G"):
     if work_dir is None:
         work_dir = job.fileStore.getLocalTempDir()
 
-    log_file = os.path.join(work_dir, "binding_site_clusters.log")
-    dist_file = os.path.join(work_dir, "binding_site_clusters.dist")
-
+    eppic_interfaces_store = FileS3IOStore("us-east-1", "eppic-interfaces", file_path_dir=output_dir)
     mc = MaxCluster(job=job, work_dir=work_dir, detach=True, intermediate_file_store=eppic_interfaces_store)
-    logFileID = mc.all_vs_all(all_binding_sites, C=1, P=10, distance=distance,
-        R=dist_file, log=log_file, distributed=True, sequence_independent=True,
-        bb=True, cores=cores, memory="72G")
+
+    cath_files_prefix = str(os.path.join(output_dir, "eppic-interfaces",
+        "binding_sites_3d", cathcode.replace(".", "/")))+"/"
+    RealtimeLogger.info("PREFIX {}".format(cath_files_prefix))
+
+    cath_domain_files = [(i, domain_file) for i, domain_file in enumerate(file_list) \
+        if domain_file.startswith(cath_files_prefix)][:1]
+
+    RealtimeLogger.info("RUNNING MaxCluster one_vs_all for all {} {}".format(cathcode, cath_domain_files))
+
+    for domain_file in cath_domain_files:
+        RealtimeLogger.info("RUNNING MaxCluster one_vs_all for {} {}".format(cathcode, domain_file))
+        logFileID = mc.one_vs_all(domain_file, file_list, log=True, cores=cores)
+
+    # log_file = os.path.join(work_dir, "binding_site_clusters.log")
+    # dist_file = os.path.join(work_dir, "binding_site_clusters.dist")
+    #
+    #
+    # logFileID = mc.all_vs_all(all_binding_sites, C=1, P=10, distance="maxsub",
+    #     R=dist_file, log=log_file, distributed=True, sequence_independent=True,
+    #     bb=True, cores=cores, memory="72G")
     # return
 
     # for f in logFileID:
@@ -339,7 +352,7 @@ def cluster_binding_site_structures_with_distance(job, distance, key="", work_di
 
     #job.addFollowOnJobFn(save_clustered_binding_sites, logFileID, output_dir=output_dir)
 
-def save_clustered_binding_sites(job, logFileID, output_dir=None):
+def save_clustered_binding_sites(job, logFileID, output_dir=""):
     work_dir = job.fileStore.getLocalTempDir()
     eppic_interfaces_store = FileS3IOStore("us-east-1", "eppic-interfaces", file_path_dir=output_dir)
 
@@ -361,7 +374,7 @@ def save_clustered_binding_sites(job, logFileID, output_dir=None):
 
     job.fileStore.deleteGlobalFile(logFileID)
 
-def process_superfamily(job, superfamily, cathFileStoreID, output_dir=None,
+def process_superfamily(job, superfamily, cathFileStoreID, output_dir="",
   force=False, further_parallize=False):
     cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
     cathcode = superfamily.replace("/", ".")
@@ -405,7 +418,7 @@ def process_superfamily(job, superfamily, cathFileStoreID, output_dir=None,
         "file-aws:us-east-1:eppic-interfaces:{}".format(output_dir))
 
 
-def start_toil(job, cathFileStoreID, cathcode=None, update_features=None, seq=False, no_struct=False, output_dir=None, force=False):
+def start_toil(job, cathFileStoreID, cathcode=None, update_features=None, seq=False, no_struct=False, output_dir="", force=False):
     RealtimeLogger.info("started") #slurm-13374299.out
 
     # cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
@@ -422,7 +435,7 @@ def start_toil(job, cathFileStoreID, cathcode=None, update_features=None, seq=Fa
         run_cath_hierarchy(job, cathcode, process_superfamily, cathFileStoreID,
             output_dir=output_dir, force=force)
 
-    job.addFollowOnJobFn(cluster_binding_sites, seq=seq, no_struct=no_struct, output_dir=output_dir)
+    job.addFollowOnJobFn(cluster_binding_sites, cathFileStoreID, seq=seq, no_struct=no_struct, cathcode=cathcode, output_dir=output_dir)
 
 
 if __name__ == "__main__":
