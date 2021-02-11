@@ -55,15 +55,19 @@ def calculate_features(job, cath_domain, cathcode, update_features=None, work_di
 
     if update_features is not None:
         #Download existing features
+        fail = False
         for ext in ("atom.h5", "residue.h5", "edges.txt.gz"):
             try:
                 data_stores.cath_features.read_input_file(
-                    "{}_{}.h5".format(cath_key, ext),
-                    os.path.join(work_dir, "{}_{}.h5".format(cath_domain, ext)))
+                    "{}_{}".format(cath_key, ext),
+                    os.path.join(work_dir, "{}_{}".format(cath_domain, ext)))
             except ClientError:
                 #Ignore, just recalculate
                 update_features = None
+                fail = True
                 break
+        if fail:
+            RealtimeLogger.info("Failed to download old features")
 
     domain_file = os.path.join(work_dir, "{}.pdb".format(cath_domain))
 
@@ -71,14 +75,19 @@ def calculate_features(job, cath_domain, cathcode, update_features=None, work_di
         data_stores.prepared_cath_structures.read_input_file(
             cath_key+".pdb", domain_file)
     except ClientError:
-        raise
         RealtimeLogger.info("Failed to download prapred cath file {}".format(
             cath_key+".pdb"))
+        raise
 
-    structure = ProteinFeaturizer(
-        domain_file, cath_domain, job, work_dir,
-        force_feature_calculation=update_features is None,
-        update_features=update_features)
+    try:
+        structure = ProteinFeaturizer(
+            domain_file, cath_domain, job, work_dir,
+            force_feature_calculation=update_features is None,
+            update_features=update_features)
+    except:
+        import traceback as tb
+        RealtimeLogger.info(f"{tb.format_exc()}")
+        raise
 
     for ext, calculate in (("atom.h5", structure.calculate_flat_features),
                            ("residue.h5", structure.calculate_flat_residue_features),
@@ -91,8 +100,10 @@ def calculate_features(job, cath_domain, cathcode, update_features=None, work_di
             tb = traceback.format_exc()
             CalculateFeaturesError(cath_domain, ext.split(".",1)[0], tb).save()
             return
+
         data_stores.cath_features.write_output_file(
             feature_file, "{}_{}".format(cath_key, ext))
+        
         safe_remove(feature_file)
         RealtimeLogger.info("Finished features for: {}".format(feature_file))
 

@@ -62,6 +62,8 @@ class ProteinVoxelizer(Structure):
             torch.from_numpy(indices).type(dtypei),
             torch.from_numpy(data).type(dtype)]
         labels = torch.from_numpy(truth).type(label_dtype)
+        if return_voxel_map:
+            return inputs, labels, voxel_map
         return inputs, labels
 
     def get_flat_features(self, resi=None):
@@ -231,7 +233,7 @@ class ProteinVoxelizer(Structure):
                 if not autoencoder:
                     truth_voxels[atom_grid] = np.maximum(
                         truth_value, truth_voxels.get(atom_grid, truth_value))
-                voxel_map[atom_grid].append(atom.get_parent().get_id())
+                voxel_map[atom_grid].append(atom.serial_number) #get_parent().get_id())
                 b_factors_voxels[atom_grid] = np.maximum(
                     atom.bfactor, b_factors_voxels.get(atom_grid, atom.bfactor))
                 serial_number_voxels[atom_grid].append(atom.serial_number)

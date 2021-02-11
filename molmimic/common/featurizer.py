@@ -14,7 +14,7 @@ from toil.realtimeLogger import RealtimeLogger
 from molmimic.util.pdb import InvalidPDB
 from molmimic.util import natural_keys, silence_stdout, silence_stderr
 from molmimic.util.iostore import IOStore
-from molmimic.parsers.openbabel import OpenBabel
+from molmimic.parsers import mgltools
 from molmimic.parsers.FreeSASA import run_freesasa_biopython
 from molmimic.parsers.Electrostatics import APBS, Pdb2pqr
 from molmimic.parsers.cx import CX
@@ -28,14 +28,16 @@ from molmimic.common.features import atom_features, residue_features, \
 
 class ProteinFeaturizer(Structure):
     def __init__(self, path, cath_domain, job, work_dir,
-      input_format="pdb", force_feature_calculation=False, update_features=None, **kwds):
+      input_format="pdb", force_feature_calculation=False, update_features=None, features_path=None, **kwds):
         feature_mode = "w+" if force_feature_calculation else "r"
+        if features_path is None and update_features is not None:
+            features_path = work_dir
         super(ProteinFeaturizer, self).__init__(
             path, cath_domain,
             input_format=input_format,
             feature_mode=feature_mode,
             residue_feature_mode=feature_mode,
-            features_path=work_dir,
+            features_path=features_path,
             **kwds)
         self.job = job
         self.work_dir = work_dir
@@ -83,7 +85,7 @@ class ProteinFeaturizer(Structure):
                 atom_features])
             self.atom_features.to_hdf(self.atom_features_file, "table")
 
-    def get_features_per_atom(residue_list):
+    def get_features_per_atom(self, residue_list):
         """Get features for eah atom, but not organized in grid"""
         features = [self.get_features_for_atom(self._remove_altloc(a)) for r in residue_list for a in r]
         return features
@@ -211,8 +213,8 @@ class ProteinFeaturizer(Structure):
         """Get Autodock atom type"""
 
         if not hasattr(self, "_autodock"):
-            openbabel = OpenBabel(job=self.job, work_dir=self.work_dir)
-            self._autodock = openbabel.get_autodock_features(self.path)
+            prep = mgltools.PrepareReceptor(job=self.job, work_dir=self.work_dir)
+            self._autodock = prep.get_autodock_atom_types(self.path)
 
         try:
             atom_type, h_bond_donor = self._autodock[atom.serial_number]
@@ -304,7 +306,7 @@ class ProteinFeaturizer(Structure):
                     self._pqr = pdb2pqr.get_charge_from_pdb_file(self.path, with_charge=False)
                 else:
                     apbs = APBS(work_dir=self.work_dir, job=self.job)
-                    self._pqr = apbs.atom_potentials_from_pdb(self.path)
+                    self._pqr = apbs.get_atom_potentials_from_pdb(self.path)
             except (SystemExit, KeyboardInterrupt):
                 raise
             except Exception as e:
@@ -623,8 +625,8 @@ class ProteinFeaturizer(Structure):
         """Use DeepSites rules for autodock atom types
         """
         if not hasattr(self, "_autodock"):
-            openbabel = OpenBabel(job=self.job, work_dir=self.work_dir)
-            self._autodock = openbabel.get_autodock_features(self.path)
+            prep = mgltools.PrepareReceptor(job=self.job, work_dir=self.work_dir)
+            self._autodock = prep.get_autodock_atom_types(self.path, verify=True)
 
         try:
             atom_type, h_bond_donor = self._autodock[atom.serial_number]

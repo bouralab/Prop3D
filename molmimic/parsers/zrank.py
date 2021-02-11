@@ -10,7 +10,9 @@ from toil.realtimeLogger import RealtimeLogger
 
 class ZRank(Container):
     IMAGE = "docker://edraizen/zrank"
-    PARAMETERS = [(":refinement", "store_true", "-R"), ("list_file", "path:in")]
+    PARAMETERS = [
+        (":refinement", "store_true", ["-R"]), 
+        ("list_file", "path:in")]
     LOCAL = ["zrank"]
 
     def rank(self, complex_path, refinement=False, retry_with_protonatation=True):

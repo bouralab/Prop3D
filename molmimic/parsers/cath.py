@@ -11,7 +11,7 @@ class CATHApi(JSONApi):
     def __init__(self, cath_store=None, work_dir=None, download=True, max_attempts=2):
         if cath_store is None:
             cath_store = data_stores.cath_api_service
-        super().__init__("https://www.cathdb.info/version/v4_2_0/",
+        super().__init__("https://www.cathdb.info/version/v4_3_0/",
             cath_store, work_dir=work_dir, download=download, clean=False,
             max_attempts=max_attempts)
 
@@ -50,7 +50,10 @@ class CATHApi(JSONApi):
 
         elif "from_cath_id_to_depth" in key or "cluster_summary_data" in key:
             with open(file_path) as fh:
-                return yaml.safe_load(fh)
+                result = yaml.safe_load(fh)
+                if "500 Internal Server Error" in result:
+                    raise ValueError("{} is invalid".format(file_path))
+                return result
         else:
             #Read json
             return super().parse(file_path, key)
@@ -75,6 +78,8 @@ class CATHApi(JSONApi):
         return domain_file
 
     def check_line(self, key, line, attempts):
+        if "500 Internal Server Error" in line:
+            return True
         if ".pdb" in key:
             return not line.startswith("ATOM")
         else:

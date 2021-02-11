@@ -19,7 +19,7 @@ logging.getLogger('s3transfer').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 def get_domain_structure_and_features(job, cath_domain, superfamily,
-  cathFileStoreID, update_features=None, further_parallelize=True, force=False):
+  cathFileStoreID, update_features=None, further_parallelize=False, force=False):
     """1) Run Feagtures depends on prepared strucutre Structure"""
     RealtimeLogger.info("get_domain_structure_and_features Process domain "+cath_domain)
 
@@ -43,18 +43,21 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
         ('atom.h5', 'residue.h5', 'edges.h5')]
     feats_exist = [data_stores.cath_features.exists(f) for f in feat_files]
 
+    RealtimeLogger.info(f"get_domain_structure_and_features FEATURES {force} {update_features}, {all(feats_exist)}")
+
     if force or update_features is not None or not all(feats_exist):
         #Calculate features Processed domain file
         if further_parallelize:
             job.addFollowOnJobFn(calculate_features, cath_domain, superfamily,
                 update_features=update_features)
         else:
+            RealtimeLogger.info("get_domain_structure_and_features calculate_features")
             try:
                 calculate_features(job, cath_domain, superfamily, update_features=update_features)
             except (SystemExit, KeyboardInterrupt):
                 raise
             except:
-                #Failed 
+                #Failed
                 return
 
 def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
@@ -69,7 +72,7 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
         drop_duplicates=True,
         cathcode=cathcode)["cath_domain"].tolist()
 
-    if not force:
+    if not force and update_features is None:
         #Get domians that have edge features uploaded (last feature file to be uploaded so we know its done)
         done_domains = [os.path.basename(domain).split("_")[0] for domain in \
             data_stores.cath_features.list_input_directory(superfamily) \
@@ -81,7 +84,7 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
         RealtimeLogger.info("Running {} domains from {}".format(len(cath_domains), cathcode))
 
     if further_parallize:
-        map_job_follow_ons(job, get_domain_structure_and_features, cath_domains,
+        map_job(job, get_domain_structure_and_features, cath_domains,
             superfamily, cathFileStoreID, update_features=update_features,
             further_parallelize=False, force=force)
     else:
@@ -108,12 +111,32 @@ def start_toil(job, cathFileStoreID, cathcode=None, update_features=None, force=
         columns=["cath_domain", "cathcode"],
         drop_duplicates=True)
 
-    done_domains = [os.path.basename(domain).split("_")[0] for domain in \
-        data_stores.cath_features.list_input_directory() \
-        if domain.endswith("edges.txt.gz")]
+    if cathcode is not None:
+        if not isinstance(cathcode, (list, tuple)):
+            cathcode = [cathcode]
+        RealtimeLogger.info("Running sfams: {}".format(cathcode))
 
-    domains_to_run = cath_domains[~cath_domains["cath_domain"].isin(done_domains)]
-    RealtimeLogger.info("Domains to run: {}".format(len(domains_to_run)))
+        if update_features is None:
+            done_domains = [os.path.basename(domain).split("_")[0] for sfam in cathcode \
+                for domain in data_stores.cath_features.list_input_directory(sfam.replace(".", "/")) \
+                if domain.endswith("edges.txt.gz")]
+        else:
+            done_domains = None
+    else:
+        if update_features is None:
+            done_domains = [os.path.basename(domain).split("_")[0] for domain in \
+                data_stores.cath_features.list_input_directory() \
+                if domain.endswith("edges.txt.gz")]
+        else:
+            done_domains = None
+
+    if update_features is None:
+        domains_to_run = cath_domains[~cath_domains["cath_domain"].isin(done_domains)]
+    else:
+        domains_to_run = cath_domains
+
+    RealtimeLogger.info("Domains to from {} superfamilies to run: {}".format(
+        len(cathcode) if cathcode is not None else "all", len(domains_to_run)))
 
     if len(domains_to_run) > 500:
         #Start CATH hiearchy

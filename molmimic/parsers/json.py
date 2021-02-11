@@ -137,7 +137,7 @@ class WebService(object):
                 raise KeyError("Key '{}' is an invalid file".format(key))
         except Exception as e:
             RealtimeLogger.info("API Failed parsing json ({}): {}".format(type(e), e))
-            raise KeyError("Key '{}' Not found; {} is an invalid file".format(key, fname))
+            raise KeyError("Key '{}' Not found; {} is an invalid file {} {}".format(key, fname, type(e), e))
 
         if key not in self.files:
             self.files[key] = (fname, should_remove)
@@ -165,7 +165,6 @@ class WebService(object):
             return False
 
         RealtimeLogger.info("Donwlaod step 3")
-        print("Downlaod 11")
 
         if self.should_add_to_store(key, fname):
             #Save to store

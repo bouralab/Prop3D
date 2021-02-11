@@ -245,7 +245,7 @@ class EPPICApi(JSONApi):
 class EPPICLocal(Container):
     IMAGE = "docker://edraizen/eppic"
     PARAMETERS = [
-        "-i", ("input_file", "path:in"),
+        ("input_file", "path:in", "i"),
         (":s", "store_true"),
         (":p", "store_true"),
         (":l", "store_true"),

@@ -65,7 +65,7 @@ class CaModel(automodel):
 class MODELLER(Container):
     IMAGE = "docker://edraizen/modeller:latest"
     LOCAL = [sys.executable]
-    PARAMETERS = [("modeller_file", "path:in")]
+    PARAMETERS = [("modeller_file", "path:in", "")]
 
     def automodel(self, template_id, target_id, pir_file, num_models=5,
       extra_modeller_code=None, automodel_command="automodel", return_best=True,

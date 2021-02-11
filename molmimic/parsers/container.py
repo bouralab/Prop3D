@@ -13,6 +13,11 @@ from toil.job import Job
 from molmimic.util import silence_stdout, silence_stderr
 from molmimic.util.iostore import IOStore
 
+class RealtimeLogger:
+    @staticmethod
+    def info(*args):
+        print(args)
+
 CONTAINER_PATH = os.environ.get("CONTAINER_PATH", os.environ["HOME"])
 
 os.environ["ALLOWABLE_CONTAINER_PATHS"] = "/project"
@@ -171,7 +176,7 @@ class Container(object):
                         optional = True
 
                     if len(p) == 3:
-                        is_arg = lambda a: isinstance(a, str) and len(a)>0
+                        is_arg = lambda a: isinstance(a, str) # and len(a)>0
                         if is_arg(p[2]):
                             formatter = p[2]
                         elif isinstance(p[2], (list, tuple)) and all([is_arg(a) for a in p[2]]):
@@ -196,20 +201,25 @@ class Container(object):
                         else:
                             assert 0, rule
 
+                        if default is not None:
+                            self.parameters.append(self.arg_formatter(key, default, formatter))
+                        else:
+                            self.parameters.append([None])
+
                         if not optional:
-                            if default is not None:
-                                self.parameters.append(formatter.format(default))
-                            else:
-                                self.parameters.append(None)
+                            # if default is not None:
+                            #     self.parameters.append(formatter.format(default))
+                            # else:
+                            #     self.parameters.append(None)
                             self.param_names.append(key)
                             self.param_funcs[i] = func
                             self.params_to_update[key] = i
                             self.number_of_parameters += 1
                         else:
-                            if default is not None:
-                                self.parameters.append(formatter.format(default))
-                            else:
-                                self.parameters.append(None)
+                            # if default is not None:
+                            #     self.parameters.append(formatter.format(default))
+                            # else:
+                            #     self.parameters.append(None)
                             self.optional_param_names.append(key)
                             self.optional_param_funcs[i] = func
                             self.optional_params_to_update[key] = i
@@ -225,7 +235,6 @@ class Container(object):
         assert self.job is not None
 
         parameters = self.format_parameters(args, kwds)
-        RealtimeLogger.info("Run {} with params {}".format(self.IMAGE, parameters))
 
         image = pullContainer(self.IMAGE, pull_folder=CONTAINER_PATH)
 
@@ -257,7 +266,6 @@ class Container(object):
             try:
                 for line in out:
                     message += line
-                    RealtimeLogger.info("CONTAINER OUT: {}".format(line.rstrip()))
             except (SystemExit, KeyboardInterrupt):
                 raise
             except:
@@ -277,8 +285,6 @@ class Container(object):
             else:
                 #Docker already handled error above
                 message = out
-
-        RealtimeLogger.info("FInished Running {}".format(message))
 
         try:
             out_files = self.check_output()
@@ -343,9 +349,8 @@ class Container(object):
             else:
                 raise RuntimeError
 
-        RealtimeLogger.info("RUN with {} and {}".format(args, kwds))
+        parameters = [p for p in self.parameters] #[[p] for p in self.parameters]
 
-        parameters = [[p] for p in self.parameters]
         for k, v in kwds.items():
             try:
                 idx = self.params_to_update[k]
@@ -384,7 +389,6 @@ class Container(object):
         return [p for parameter in parameters for p in parameter if p is not None and isinstance(p, str)]
 
     def arg_formatter(self, key, value, formatter):
-        RealtimeLogger.info("SETUP ARG: {} {} {}".format(key, value, formatter))
         if isinstance(formatter, (list, tuple)):
             #Assume correct formatting
             args = []
@@ -399,13 +403,25 @@ class Container(object):
 
         if isinstance(value, StoreTrueValue):
             return ["{}{}".format(self.ARG_START, key)]
-        elif self.ARG_SEP == " ":
-            return ["{}{}".format(self.ARG_START, key), formatter.format(value)]
+        elif isinstance(formatter, str):
+            if len(formatter) == 0:
+                #Keep only value
+                return [value]
+
+            if formatter.count("{}") == 0:
+                #param rename
+                key = formatter
+                formatter = "{}"
+
+            if self.ARG_SEP == " ":
+                return ["{}{}".format(self.ARG_START, key), formatter.format(value)]
+            else:
+                return ["{}{}{}{}".format(self.ARG_START, key, self.ARG_SEP, formatter.format(value))]
         else:
-            return ["{}{}{}{}".format(self.ARG_START, key, self.ARG_SEP, formatter.format(value))]
+            raise RuntimeError(f"Invalid arg formatter: {formatter}")
 
     def format_in_path(self, name, path, move_files_to_work_dir=True):
-        if self.is_local or not move_files_to_work_dir or any(path.startswith(p) for p in os.environ.get("ALLOWABLE_CONTAINER_PATHS").split(":")):
+        if self.is_local or not move_files_to_work_dir or any(path.startswith(p) for p in os.environ.get("ALLOWABLE_CONTAINER_PATHS", "").split(":")):
             if not os.path.isfile(path):
                 raise RuntimeError("{} is not found".format(path))
             return os.path.abspath(path)
@@ -468,7 +484,8 @@ class Container(object):
 
         if len(out_files) == 1:
             self.out_files = out_files
-            return out_files.popitem()[0]
+            return out_files.popitem()[1]
+
 
         return out_files
 

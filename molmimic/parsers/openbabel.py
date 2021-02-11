@@ -35,9 +35,13 @@ atom_type_h_bond_donor = {
 class OpenBabel(Container):
     IMAGE = 'docker://edraizen/openbabel:latest'
     LOCAL = None
-    PARAMETERS = ["-i", ("in_format", "str"), ("in_file", "path:in"),
-        "-o", ("out_format", "str"), "-O", ("out_file", "path:out")]
+    PARAMETERS = [
+        ("in_format", "str", "i"),
+        ("in_file", "path:in", ""),
+        ("out_format", "str", "o"),
+        ("out_file", "path:out", "O")]
     RETURN_FILES = True
+    ARG_START="-"
 
     def get_autodock_features(self, pdb_path):
         out_file = pdb_path+".pdbqt"

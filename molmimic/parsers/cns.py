@@ -21,7 +21,7 @@ script_dir = os.path.dirname(__file__)
 class CNS(Container):
     IMAGE = 'edraizen/cns:latest'
     LOCAL = ["cns_solve"]
-    PARAMETERS = [("input_file", "path:in:stdin")]
+    PARAMETERS = [("input_file", "path:in:stdin", "")]
 
     def _generate_input(self, template_file, prefix, **kwds):
         """Minimize a single protein.
@@ -61,7 +61,7 @@ class CNS(Container):
 
 class CNSMinimize(CNS):
     LOCAL = ["cns"]
-    PARAMETERS = [("pdb_file", "path:in"), ("output_file", "path:out")]
+    PARAMETERS = [("pdb_file", "path:in", ""), ("output_file", "path:out")]
     RETURN_FILES = True
     cns4char_re = re.compile("%CREAD-ERR: residue ID and insertion character ([0-9a-zA-Z]+) exceed 4 characters.")
     cns_output_re = re.compile("\| Etotal =([0-9\.]+)\s+grad\(E\)=([0-9\.]+)\s+E\(BOND\)=([0-9\.]+)\s+E\(ANGL\)=([0-9\.]+)\s+\|\n \| E\(DIHE\)=([0-9\.]+)\s+E\(IMPR\)=([0-9\.]+)\s+E\(VDW \)=([0-9\.]+)\s+E\(ELEC\)=([0-9\.]+)\s+\|\n -{79}\n LBFGS: normal termination - NSTEP limit reached")
@@ -82,7 +82,7 @@ class CNSMinimize(CNS):
             INSERT_PDB_HERE=_pdb_file, INSERT_OUTPUT_FILE=minimized_file)
 
         #Call CNS
-        self.stdout = super(self, Minimize)(input_file=input_file)
+        self.stdout = super()(input_file=input_file)
 
         minimized_file = self.check_output()
         minimized_file = self.fix_output(pdb_file, minimized_file)

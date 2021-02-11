@@ -64,9 +64,13 @@ class Superpose(object):
 
 class TMAlign(Container, Superpose):
     IMAGE = "edraizen/mmalign:latest"
-    PARAMETERS = [("moving_pdb_file", "path:in"), ("fixed_pdb_file", "path:in"),
-        "-o", ("out_file", "path:out"), (":input_alignment", "path:in", "-I {}"),
-        (":matrix_file", "path:out", "-m {}")]
+    PARAMETERS = [
+        ("moving_pdb_file", "path:in", ""),
+        ("fixed_pdb_file", "path:in", ""),
+        ("out_file", "path:out", "o"),
+        (":input_alignment", "path:in", "I"),
+        (":matrix_file", "path:out", "m")]
+    ARG_START="-"
 
     def get_alignment_stats(self, stdout=None):
         if stdout is None:
@@ -122,8 +126,11 @@ class TMAlign(Container, Superpose):
 
 class MMAlign(TMAlign, Superpose):
     IMAGE = "edraizen/mmalign:latest"
-    PARAMETERS = [("moving_pdb_file", "path:in"), ("fixed_pdb_file", "path:in"),
-        "-o", ("out_file", "path:out")]
+    PARAMETERS = [
+        ("moving_pdb_file", "path:in", ""),
+        ("fixed_pdb_file", "path:in", ""),
+        ("out_file", "path:out", "o")]
+    ARG_START="-"
 
     def align(self, *args, **kwds):
         output = super(self, MMAlign).align(*args, **kwds)
@@ -149,9 +156,11 @@ class MMAlign(TMAlign, Superpose):
 class CEAlign(Container, Superpose):
     IMAGE = "edraizen/ce:latest"
     PARAMETERS = [
-        "--file1", ("fixed_pdb_file", "path:in"),
-        "--file2", ("moving_pdb_file", "path:in"),
-        "-outputPDB", "-outFile", ("out_file", "path:out")]
+        ("fixed_pdb_file", "path:in", "file1"),
+        ("moving_pdb_file", "path:in", "file2"),
+        "-outputPDB",
+        ("out_file", "path:out", ["-outFile", "{}"])]
+        ARG_START="--"
 
     def align(self, *args, **kwds):
         output = super(self, CEAlign).align(*args, **kwds)

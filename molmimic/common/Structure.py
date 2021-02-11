@@ -102,7 +102,7 @@ class Structure(object):
         else:
             self.atom_features = default_atom_feature_df(len(atom_index)).reindex(atom_index, axis=0)
 
-        if self.residue_feature_mode == "r":
+        if self.residue_feature_mode == "r" and os.path.isfile(self.residue_features_file):
             self.residue_features = pd.read_hdf(self.residue_features_file, "table", mode="r")
         else:
             residue_index = pd.MultiIndex.from_tuples(
