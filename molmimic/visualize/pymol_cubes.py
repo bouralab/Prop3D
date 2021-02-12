@@ -6,7 +6,7 @@ Square and Tetrahedra representations
 License: BSD-2-Clause
 '''
 
-from __future__ import print_function
+
 from pymol import cmd, cgo
 from chempy import cpv
 

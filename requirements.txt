@@ -1,6 +1,6 @@
-numpy==1.15.4
-pandas==0.23.4
-tables==3.4.4
+numpy
+pandas
+tables
 scikit-learn
 Biopython
 seaborn
@@ -15,3 +15,5 @@ cloudpickle >= 0.2.1
 tables
 freesasa
 boto3
+botocore
+awscli

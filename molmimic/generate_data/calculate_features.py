@@ -1,119 +1,230 @@
+from __future__ import print_function
 import sys
 import os
 import argparse
 import time
+import traceback
 from itertools import groupby
 import glob
 
-from molmimic.generate_data.iostore import IOStore
-from molmimic.generate_data.util import get_file, filter_hdf, filter_hdf_chunks
-from molmimic.generate_data.job_utils import map_job
-from molmimic.generate_data.map_residues import decode_residues, InvalidSIFTS
+from molmimic.common.featurizer import ProteinFeaturizer
+
+from molmimic.util import safe_remove
+from molmimic.util.iostore import IOStore
+from molmimic.util.pdb import InvalidPDB, get_atom_lines
+from molmimic.util.hdf import get_file, filter_hdf, filter_hdf_chunks
+from molmimic.util.toil import map_job
+from molmimic.util.cath import run_cath_hierarchy, download_cath_domain
+
+from molmimic.generate_data import data_stores
 
 from toil.realtimeLogger import RealtimeLogger
+from botocore.exceptions import ClientError
 
-def calculate_features(job, pdb_or_key, sfam_id=None, chain=None, sdi=None, domNo=None, work_dir=None):
-    from molmimic.common.featurizer import ProteinFeaturizer
+class CalculateFeaturesError(RuntimeError):
+    def __init__(self, cath_domain, stage, message, errors=None, *args, **kwds):
+        super().__init__(*args, **kwds)
+        self.cath_domain = cath_domain
+        self.stage = stage
+        self.message = message
+        self.errors = errors if isinstance(errors, list) else []
 
-    if work_dir is None and job is not None:
-        work_dir = job.fileStore.getLocalTempDir()
+    def __str__(self):
+        return "Error during {}: {}\nErrors:\n".format(self.stage, self.message,
+            "\n".join(map(str, self.errors)))
 
-    if work_dir is None or not os.path.isdir(work_dir):
-        work_dir = os.getcwd()
+    def save(self, store=None):
+        if store is None:
+            store = data_stores.cath_features
+        fail_file = "{}.{}".format(self.cath_domain, self.stage)
+        with open(fail_file, "w") as f:
+            print(self.message, file=f)
+            print(self.errors, file=f)
+        store.write_output_file(fail_file,
+            "errors/"+os.path.basename(fail_file))
+        safe_remove(fail_file)
 
-    in_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
-    out_store = IOStore.get("aws:us-east-1:molmimic-structure-features")
+def calculate_features(job, cath_domain, cathcode, update_features=None, work_dir=None):
+    if work_dir is None:
+        if job is not None and hasattr(job, "fileStore"):
+            work_dir = job.fileStore.getLocalTempDir()
+        else:
+            work_dir = os.getcwd()
 
-    if [sfam_id, chain, sdi, domNo].count(None) == 0:
-        #pdb_or_key is pdb
-        pdb = pdb_or_key
-        key = "{}/{}/{}_{}_sdi{}_d{}".format(int(sfam_id), pdb.lower()[1:3],
-            pdb.upper(), chain, sdi, domNo)
-    else:
-        #pdb_or_key is key
-        assert pdb_or_key.count("_") == 3
-        key = os.path.splitext(pdb_or_key)[0]
-        pdb, chain, sdi, domNo = os.path.basename(key).split("_")
-        sdi, domNo = sdi[3:], domNo[1:]
+    cath_key = "{}/{}".format(cathcode, cath_domain)
+
+    if update_features is not None:
+        #Download existing features
+        fail = False
+        for ext in ("atom.h5", "residue.h5", "edges.txt.gz"):
+            try:
+                data_stores.cath_features.read_input_file(
+                    "{}_{}".format(cath_key, ext),
+                    os.path.join(work_dir, "{}_{}".format(cath_domain, ext)))
+            except ClientError:
+                #Ignore, just recalculate
+                update_features = None
+                fail = True
+                break
+        if fail:
+            RealtimeLogger.info("Failed to download old features")
+
+    domain_file = os.path.join(work_dir, "{}.pdb".format(cath_domain))
 
     try:
-        pdb_path = os.path.join(work_dir, os.path.basename(key)+".pdb")
-        in_store.read_input_file(key+".pdb", pdb_path)
-
-        s = ProteinFeaturizer(pdb_path, pdb, chain, sdi=sdi, domNo=domNo,
-            work_dir=work_dir, job=job)
-
-        _, atom_features = s.calculate_flat_features()
-        RealtimeLogger.info("Finished atom features")
-        _, residue_features = s.calculate_flat_features(course_grained=True)
-        RealtimeLogger.info("Finished residue features")
-        graph_features = s.calculate_graph()
-        RealtimeLogger.info("Finished edge features")
-
-        out_store.write_output_file(atom_features, key+"_atom.npy")
-        out_store.write_output_file(residue_features, key+"_residue.npy")
-        out_store.write_output_file(graph_features, key+"_edges.gz")
-
-        for f in (pdb_path, atom_features, residue_features, graph_features):
-            try:
-                os.remove(f)
-            except OSError:
-                pass
-    except (SystemExit, KeyboardInterrupt):
+        data_stores.prepared_cath_structures.read_input_file(
+            cath_key+".pdb", domain_file)
+    except ClientError:
+        RealtimeLogger.info("Failed to download prapred cath file {}".format(
+            cath_key+".pdb"))
         raise
-    except Exception as e:
+
+    try:
+        structure = ProteinFeaturizer(
+            domain_file, cath_domain, job, work_dir,
+            force_feature_calculation=update_features is None,
+            update_features=update_features)
+    except:
+        import traceback as tb
+        RealtimeLogger.info(f"{tb.format_exc()}")
         raise
-        fail_key = "{}_error.fail".format(key)
-        fail_file = os.path.join(work_dir, os.path.basename(key))
-        with open(fail_file, "w") as f:
-            f.write("{}\n".format(e))
-        out_store.write_output_file(fail_file, fail_key)
-        os.remove(fail_file)
 
+    for ext, calculate in (("atom.h5", structure.calculate_flat_features),
+                           ("residue.h5", structure.calculate_flat_residue_features),
+                           ("edges.txt.gz", structure.calculate_graph)):
+        try:
+            _, feature_file = calculate()
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except Exception as e:
+            tb = traceback.format_exc()
+            CalculateFeaturesError(cath_domain, ext.split(".",1)[0], tb).save()
+            return
 
-def calculate_features_for_sfam(job, sfam_id, further_parallelize=False):
+        data_stores.cath_features.write_output_file(
+            feature_file, "{}_{}".format(cath_key, ext))
+        
+        safe_remove(feature_file)
+        RealtimeLogger.info("Finished features for: {}".format(feature_file))
+
+    safe_remove(domain_file)
+
+def calculate_features_for_sfam(job, sfam_id, update_features, further_parallelize=True, use_cath=True):
     work_dir = job.fileStore.getLocalTempDir()
-    pdb_store = IOStore.get("aws:us-east-1:molmimic-full-structures")
-    out_store = IOStore.get("aws:us-east-1:molmimic-structure-features")
 
-    extensions = set(["atom.npy", "residue.npy", "edges.gz"])
-    done_files = lambda k: set([f.rsplit("_", 1)[1] for f in \
-        out_store.list_input_directory(k)])
-    pdb_keys = [k for k in pdb_store.list_input_directory(str(int(sfam_id))) if \
-        k.endswith(".pdb") and extensions != done_files(os.path.splitext(k)[0])]
+    RealtimeLogger.info("Running SFAM {}".format(sfam_id))
+
+    extensions = set([u'atom.h5', u'residue.h5', u'edges.h5'])
+
+    def done_files(k, o):
+        return set(f.rsplit("_", 1)[1] for f in \
+            o.list_input_directory(k) if "fail" not in f)
+
+    if use_cath:
+        pdb_store = IOStore.get("aws:us-east-1:molmimic-cath-structure")
+        out_store = IOStore.get("aws:us-east-1:molmimic-cath-features")
+        pdb_keys_full = set(k for k in pdb_store.list_input_directory(sfam_id) \
+            if k.endswith(".pdb"))
+
+        if update_features is None:
+            pdb_keys_done = set(k for k in pdb_keys_full if \
+                done_files(os.path.splitext(k)[0], out_store)==extensions)
+            pdb_keys = list(pdb_keys_full-pdb_keys_done)
+        else:
+            pdb_keys = list(pdb_keys_full)
+
+        RealtimeLogger.info("RUNNING {}/{} DOMAINS from {}: {}".format(len(pdb_keys),
+            len(pdb_keys_full), sfam_id, pdb_keys))
+
+        # pdb_keys = [k for k in pdb_store.list_input_directory(sfam_id) if \
+        #     k.endswith(".pdb") and \
+        #     extensions != done_files(os.path.splitext(k)[0], out_store)]
+
 
     if further_parallelize:
-        map_job(job, calculate_features, pdb_keys)
+        map_job(job, calculate_features, pdb_keys, update_features)
     else:
         for pdb_key in pdb_keys: #pdb_store.list_input_directory(int(sfam_id)):
-            calculate_features(job, pdb_key, work_dir=work_dir)
-    #     except (SystemExit, KeyboardInterrupt):
-    #         raise
-    #     except Exception as e:
-    #         fail_key = "{}_error.fail".format(os.path.splitext(pdb_key)[0])
-    #         fail_file = os.path.join(work_dir, os.path.basename(fail_key))
-    #         with open(fail_file, "w") as f:
-    #             f.write("{}\n".format(e))
-    #         out_store.write_output_file(fail_file, fail_key)
-    #         os.remove(fail_file)
+            try:
+                calculate_features(job, pdb_key, update_features, work_dir=work_dir)
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except Exception as e:
+                fail_key = "{}_error.fail".format(os.path.splitext(pdb_key)[0])
+                fail_file = os.path.join(work_dir, os.path.basename(fail_key))
+                with open(fail_file, "w") as f:
+                    f.write("{}\n".format(e))
+                out_store.write_output_file(fail_file, fail_key)
+                os.remove(fail_file)
 
+# def run_cath_hierarchy(job, cathcode, cathFileStoreID, update_features=None, further_parallelize=True):
+#     work_dir = job.fileStore.getLocalTempDir()
+#     cath_path = get_file(job, "cath.h5", cathFileStoreID, work_dir=work_dir)
+#
+#     cath_names = ["class", "architechture", "topology", "homology"]
+#     cathcode = dict(zip(cath_names, cathcode))
+#     cath_names = cath_names[:len(cathcode)+1]
+#
+#     cathcodes = filter_hdf_chunks(
+#         cath_path,
+#         "table",
+#         columns=cath_names,
+#         drop_duplicates=True,
+#         **cathcode)[cath_names]
+#
+#     RealtimeLogger.info("cathcode {} {} {}".format(cathcode, cath_names, cathcodes.columns))
+#
+#     if len(cathcodes.columns) < 4:
+#         map_job(job, run_cath_hierarchy, cathcodes.values,
+#             cathFileStoreID, update_features, further_parallelize)
+#         RealtimeLogger.info("Running {} {}s".format(len(cathcodes), cathcodes.columns[-1]))
+#     else:
+#         sfams = (cathcodes.astype(int).astype(str)+"/").sum(axis=1).str[:-1].tolist()
+#         RealtimeLogger.info("Running sfam {}".format(cathcode))
+#         map_job(job, calculate_features_for_sfam, sfams, update_features,
+#             further_parallelize, True)
+#
+#     try:
+#         os.remove(cath_path)
+#     except (FileNotFoundError, OSError):
+#         pass
 
-def start_toil(job):
+def start_toil(job, further_parallelize=False, use_cath=True, update_features=None):
     import pandas as pd
     work_dir = job.fileStore.getLocalTempDir()
-    in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
 
-    pdb_file = os.path.join(work_dir, "PDB.h5")
-    in_store.read_input_file("PDB.h5", pdb_file)
 
-    sfams = pd.read_hdf(pdb_file, "Superfamilies", columns=
-        ["sfam_id"]).drop_duplicates().dropna()["sfam_id"].sort_values()
+    if use_cath:
+        in_store = IOStore.get("aws:us-east-1:molmimic-cath")
+        sfam_file = os.path.join(work_dir, "cath.h5")
+        in_store.read_input_file("cath-domain-description-file-small.h5", sfam_file)
 
-    #sfams = [299845.0]
+        cathFileStoreID = job.fileStore.writeGlobalFile(sfam_file)
 
-    map_job(job, calculate_features_for_sfam, sfams)
+        # run_cath_hierarchy(job, (2,130,10), cathFileStoreID)
+        #
+        # map_job(job, calculate_features, ["1/20/80/40/4jk7A02.pdb"])
 
-    os.remove(pdb_file)
+        classes = filter_hdf_chunks(sfam_file, "table", columns=["class"],
+           drop_duplicates=True).sort_values("class")["class"].values[:, None]
+        map_job(job, run_cath_hierarchy, classes, cathFileStoreID, update_features)
+        #sfams = ["2/60/40/10"]
+    else:
+        in_store = IOStore.get("aws:us-east-1:molmimic-ibis")
+        sfam_file = os.path.join(work_dir, "PDB.h5")
+        in_store.read_input_file("PDB.h5", sfam_file)
+
+        sfams = pd.read_hdf(sfam_file, "Superfamilies", columns=
+            ["sfam_id"]).drop_duplicates().dropna()["sfam_id"].sort_values()
+
+        RealtimeLogger.info("Running {} SFAMs".format(len(sfams)))
+        RealtimeLogger.info("{}".format(sfams))
+
+        #sfams = [299845.0]
+
+        map_job(job, calculate_features_for_sfam, sfams, further_parallelize, use_cath)
+
+    safe_remove(sfam_file)
 
     #job.addChildJobFn(calculate_features, "301320/yc/1YCS_A_sdi225433_d0.pdb")
 
@@ -128,5 +239,5 @@ if __name__ == "__main__":
     options.targetTime = 1
 
     job = Job.wrapJobFn(start_toil)
-    with Toil(options) as toil:
-        toil.start(job)
+    with Toil(options) as workflow:
+        workflow.start(job)

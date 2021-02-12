@@ -1,3 +1,4 @@
+from __future__ import print_function
 import os
 from collections import defaultdict
 
@@ -8,9 +9,11 @@ import pandas as pd
 import freesasa
 import numpy as np
 
-from molmimic.parsers.superpose import align
-from molmimic.parsers.zrank import run_zrank
-from molmimic.generate_data.util import read_pdb, replace_chains, extract_chains, rottrans, get_all_chains
+from molmimic.parsers.superpose import Align
+from molmimic.parsers.zrank import ZRank
+from molmimic.util.pdb import read_pdb, replace_chains, extract_chains, rottrans, get_all_chains
+
+from toil.realtimeLogger import RealtimeLogger
 
 def rmsd(p1, p2):
     return np.sqrt(np.square(p1-p2).sum().mean())
@@ -22,10 +25,9 @@ def get_cm_5(pdb):
     coords = read_pdb(pdb)
     cm = get_cm(coords)
     points = np.tile(cm, (7,1))
-    for i in xrange(3):
+    for i in range(3):
         for k, j in enumerate((-1,1)):
             points[2*i+k] += j*5
-    print points, points.shape
     return points
 
 def get_coords(residues):
@@ -40,26 +42,40 @@ class Complex(Select):
     parser = Bio.PDB.PDBParser(QUIET=1)
     writer = Bio.PDB.PDBIO()
 
-    def __init__(self, pdb, chain1="M", chain2="I", face1=None, face2=None, temp=25.0, method=None, work_dir=None, job=None):
+    def __init__(self, pdb, chain1="M", chain2="I", face1=None, face2=None, d_cutoff=5.5, temp=25.0, method=None, work_dir=None, get_stats=False, job=None):
         selection = "{} {}".format(chain1, chain2)
         self.work_dir = work_dir or os.getcwd()
         self.job = job
+
         self.pdb = pdb
         self.chain1 = chain1
         self.chain2 = chain2
         self.temp = temp
         self.method = method
         self.s = Complex.parser.get_structure("ref", pdb)
+        if face1 is not None and face2 is not None:
+            try:
+                RealtimeLogger.info("ALL MOL RESI : {}".format([r.id[1] for r in self.s[0][chain1]]))
+                RealtimeLogger.info("ALL INT RESI : {}".format([r.id[1] for r in self.s[0][chain2]]))
+                self.face1 = [r.id[1] for r in self.s[0][chain1] if r.id[1] in face1]
+                self.face2 = [r.id[1] for r in self.s[0][chain2] if r.id[1] in face2]
+            except KeyError:
+                job.log("CHAINS: {} {}".format([c.id for c in self.s.get_chains()], get_all_chains(pdb)))
+                raise
+        else:
+            self.face1 = None
+            self.face2 = None
+
+        self.prodigy = Prodigy(self.s, selection, temp, strict=False)
+        self.prodigy.predict(distance_cutoff=d_cutoff, acc_threshold=0.05)
+
         try:
-            self.face1 = [r.id[1] for r in self.s[0][chain1] if r.id[1] in face1]
-            self.face2 = [r.id[1] for r in self.s[0][chain2] if r.id[1] in face2]
-        except KeyError:
-            job.log("CHAINS: {} {}".format([c.id for c in self.s.get_chains()], get_all_chains(pdb)))
-            raise
-        self.prodigy = Prodigy(self.s, selection, temp)
-        self.prodigy.predict(distance_cutoff=5.5, acc_threshold=0.05)
-        self.interface = set([r.id for rs in calculate_ic(self.s,
-            d_cutoff=10.) for r in rs])
+            self.interface = set([r.id for rs in calculate_ic(self.s,
+                d_cutoff=10.) for r in rs])
+        except ValueError:
+            #No contatcs at 10 Angtroms!
+            self.interface = set()
+
         self.neighbors = {c.id:defaultdict(list) for c in self.s.get_chains()}
 
         for resA, resB in self.prodigy.ic_network:
@@ -82,7 +98,10 @@ class Complex(Select):
             self.neighbors_id[key.id[1]] = sorted([res.id[1] for res in \
                 self.neighbors[chain1][key]])
 
-        self.results = self._get_stats()
+        if get_stats:
+            self.results = self._get_stats()
+        else:
+            self.results = pd.Series()
         self["method"] = method
 
     def __getitem__(self, item):
@@ -92,7 +111,7 @@ class Complex(Select):
         self.results[idx] = value
 
     def compare_to_reference(self, **references):
-        for ref_name, ref_complex in references.iteritems():
+        for ref_name, ref_complex in list(references.items()):
             rename = lambda l: "{}_{}".format(ref_name, l)
             #self.results = self.results.append(ref_complex.results.rename(rename))
             self.results = self.results.append(ref_complex.compare(self).rename(rename))
@@ -137,7 +156,7 @@ class Complex(Select):
             c2_asa = chain2.totalArea()
             complex_asa = full.totalArea()
             complex_bsa = c1_asa+c2_asa-complex_asa
-            for ppi_type, (low_cut, high_cut) in cutoffs.iteritems():
+            for ppi_type, (low_cut, high_cut) in list(cutoffs.items()):
                 if low_cut <= complex_bsa < high_cut:
                     break
             else:
@@ -146,24 +165,30 @@ class Complex(Select):
             sep_atoms = chain[0].nAtoms()
             parse_chain2 = False
             bsa = {}
-            for i in xrange(result.nAtoms()):
+            for i in range(result.nAtoms()):
                 at_id = (structure.chainLabel(i), structure.residueName(i),
                     structure.residueNumber(i), structure.atomName(i))
                 complex_asa = result.atomArea(i)
                 monomer_asa = chain1.atomArea(i if i<sep_atoms else i-sep_atoms+1)
-                at_bsa = complex_asa-monomer_asa
+                at_bsa = monomer_asa-complex_asa
                 bsa[at_id] = at_bsa
             ppi_type = None
 
-        resi1 = "+".join(map(str, self.face1))
-        sel1 = "face1, chain {} and resi {}".format(self.chain1, resi1)
-        sel1 = freesasa.selectArea((sel1,), chains[0], chain1)
-        face1_asa = sel1["face1"]
+        if isinstance(self.face1, (list, tuple)) and len(self.face1) > 0:
+            resi1 = "+".join(map(str, self.face1))
+            sel1 = "face1, chain {} and resi {}".format(self.chain1, resi1)
+            sel1 = freesasa.selectArea((sel1,), chains[0], chain1)
+            face1_asa = sel1["face1"]
+        else:
+            face1_asa = None
 
-        resi2 = "+".join(map(str, self.face2))
-        sel2 = "face2, chain {} and resi {}".format(self.chain2, resi2)
-        sel2 = freesasa.selectArea((sel2,), chains[1], chain2)
-        face2_asa = sel2["face2"]
+        if isinstance(self.face2, (list, tuple)) and len(self.face2) > 0:
+            resi2 = "+".join(map(str, self.face2))
+            sel2 = "face2, chain {} and resi {}".format(self.chain2, resi2)
+            sel2 = freesasa.selectArea((sel2,), chains[1], chain2)
+            face2_asa = sel2["face2"]
+        else:
+            face2_asa = None
 
         return pd.Series({
             "c1_asa": c1_asa,
@@ -176,18 +201,17 @@ class Complex(Select):
         })
 
     def radius_of_gyration(self):
-        face1 = get_coords(self.neighbors[self.chain1].keys())
-        face2 = get_coords(self.neighbors[self.chain2].keys())
+        face1 = get_coords(list(self.neighbors[self.chain1].keys()))
+        face2 = get_coords(list(self.neighbors[self.chain2].keys()))
         r1 = radius_of_gyration(face1)
         r2 = radius_of_gyration(face2)
         rI = radius_of_gyration(np.concatenate((face1, face2), axis=0))
         return pd.Series({"Rg_1":r1, "Rg_2":r2, "Rg_interface":rI})
 
     def zrank(self):
-        self.job.log("ZRANK PDB CHAINS: {}".format(get_all_chains(self.pdb)))
-        zrank_initial_score = run_zrank(self.pdb, work_dir=self.work_dir, job=self.job)
-        zrank_refinement_score = run_zrank(self.pdb, refinement=True,
-            work_dir=self.work_dir, job=self.job)
+        zrank = ZRank(work_dir=self.work_dir, job=self.job)
+        zrank_initial_score = ZRank.rank(self.pdb)
+        zrank_refinement_score = ZRank.rank(self.pdb, refinement=True)
         return pd.Series({
             "zrank_initial_score": zrank_initial_score,
             "zrank_refinement_score": zrank_refinement_score
@@ -195,7 +219,18 @@ class Complex(Select):
 
     def cns_energy(self):
         from molmimic.parsers.CNS import Minimize, calculate_energy
-        return calculate_energy(self.pdb, work_dir=self.work_dir, job=self.job)
+        try:
+            return calculate_energy(self.pdb, work_dir=self.work_dir, job=self.job)
+        except RuntimeError:
+            return pd.Series({
+                 "cns_Etotal": np.nan,
+                 "cns_grad(E)":np.nan,
+                 "cns_E(BOND)":np.nan,
+                 "cns_E(ANGL)":np.nan,
+                 "cns_E(DIHE)":np.nan,
+                 "cns_E(IMPR)":np.nan,
+                 "cns_E(VDW )":np.nan,
+                 "cns_E(ELEC)":np.nan})
 
     def haddock_score(self):
         from molmimic.parsers.haddock import score_complex
@@ -253,7 +288,8 @@ class Complex(Select):
         return int(residue.id in self.interface)
 
     def L_RMS(self, other):
-        f, rmsd, tm_score, _ = align(
+        aligner = Align()
+        f, rmsd, tm_score, _ = aligner.align(
             self.pdb, self.chain1+self.chain2,
             other.pdb, other.chain1+other.chain2,
             work_dir=self.work_dir,
@@ -262,9 +298,12 @@ class Complex(Select):
         return rmsd, tm_score
 
     def I_RMS(self, moving):
+        if len(self.interface) == 0 or len(moving.interface) == 0:
+            return None, None
         interface1 = self.save_interface()
         interface2 = moving.save_interface()
-        f, rmsd, tm_score, _ = align(
+        aligner = Align()
+        f, rmsd, tm_score, _ = aligner.align(
             interface1, self.chain1+self.chain2,
             interface2, moving.chain1+moving.chain2,
             work_dir=self.work_dir,
@@ -275,7 +314,8 @@ class Complex(Select):
         return rmsd, tm_score
 
     def MM_TM_score(self, other):
-        f, mm_rmsd, mm_tm_score, _ = align(
+        aligner = Align()
+        f, mm_rmsd, mm_tm_score, _ = aligner.align(
             self.pdb, self.chain1+self.chain2,
             other.pdb, other.chain1+other.chain2,
             method="mmalign",
@@ -289,21 +329,17 @@ class Complex(Select):
         "Defined the fraction of native contacts between 2 interfaces"
 
         #Gets the number of contacts for the reference interface
-        total = sum(len(l) for l in self.neighbors_id.itervalues())
+        total = sum(len(l) for l in list(self.neighbors_id.values()))
 
         #Assume chain 1 and chain 2 match in both complexes, but they might have different IDs
         chain_map = {self.chain1:moving.chain1, self.chain2:moving.chain2}
-
-        print chain_map
-        print self.neighbors_id.keys()
-        print moving.neighbors_id.keys()
 
         #Finds each common pairs for the 2 interfaces
         common = sum(len(set([r for r in self.neighbors_id[res_id]]).intersection(\
             set([r for r in moving.neighbors_id[res_id]]))) \
             for res_id in self.neighbors_id if res_id in moving.neighbors_id)
 
-        fcc = float(common/total)
+        fcc = float(common)/total if total>0 else 0.0
 
         return fcc
 
@@ -314,17 +350,10 @@ class Complex(Select):
         c2_1f = extract_chains(moving.pdb, moving.chain1, rename="1")
         c2_2f = extract_chains(moving.pdb, moving.chain2, rename="2")
 
-        with open(c1_1f) as f:
-            print "C1_1", next(f)
         import shutil
         shutil.copy(c2_1f, os.path.join("/root", "c2_1.pdb"))
 
-        with open(c2_1f) as f:
-            print "C1_1", next(f)
         shutil.copy(c2_2f, os.path.join("/root", "c2_2.pdb"))
-
-        print(self.work_dir)
-        print(os.listdir(self.work_dir))
 
         #Superimpose A' to A and B' to B
         best2_1, _, _, matrix2_1 = align(
@@ -338,22 +367,9 @@ class Complex(Select):
             work_dir=self.work_dir,
             job=self.job)
 
-        print "Done superpose"
-
         #Rotate A' to A and B' to B using the rotaion matrixes above
         best2_1_2 = rottrans(c2_2f, matrix2_1)
         best2_2_1 = rottrans(c2_1f, matrix2_2)
-
-        # #Concat files
-        # best1 = tempfile.NamedTemporaryFile(suffix=".pdb", dir=self.work_dir, delete=False)
-        # best2 = tempfile.NamedTemporaryFile(suffix=".pdb", dir=self.work_dir, delete=False)
-        # for a, b, f in ((best2_1, best2_1_2, best1), (best2_2_1, best2_2, best1))
-        #     commands = [
-        #         ["cat", best2_1, best2_1_2],
-        #         [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
-        #     ]
-        #     SubprocessChain(commands, f)
-        #     f.close()
 
         #Center of Mass of ref
         cm_ref = np.vstack((get_cm_5(c1_1f), get_cm_5(c1_2f)))
@@ -375,7 +391,7 @@ class Complex(Select):
 
     def match_residues(self, other, r=5.5):
         from sklearn.metrics import jaccard_similarity_score
-        face1, face2 = zip(*calculate_ic(s, distance_cutoff=r))
+        face1, face2 = list(zip(*calculate_ic(s, distance_cutoff=r)))
         face1_pred = set([r.id[1] for r in face1])
         face2_pred = set([r.id[1] for r in face2])
         face1_score = jaccard_similarity_score(face1, face1_pred)

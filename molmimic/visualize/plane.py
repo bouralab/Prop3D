@@ -4,7 +4,7 @@ https://pymolwiki.org/index.php/Plane_Wizard
 
 Authors : Troels Schwarz-Linnet
 Date    : Dec 2016
-Modified: From previous contributors. 
+Modified: From previous contributors.
 '''
 
 import pymol
@@ -109,9 +109,9 @@ def planeFromPoints(p1, p2, p3, vm1=None, vm2=None, center=True, settings={}):
 
 
 def print_info(name, coor1, coor2, coor3):
-    cs1 = (map(float, [ '%.2f' % elem for elem in coor1 ]) )
-    cs2 = (map(float, [ '%.2f' % elem for elem in coor2 ]) )
-    cs3 = (map(float, [ '%.2f' % elem for elem in coor3 ]) )
+    cs1 = (list(map(float, [ '%.2f' % elem for elem in coor1 ])) )
+    cs2 = (list(map(float, [ '%.2f' % elem for elem in coor2 ])) )
+    cs3 = (list(map(float, [ '%.2f' % elem for elem in coor3 ])) )
     print("You can also use the function calls with these coordinates")
     print("plane.make_plane_points(name='%s', l1=%s, l2=%s, l3=%s)"%(name, cs1, cs2, cs3))
 

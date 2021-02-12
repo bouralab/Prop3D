@@ -10,7 +10,7 @@ import time
 import math
 import multiprocessing
 from datetime import datetime
-from itertools import izip
+
 
 import numpy as np
 import gc
@@ -22,24 +22,39 @@ from torchnet.logger import MeterLogger
 
 import sparseconvnet as scn
 
-from tqdm import tqdm
-
-from molmimic.torch_model.torch_model import UNet3D, ResNetUNet
+from molmimic.torch_model.torch_model import UNet3D, ResNetUNet, SCN3DUnet
 from molmimic.torch_model.torch_loader import IBISDataset
 from molmimic.torch_model.ModelStats import ModelStats, add_to_logger, format_meter, graph_logger
 from molmimic.util import initialize_data
 
 from torchviz import dot
 
+torch.set_printoptions(threshold=10000)
+
 import subprocess
-subprocess.call("python -c 'import visdom.server as vs; vs.main()' &", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+#subprocess.call("python -c 'import visdom.server as vs; vs.main()' &", shell=True, #stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+def in_ipynb():
+    try:
+        cfg = get_ipython().config 
+        if cfg['IPKernelApp']['parent_appname'] == 'ipython-notebook':
+            return True
+        else:
+            return False
+    except NameError:
+        return False
+
+if in_ipynb():
+    from tqdm import tqdm_notebook as tqdm
+else:
+    from tqdm import tqdm
 
 def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=True,
   save_final=True, only_aa=False, only_atom=False, non_geom_features=False,
-  use_deepsite_features=False, expand_atom=False, num_workers=None, num_epochs=30,
-  batch_size=20, shuffle=True, use_gpu=True, initial_learning_rate=0.0001,
+  use_deepsite_features=True, expand_atom=False, num_workers=None, num_epochs=30,
+  batch_size=16, shuffle=True, use_gpu=True, initial_learning_rate=0.0001,
   learning_rate_drop=0.5, learning_rate_epochs=10, lr_decay=4e-2, data_split=0.8,
-  course_grained=False, no_batch_norm=False, use_resnet_unet=False, unclustered=False,
+  course_grained=False, no_batch_norm=False, use_resnet_unet=True, unclustered=False,
   undersample=False, oversample=False, nFeatures=None, allow_feature_combos=False,
   bs_feature=None, bs_feature2=None, bs_features=None, stripes=False, data_parallel=False,
   dropout_depth=False, dropout_width=False, dropout_p=0.5, wide_model=False,
@@ -49,11 +64,12 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
     if num_workers is None:
         num_workers = multiprocessing.cpu_count()-1
+    print("Using {} cores for DataLoader".format(num_workers))
 
     since = time.time()
 
     if ibis_data == "spheres":
-        from torch_loader import SphereDataset
+        from molmimic.torch_model.torch_loader import SphereDataset
         nFeatures = nFeatures or 3
         datasets = SphereDataset.get_training_and_validation(input_shape, cnt=1, n_samples=1000, nFeatures=nFeatures, allow_feature_combos=allow_feature_combos, bs_feature=bs_feature, bs_feature2=bs_feature2, bs_features=bs_features, stripes=stripes, data_split=0.99)
         validation_batch_size = 1
@@ -63,59 +79,74 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
             nClasses = 2
     elif os.path.isfile(ibis_data):
         dataset = IBISDataset
-        print allow_feature_combos, nFeatures
         if allow_feature_combos and nFeatures is not None:
             random_features = (nFeatures, allow_feature_combos, bs_feature, bs_feature2)
         elif not allow_feature_combos and nFeatures is not None:
             random_features = (nFeatures, False, bs_feature, bs_feature2)
         elif allow_feature_combos and nFeatures is None:
             random_features = None
-            print "ignoring --allow-feature-combos"
+            print("ignoring --allow-feature-combos")
         else:
             random_features = None
 
         datasets = dataset.get_training_and_validation(
             ibis_data,
-            input_shape=input_shape,
-            only_aa=only_aa,
-            only_atom=only_atom,
-            non_geom_features=non_geom_features,
+            # input_shape=input_shape,
+            # only_aa=only_aa,
+            # only_atom=only_atom,
+            # non_geom_features=non_geom_features,
             use_deepsite_features=use_deepsite_features,
-            data_split=data_split,
-            course_grained=course_grained,
-            oversample=oversample,
-            undersample=undersample,
-            cellular_organisms=cellular_organisms,
-            random_features=random_features)
+            split=data_split,
+            autoencoder=autoencoder
+            # course_grained=course_grained,
+            # oversample=oversample,
+            # undersample=undersample,
+            # cellular_organisms=cellular_organisms,
+            # random_features=random_features
+            )
         nFeatures = datasets["train"].get_number_of_features()
         nClasses = 2 if not autoencoder else nFeatures
-
+        print("Using {} Features".format(nFeatures))
         validation_batch_size = batch_size
     else:
         raise RuntimeError("Invalid training data")
 
-    if num_workers%2 == 0:
-        num_workers -= 1
-    num_workers /= 2
-    num_workers = 6
-
-    dataloaders = {name:dataset.get_data_loader(
-        batch_size if dataset.train else validation_batch_size,
-        shuffle,
-        num_workers) \
-        for name, dataset in datasets.iteritems()}
-
-    dtype = 'torch.cuda.FloatTensor' if torch.cuda.is_available() else 'torch.FloatTensor'
+#     if num_workers%2 == 0:
+#         num_workers -= 1
+#     num_workers /= 2
+#     num_workers = 6
 
     if use_resnet_unet:
-        model = ResNetUNet(nFeatures, nClasses, dropout_depth=dropout_depth, dropout_width=dropout_width, dropout_p=dropout_p, wide_model=wide_model)
+        model = SCN3DUnet(nFeatures, nClasses) #ResNetUNet(nFeatures, nClasses, dropout_depth=dropout_depth, dropout_width=dropout_width, dropout_p=dropout_p, wide_model=wide_model)
     else:
         model = UNet3D(nFeatures, nClasses, batchnorm=not no_batch_norm)
 
     if data_parallel:
+        print("Using DataParallel with {} GPUs".format(torch.cuda.device_count()))
         model = torch.nn.DataParallel(model)
+        batch_size *= torch.cuda.device_count()
+    
+    print("Using {} structures per batch".format(batch_size))
+    if data_parallel:
+        print("    With {} per GPU".format(batch_size//torch.cuda.device_count()))
 
-    model.type(dtype)
+    dataloaders = {name:dataset.get_data_loader(
+        batch_size, # if dataset.train else validation_batch_size,
+        shuffle,
+        num_workers) \
+        for name, dataset in list(datasets.items())}
+
+    if torch.cuda.is_available():
+        model.cuda()
+        dtype = 'torch.cuda.FloatTensor'
+        dtypei = 'torch.cuda.LongTensor'
+    else:
+        dtype = 'torch.FloatTensor'
+        dtypei = 'torch.LongTensor'
+    
+    label_dtype = dtype if autoencoder else dtypei
+    
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     optimizer = SGD(model.parameters(),
         lr = initial_learning_rate,
@@ -129,31 +160,30 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
     check_point_epoch_file = "{}_checkpoint_epoch.pth".format(model_prefix)
     if check_point and os.path.isfile(check_point_model_file) and os.path.isfile(check_point_epoch_file):
         start_epoch = torch.load(check_point_epoch_file)
-        print "Restarting at epoch {} from {}".format(start_epoch+1, check_point_model_file)
+        print("Restarting at epoch {} from {}".format(start_epoch+1, check_point_model_file))
         model.load_state_dict(torch.load(check_point_model_file))
     else:
         start_epoch = 0
 
-    inputSpatialSize = torch.LongTensor(input_shape)
-
     draw_graph = True
 
     mlog = MeterLogger(nclass=nClasses, title="Sparse 3D UNet", server="cn4216")
+    
+    torch.cuda.empty_cache()
 
     #Start clean
     for obj in gc.get_objects():
         try:
             if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-                #print type(obj), obj.size()
                 del obj
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:
             pass
 
-    for epoch in xrange(start_epoch, num_epochs):
-        print "Epoch {}/{}".format(epoch, num_epochs - 1)
-        print "-" * 10
+    for epoch in range(start_epoch, num_epochs):
+        print("Epoch {}/{}".format(epoch, num_epochs - 1))
+        print("-" * 10)
 
         mlog.timer.reset()
         for phase in ['train', 'val']:
@@ -170,46 +200,58 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
             bar = tqdm(enumerate(dataloaders[phase]), total=num_batches, unit="batch", desc="Loading data", leave=True)
             for data_iter_num, data in bar:
                 datasets[phase].batch = data_iter_num
-                batch_weight = data.get("weight", None)
+                batch_weight = data.weight
 
                 if batch_weight is not None:
                     batch_weight = torch.from_numpy(batch_weight).float()
                     if use_gpu:
                         batch_weight = batch_weight.cuda()
 
-                sample_weights = data.get("sample_weights", None)
+                sample_weights = data.sample_weights
 
                 if sample_weights is not None:
                     sample_weights = torch.from_numpy(sample_weights).float()
                     if use_gpu:
                         sample_weights = sample_weights.cuda()
 
-                if data["data"].__class__.__name__ == "InputBatch":
-                    sparse_input = True
-                    inputs = data["data"]
-                    labels = data["truth"]
-                    if use_gpu:
-                        inputs = inputs.cuda().to_variable(requires_grad=True)
-                        labels = labels.cuda().to_variable()
-                    else:
-                        inputs = inputs.to_variable(requires_grad=True)
-                        labels = labels.to_variable()
+#                 if data["data"].__class__.__name__ == "InputBatch":
+#                     sparse_input = True
+#                     inputs = data["data"]
+#                     labels = data["truth"]
+#                     if use_gpu:
+#                         inputs = inputs.cuda().to_variable(requires_grad=True)
+#                         labels = labels.cuda().to_variable()
+#                     else:
+#                         inputs = inputs.to_variable(requires_grad=True)
+#                         labels = labels.to_variable()
 
+#                 elif :
+                if data.data is None:
+                    sparse_input = True
+                    #data.indices = data.indices[0].type('torch.LongTensor')
+                    data.indices[1] = data.indices[1].type(dtype)
+                    data.truth = data.truth.type(label_dtype)
+                    inputs, labels = data.indices, data.truth
+                    #inputs = scn.InputBatch(3, [256,256,256])
+                    #inputs.set_locations(_inputs[0], _inputs[1])
+                    #inputs.precomputeMetadata(2)
+          
                 elif isinstance(data["data"], (list, tuple)):
+                    print("Using lists")
                     sparse_input = True
                     inputs = scn.InputBatch(3, inputSpatialSize)
                     labels = scn.InputBatch(3, inputSpatialSize)
 
-                    if isinstance(data["data"][0], np.ndarray):
-                        long_tensor = lambda arr: torch.from_numpy(arr).long()
-                        float_tensor = lambda arr: torch.from_numpy(arr).float()
-                    elif isinstance(data["data"][0], (list, tuple)):
-                        long_tensor = lambda arr: torch.LongTensor(arr)
-                        float_tensor = lambda arr: torch.FloatTensor(arr)
-                    else:
-                        raise RuntimeError("invalid datatype")
+#                     if isinstance(data["data"][0], np.ndarray):
+#                         long_tensor = lambda arr: torch.from_numpy(arr).long()
+#                         float_tensor = lambda arr: torch.from_numpy(arr).float()
+#                     elif isinstance(data["data"][0], (list, tuple)):
+#                         long_tensor = lambda arr: torch.LongTensor(arr)
+#                         float_tensor = lambda arr: torch.FloatTensor(arr)
+#                     else:
+#                         raise RuntimeError("invalid datatype")
 
-                    for sample, (indices, features, truth, id) in enumerate(izip(data["indices"], data["data"], data["truth"], data["id"])):
+                    for sample, (indices, features, truth, id) in enumerate(zip(data["indices"], data["data"], data["truth"], data["id"])):
                         inputs.addSample()
                         labels.addSample()
 
@@ -218,16 +260,16 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                             features = float_tensor(features)
                             truth = float_tensor(truth)
                         except RuntimeError as e:
-                            print e
+                            print(e)
                             continue
 
                         try:
                             inputs.setLocations(indices, features, 0) #Use 1 to remove duplicate coords?
                             labels.setLocations(indices, truth, 0)
                         except AssertionError:
-                            print "Error with PDB:", id
+                            print("Error with PDB:", id)
                             with open("bad_pdbs.txt", "a") as f:
-                                print >> f, id
+                                print(id, file=f)
 
                     del data
                     del indices
@@ -244,7 +286,7 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
                 elif isinstance(data["data"], torch.FloatTensor):
                     #Input is dense
-                    print "Input is Dense"
+                    print("Input is Dense")
                     sparse_input = False
                     if use_gpu:
                         inputs = inputs.cuda()
@@ -262,21 +304,26 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
                 # zero the parameter gradients
                 optimizer.zero_grad()
+                
+                #inputs = inputs.to(device)
 
                 # forward
                 try:
                     outputs = model(inputs)
                 except AssertionError:
-                    print nFeatures, inputs
+                    print(nFeatures, inputs)
                     raise
 
                 if sparse_input:
                     use_size_average = False
                     weight = sample_weights if use_size_average else batch_weight
 
-                    loss_fn = torch.nn.CrossEntropyLoss(weight=weight)
-
-                    loss = loss_fn(outputs, torch.max(labels.features, 1)[1])
+                    if not autoencoder:
+                        loss_fn = torch.nn.CrossEntropyLoss(weight=weight).cuda()
+                        loss = loss_fn(outputs, torch.max(labels, 1)[1])
+                    else:
+                        loss_fn = torch.nn.MSELoss().cuda()
+                        loss = loss_fn(outputs, labels)
 
                     if draw_graph:
                         var_dot = dot.make_dot(loss)
@@ -290,9 +337,13 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     loss = criterion(outputs.cpu(), labels.cpu()) #, inputs.getSpatialLocations(), scaling)
                     stats.update(outputs.data.cpu().view(-1), labels.data.cpu().view(-1), loss.data[0])
 
-                mlog.update_loss(loss, meter='loss')
-                mlog.update_meter(outputs, torch.max(labels.features, 1)[1], meters={'accuracy', 'map'})
-                add_to_logger(mlog,  "Train" if phase=="train" else "Test", epoch, outputs, labels.features, batch_weight, n_classes=nClasses)
+                mlog.update_loss(np.array([loss.data.item()], dtype="float"), meter='loss')
+                if not autoencoder:
+                    mlog.update_meter(outputs, torch.max(labels, 1)[1], meters={'accuracy', 'map'})
+                    add_to_logger(mlog,  "Train" if phase=="train" else "Test", epoch, data_iter_num, num_batches, outputs, labels, batch_weight, n_classes=nClasses)
+                else:
+                    with open("{}_epoch{}_stats.txt".format(phase, epoch), "a+") as statsfile:
+                        print(format_meter(mlog, phase, epoch, data_iter_num, num_batches), file=statsfile)
 
                 # backward + optimize only if in training phase
                 if phase == 'train':
@@ -300,16 +351,20 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                     loss.backward()
                     optimizer.step()
                     b = list(model.parameters())[0].clone().data
-                    if torch.equal(a, b): print "NOT UPDATED"
+                    if torch.equal(a, b): print("NOT UPDATED")
                     del a
                     del b
 
                 bar.set_description("{}: [{}][{}/{}]".format(phase, epoch, data_iter_num+1, num_batches))
-                bar.set_postfix(
-                    loss="{:.4f} ({:.4f})".format(mlog.meter["loss"].val, mlog.meter["loss"].mean),
-                    dice_class1="{:.4f} ({:.4f})".format(mlog.meter["dice_class1"].val, mlog.meter["dice_class1"].mean),
-                    weight_dice="{:.4f} ({:.4f})".format(mlog.meter["weighted_dice_wavg"].val, mlog.meter["weighted_dice_wavg"].mean),
-                    refresh=False)
+                if not autoencoder:
+                    bar.set_postfix(
+                        loss="{:.4f} ({:.4f})".format(mlog.meter["loss"].val, mlog.meter["loss"].mean),
+                        dice_class1="{:.4f} ({:.4f})".format(mlog.meter["dice_class1"].val, mlog.meter["dice_class1"].mean),
+                        weight_dice="{:.4f} ({:.4f})".format(mlog.meter["weighted_dice_wavg"].val, mlog.meter["weighted_dice_wavg"].mean),
+                        refresh=False)
+                else:
+                    bar.set_postfix(
+                        loss="{:.4f} ({:.4f})".format(mlog.meter["loss"].val, mlog.meter["loss"].mean))
                 bar.refresh()
 
                 del inputs
@@ -319,19 +374,21 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
                 del loss_fn
                 del batch_weight
                 del sample_weights
+                del data
+                
+                torch.cuda.empty_cache()
 
                 #Delete all unused objects on the GPU
                 for obj in gc.get_objects():
                     try:
                         if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-                            #print type(obj), obj.size()
                             del obj
                     except (SystemExit, KeyboardInterrupt):
                         raise
                     except Exception as e:
                         pass
 
-            statsfile, graphs = graph_logger(mlog, "Train" if phase=="train" else "Test", epoch)
+            statsfile, graphs = graph_logger(mlog, "Train" if phase=="train" else "Test", epoch, data_iter_num+1, num_batches)
             mlog.reset_meter(epoch, "Train" if phase=="train" else "Test")
 
             if check_point:
@@ -345,10 +402,10 @@ def train(ibis_data, input_shape=(264,264,264), model_prefix=None, check_point=T
 
     #stats.plot_final()
 
-    statsfile, graphs = graph_logger(mlog, "Train" if phase=="train" else "Test", epoch, final=True)
+    statsfile, graphs = graph_logger(mlog, "Train" if phase=="train" else "Test", epoch, "end", "end", final=True)
 
     time_elapsed = time.time() - since
-    print 'Training complete in {:.0f}m {:.0f}s'.format(time_elapsed/60, time_elapsed % 60)
+    print('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed/60, time_elapsed % 60))
 
     torch.save(model.state_dict(), "{}.pth".format(model_prefix))
 
@@ -520,7 +577,7 @@ def parse_args():
         default=None,
         required=False,
         type=int,
-        choices=range(3,8),
+        choices=list(range(3,8)),
         metavar="[3-7]",
         help="Number of features to use -- only works in spherical mode"
     )

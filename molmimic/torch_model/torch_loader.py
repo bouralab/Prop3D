@@ -7,7 +7,7 @@ from itertools import groupby
 
 try:
     import torch
-    from torch.utils.data.dataset import Dataset
+    from torch.utils.data.dataset import Dataset as _Dataset
     from torch.utils.data import DataLoader
 except ImportError:
     torch = None
@@ -17,6 +17,7 @@ except ImportError:
 import pandas as pd
 import numpy as np
 from scipy.spatial import cKDTree, distance
+from sklearn.model_selection import train_test_split
 
 try:
     import sparseconvnet as scn
@@ -24,9 +25,9 @@ except:
     #Allow module to load without scn to read data
     scn = None
 
-from molmimic.common.structure import InvalidPDB
+from molmimic.common.Structure import InvalidPDB, number_of_features
 from molmimic.common.voxels import ProteinVoxelizer
-from itertools import product, izip
+from itertools import product
 
 def dense_collate(data, batch_size=1):
     batch = {"data":None, "truth":None, "scaling":1.0}
@@ -49,8 +50,49 @@ def dense_collate(data, batch_size=1):
 
     return batch
 
-def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
-    if scn is None or not create_tensor:
+class Batch(object):
+    def __init__(self):
+        self.indices = None
+        self.truth = None
+        self.id = []
+        self.data = None
+        self.sample_weights = None
+        self.weight = None
+       
+    def add_indices(self, indices):
+        if self.indices is None:
+            self.indices = indices
+        else:
+            self.indices = np.vstack((self.indices, indices))
+    
+    def add_data(self, data):
+        if self.data is None:
+            self.data = data
+        else:
+            self.data = np.vstack((self.data, data))
+
+    def add_truth(self, truth):
+        if self.truth is None:
+            self.truth = truth
+        else:
+            self.truth = np.vstack((self.truth, truth))
+    
+    def add_id(self, id):
+        self.id.append(id)
+    
+    def finish_samples(self):
+        self.indices = [torch.from_numpy(self.indices), torch.from_numpy(self.data)]
+        self.truth = torch.from_numpy(self.truth)
+        del self.data
+        self.data = None
+    
+    def pin_memory(self):
+        self.indices = [self.indices[0].pin_memory(), self.indices[1].pin_memory()]
+        self.truth = self.truth.pin_memory()
+        return self
+
+def sparse_collate(data, input_shape=(256,256,256), create_tensors=True, create_input_batch=False):
+    if scn is None or (not create_tensors and not create_input_batch):
         batch = {
             "indices": [],
             "data": [],
@@ -63,8 +105,31 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
             batch["data"].append(features)
             batch["truth"].append(truth)
             batch["id"].append(id)
-
-    else:
+        
+        def end_sample():
+            pass
+    elif create_tensors:
+        batch = Batch()
+#         {
+#             "indices":None,
+#             "data": None,
+#             "truth": None,
+#             "id": []
+#             }
+        
+        def add_sample(indices, features, truth, id):
+            i = batch.indices[-1, -1]+1 if batch.indices is not None else 0.
+            indices = np.concatenate((indices, np.ones((indices.shape[0], 1))*i), axis=1)
+            batch.add_indices(indices)
+            batch.add_data(features)
+            batch.add_truth(truth)
+            batch.add_id(id)
+        
+        def end_sample():
+            batch.finish_samples()
+                                           
+            
+    elif create_input_batch:
         inputSpatialSize = torch.LongTensor(input_shape)
         batch = {
             "data": scn.InputBatch(3, inputSpatialSize),
@@ -85,12 +150,21 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
                 pass
             #del features
             #del truth
+        def end_sample():
+            batch["data"].precomputeMetadata(1)
 
     sample_weights = []
     batch_weight = None
     num_data = 0.0
-    for i, d in enumerate(data):
+    
+    points = None
+    features = None
+    truth = None
+    
+    i = 0
+    for d in data:
         if d["data"] is None: continue
+        
         if batch_weight is None:
             batch_weight = 0.0 if d["truth"].shape[1] == 2 else np.zeros(data[0]["truth"].shape[1])
 
@@ -108,18 +182,44 @@ def sparse_collate(data, input_shape=(256,256,256), create_tensor=False):
             num_data += d["truth"].shape[0]
 
     batch_weight /= float(num_data)
-
-    #print "Made batch"
-    if create_tensor:
-        batch["data"].precomputeMetadata(1)
+    end_sample()
 
     if isinstance(batch_weight, float):
-        batch["sample_weights"] = np.array(sample_weights)
-        batch["weight"] = np.array([1-batch_weight, batch_weight]) #None #1.-float(num_true)/len(data) #(256*256*256)
+        batch.sample_weights = np.array(sample_weights)
+        batch.weight = np.array([1-batch_weight, batch_weight]) #None #1.-float(num_true)/len(data) #(256*256*256)
     else:
-        batch["sample_weights"] = np.array(sample_weights)
-        batch["weight"] = batch_weight
+        batch.sample_weights = np.array(sample_weights)
+        batch.weight = batch_weight
     return batch
+
+class Dataset(_Dataset):
+    @classmethod
+    def get_training_and_validation(cls, *args, **kwds):
+        split = kwds.get("split", 0.25)
+        if "split" in kwds:
+            del kwds["split"]
+
+        X = pd.read_csv(str(args[0]))
+
+        train, val = train_test_split(X)
+        train_args = [train]+list(args[1:])
+        kwds["train"] = True
+        train = cls(*train_args, **kwds)
+        
+        val_args = [val]+list(args[1:])
+        kwds["train"] = False
+        val = cls(*val_args, **kwds)
+        return {"train":train, "val":val}
+
+    @classmethod
+    def from_hdf(cls, *args, **kwds):
+        X = pd.read_hdf(str(args[0]), "table")
+        args = [X]+list(args[1:])
+        return cls(*args, **kwds)
+
+    def get_data_loader(self, batch_size, shuffle, num_workers, pin_memory=True):
+        return DataLoader(self, batch_size=batch_size, \
+            shuffle=shuffle, num_workers=num_workers, collate_fn=sparse_collate, pin_memory=pin_memory)
 
 class IBISDataset(Dataset):
     """IBIS Dataset used to train 3D-CNN (Unet) to predict binding site residues.
@@ -136,77 +236,99 @@ class IBISDataset(Dataset):
     cdd : str
         Name of CDD Protein Family
     """
-    def __init__(self, data, data_directory, sfam_id=None, ppi_status="mixed", ppi_type="permanent",
-      autoencoder=False,):
+    def __init__(self, X, sfam_id=None, ppi_status="mixed", ppi_type="permanent",
+      autoencoder=False, train=True, use_deepsite_features=False):
         assert ppi_status in ["mixed", "observed", "inferred"]
         assert ppi_type in ["all", "permanent", "weak_transient", "transient"]
-        self.data_directory = data_directory
         self.sfam_id = sfam_id
         self.ppi_status = ppi_status
         self.ppi_type = ppi_type
         self.autoencoder = autoencoder
+        self.train = train
+        self.X = X
+        self.use_deepsite_features = use_deepsite_features
 
         self.truth_key = "features" if autoencoder else "truth"
+        
+        one_hot = ((0,18), (20,23), (24, 26), (27, 30), (31, 34), (35,37), (38,70), (72,73))
+        self.one_hot = [n for start, stop in one_hot for n in range(start, stop)]
 
-        self.structure_path = os.path.join(data_directory, "structures")
-        self.features_path = os.path.join(data_directory, "features")
-        self.truth_path = os.path.join(data_directory, "truth")
+        self.epoch = 0
+        self.batch = 0
 
-        interfaces_path = os.path.join(get_structures_path(dataset_name), cdd, cdd)
-
-        self.X = pd.read_hdf(unicode(interfaces_path+".h5"), ppi_type)
+        # self.structure_path = os.path.join(data_directory, "structures")
+        # self.features_path = os.path.join(data_directory, "features")
+        # self.truth_path = os.path.join(data_directory, "truth")
 
     def __getitem__(self, index, verbose=True):
         datum = self.X.iloc[index]
 
-        pdb_file = os.path.join(self.data_directory, datum["structure"])
-        feature_file = os.path.join(self.data_directory, datum["features"])
-        truth_file = os.path.join(self.data_directory, datum[truth_key])
+        pdb_file = datum["structure"] #os.path.join(self.data_directory, datum["structure"])
+        features_file = datum["features"] #os.path.join(self.data_directory, datum["features"])
+        truth_file =  datum[self.truth_key] #os.path.join(self.data_directory, datum[truth_key])
+
+        features_path = os.path.dirname(features_file)
+        if len(os.path.basename(features_path)) == 2:
+            features_path = os.path.dirname(features_path)
 
         try:
             voxelizer = ProteinVoxelizer(pdb_file, datum.pdb, datum.chain,
-                datum.sdi, datum.domNo)
-            indices, data, truth = voxelizer.map_atoms_to_voxel_space(autoencoder=self.autoencoder)
+                datum.sdi, datum.domNo, features_path=features_path)
+            indices, data, truth = voxelizer.map_atoms_to_voxel_space(autoencoder=self.autoencoder,     
+                use_deepsite_features=self.use_deepsite_features)
         except (KeyboardInterrupt, SystemExit):
             raise
-        except InvalidPDB, RuntimeError:
+        except InvalidPDB as RuntimeError:
             trace = traceback.format_exc()
             with open("{}_{}_{}.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
-                print trace
-                print >> ef, trace
+                print(trace)
+                print(trace, file=ef)
 
             sample = {
-                "indices":      None,
-                "data":         None
-                "truth":        None,
-                "pdb":          datum.pdb,
-                "chain":        datum.chain,
-                "sdi":          datum.sdi,
-                "domain":       datum.domNo,
-                "cdd":          self.sfam_id
+                "indices": None,
+                "data":    None,
+                "truth":   None,
+                "id":      "{}/{}/{}_{}_sdi{}_d{}".format(self.sfam_id, \
+                    datum.pdb[1:3].lower(), datum.pdb, datum.chain, datum.sdi, \
+                    datum.domNo),
+                "pdb":     datum.pdb,
+                "chain":   datum.chain,
+                "sdi":     datum.sdi,
+                "domain":  datum.domNo,
+                "sfam_id": self.sfam_id
             }
         except:
             trace = traceback.format_exc()
-            print "Error:", trace
+            print("Error:", trace)
             with open("{}_{}_{}_ibis.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
-                print >> ef, trace
+                print(trace, file=ef)
             raise
 
         sample = {
             "indices":      indices,
             "data":         np.nan_to_num(data),
-            "truth":        truth,
+            "truth":        np.nan_to_num(truth),
+            "id":      "{}/{}/{}_{}_sdi{}_d{}".format(self.sfam_id, \
+                datum.pdb[1:3].lower(), datum.pdb, datum.chain, datum.sdi, \
+                datum.domNo),
             "pdb":          datum.pdb,
             "chain":        datum.chain,
             "sdi":          datum.sdi,
             "domain":       datum.domNo,
             "cdd":          self.sfam_id
         }
-
+        
+#         if self.autoencoder:
+#             sample["data"] = sample["data"][:, self.one_hot]
+#             sample["truth"] = sample["truth"][:, self.one_hot]
+        
         return sample
 
     def __len__(self):
         return self.X.shape[0]
+    
+    def get_number_of_features(self):
+        return number_of_features(use_deepsite_features=self.use_deepsite_features)
 
 class MMDBDataset(Dataset):
     """Full MMDB Dataset used to train a protein family autoencoder to learn the
@@ -227,7 +349,7 @@ class MMDBDataset(Dataset):
     def __init__(self, dataset_name, cdd):
         self.dataset_name = dataset_name
         self.cdd = cdd
-        self.X = pd.read_hdf(unicode(os.path.join(get_structures_path(dataset_name), cdd, "{}.h5".format(cdd))), "table")
+        self.X = pd.read_hdf(str(os.path.join(get_structures_path(dataset_name), cdd, "{}.h5".format(cdd))), "table")
 
     def __getitem__(self, index, verbose=True):
         datum = self.X.iloc[index]
@@ -236,7 +358,7 @@ class MMDBDataset(Dataset):
 
         try:
             indices, data, truth = Structure.features_from_string(
-                file                  = pdb_file
+                file                  = pdb_file,
                 pdb                   = datum.pdb,
                 chain                 = datum.chain,
                 sdi                   = datum.sdi,
@@ -246,15 +368,15 @@ class MMDBDataset(Dataset):
             )
         except (KeyboardInterrupt, SystemExit):
             raise
-        except InvalidPDB, RuntimeError:
+        except InvalidPDB as RuntimeError:
             trace = traceback.format_exc()
             with open("{}_{}_{}.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
-                print trace
-                print >> ef, trace
+                print(trace)
+                print(trace, file=ef)
 
             sample = {
                 "indices":      None,
-                "data":         None
+                "data":         None,
                 "truth":        None,
                 "pdb":          datum.pdb,
                 "chain":        datum.chain,
@@ -265,15 +387,15 @@ class MMDBDataset(Dataset):
             }
         except:
             trace = traceback.format_exc()
-            print "Error:", trace
+            print("Error:", trace)
             with open("{}_{}_{}_ibis.error".format(os.path.basename(pdb_file)[:-4], self.epoch, self.batch), "w") as ef:
-                print >> ef, trace
+                print(trace, ef=file)
             raise
 
         sample = {
             "indices":      indices,
             "data":         np.nan_to_num(data),
-            "truth":        truth,
+            "truth":        np.nan_to_num(truth),
             "pdb":          datum.pdb,
             "chain":        datum.chain,
             "sdi":          datum.sdi,
@@ -281,6 +403,7 @@ class MMDBDataset(Dataset):
             "dataset_name": self.dataset_name,
             "cdd":          self.cdd
         }
+        assert not np.isnan(sample["truth"]).any()
 
         return sample
 
@@ -312,7 +435,7 @@ class IBISDataset2(Dataset):
 
             #Return blue (0,0,1) if nFeatures=3, else always 3rd feature is used or last feature if nFeature < 3
             if len(random_features) >= 3:
-                self.r_bs = np.array(map(int, random_features[2]))
+                self.r_bs = np.array(list(map(int, random_features[2])))
             else:
                 self.r_bs = self.rfeats[min(2, random_features[0])]
 
@@ -345,7 +468,6 @@ class IBISDataset2(Dataset):
             if cellular_organisms:
                 self.full_data = data.loc[(data["tax_glob_group"] == tax_glob_group) | (data["tax_glob_group"] == "cellular")]
                 self.full_data = self.full_data.loc[self.full_data["n"] >= num_representatives]
-                print "cellular_organisms"
             else:
                 self.full_data = data.loc[(data["tax_glob_group"] == tax_glob_group) & (data["n"] >= num_representatives)]
         except KeyError:
@@ -363,7 +485,8 @@ class IBISDataset2(Dataset):
                 multimers = [648375,660939,660938,668915,659919,513280,666570,535768,17338,654986,631439,656314,532931,665852,545875,513834,640379,511746,606239,509681,618577,527589,530024,630491,360637,511758,660132,660138,652064,651818,639149,630492,630493,634831,634826,647996,647997,643192,614273,614267,647151,617702,616098,516702,478916,461717,640385,661187,547577,541160,493657,493658,641974,541196,541453,447450,428933,514064,372904,372906,514011,514060,545252,401694,549817,299853,514062,514066,661242,635739,642241,614531,549815,549803,483520,483519,338893,174920,661197,554878,661250,622610,92851,563706,562371,632146,592870,658319,615442,542548,573967,123213,575823,621426,376703,576582,608295,579900,579888,533721,473097,504981,642845,647951,327972,642859,647950,267698,617700,627019,642808,642798,635782,227110,372997,284288,231335,231345,600901,231343,476220,476224,237050,243070,497904,453293,404236,404238,384495,395891]
                 skip_size += len(multimers)
                 self.full_data = self.full_data.loc[~self.full_data["unique_obs_int"].isin(multimers)]
-            print "{}: Skipping {} of {}, {} remaining of {}".format("Train" if train else "Validate", skip_size, osize, self.full_data.shape[0], osize)
+            print("{}: Skipping {} of {}, {} remaining of {}".format(
+                "Train" if train else "Validate", skip_size, osize, self.full_data.shape[0], osize))
         except IOError:
             pass
 
@@ -446,13 +569,14 @@ class IBISDataset2(Dataset):
     def get_number_of_features(self):
         if self.random_features is not None:
             return self.random_features[0]
-        return Structure.number_of_features(
-            only_aa=self.only_aa,
-            only_atom=self.only_atom,
-            non_geom_features=self.non_geom_features,
-            use_deepsite_features=self.use_deepsite_features,
-            course_grained=self.course_grained
-            )
+        return 64
+#         return Structure.number_of_features(
+#             only_aa=self.only_aa,
+#             only_atom=self.only_atom,
+#             non_geom_features=self.non_geom_features,
+#             use_deepsite_features=self.use_deepsite_features,
+#             course_grained=self.course_grained
+#             )
 
     def __getitem__(self, index, verbose=True):
         pdb_chain = self.data.iloc[index]
@@ -489,11 +613,11 @@ class IBISDataset2(Dataset):
                 undersample=self.undersample)
         except (KeyboardInterrupt, SystemExit):
             raise
-        except InvalidPDB, RuntimeError:
+        except InvalidPDB as RuntimeError:
             trace = traceback.format_exc()
             with open("{}_{}_{}_{}_{}.error".format(pdb_chain["pdb"], pdb_chain["chain"], gi, self.epoch, self.batch), "w") as ef:
-                print trace
-                print >> ef, trace
+                print(trace)
+                print(trace, file=ef)
 
             #return
             return {"indices": None,
@@ -503,9 +627,9 @@ class IBISDataset2(Dataset):
                     }
         except:
             trace = traceback.format_exc()
-            print "Error:", trace
+            print("Error:", trace)
             with open("{}_{}_{}_{}_{}.error".format(pdb_chain["pdb"], pdb_chain["chain"], gi, self.epoch, self.batch), "w") as ef:
-                print >> ef, trace
+                print(trace, file=ef)
             raise
 
         if self.random_features is not None:
@@ -581,7 +705,7 @@ class SphereDataset(Dataset):
         y = np.arange(0, self.shape[1])
         z = np.arange(0, self.shape[2])
         mx, my, mz = np.meshgrid(x, y, z)
-        self.voxel_tree = cKDTree(zip(mx.ravel(), my.ravel(), mz.ravel()))
+        self.voxel_tree = cKDTree(list(zip(mx.ravel(), my.ravel(), mz.ravel())))
 
         if allow_feature_combos:
             self.features = np.array(list(product([0,1], repeat=nFeatures)))
@@ -592,9 +716,9 @@ class SphereDataset(Dataset):
             if not isinstance(bs_features, (list,tuple)):
                 raise RuntimeError("Invalid bs_features")
 
-            bs_features = [[np.array(map(int, bs_feat)) for bs_feat in bs_feature.split(",")] for bs_feature in bs_features]
+            bs_features = [[np.array(list(map(int, bs_feat))) for bs_feat in bs_feature.split(",")] for bs_feature in bs_features]
             try:
-                self.bs_color, self.bs_color2 = zip(*bs_features)
+                self.bs_color, self.bs_color2 = list(zip(*bs_features))
             except ValueError:
                 self.bs_color = [f[0] for f in bs_features]
 
@@ -602,14 +726,14 @@ class SphereDataset(Dataset):
         else:
             #Return blue (0,0,1) if nFeatures=3, else always 3rd feature is used or last feature if nFeature < 3
             if isinstance(bs_feature, str):
-                self.bs_color = np.array(map(int, bs_feature))
+                self.bs_color = np.array(list(map(int, bs_feature)))
             elif isinstance(bs_feature, np.ndarray):
                 self.bs_color = bs_feature
             else:
                 self.bs_color = self.features[min(2, self.nFeatures-1)]
 
             if isinstance(bs_feature2, str):
-                self.bs_color2 = np.array(map(int, bs_feature2))
+                self.bs_color2 = np.array(list(map(int, bs_feature2)))
             elif isinstance(bs_feature2, np.ndarray):
                 self.bs_color2 = bs_feature2
             else:
@@ -618,7 +742,7 @@ class SphereDataset(Dataset):
             self.n_classes = 2
 
         if stripes:
-            print "Making stripes"
+            print("Making stripes")
             self.color_patch = make_stripes
         else:
             self.color_patch = alternate_colors
@@ -659,7 +783,7 @@ class SphereDataset(Dataset):
 
         used_points = None
         distances = None
-        for bs_id in xrange(cnt):
+        for bs_id in range(cnt):
             num_search = 0
             while True:
                 idx = np.random.randint(0, indices.shape[0])
@@ -718,7 +842,7 @@ def alternate_colors(patch, color1, color2):
         #Max distance should be sqrt(3) to account for voxels in one the 27 surrounding voxels,
         #but since it is circle like, there will only be 8 neighbors
         neighbors = tree.query(pnt, k=8, distance_upper_bound=1.42)
-        for d, n in izip(*neighbors):
+        for d, n in zip(*neighbors):
             if d == np.inf or tree.data[n].tolist() == tree.data[i].tolist(): continue
             if features[n].tolist() == features[i].tolist():
                 features[n] = color2
@@ -781,7 +905,7 @@ def create_spheres(num_spheres, shape=(96, 96, 96), border=10, min_r=5, max_r=15
             sphere.volume[_indices] = value
             sphere.labels[_indices] = truth
 
-    for i in xrange(num_spheres):
+    for i in range(num_spheres):
         #Define random center of sphere and radius
         center = [np.random.randint(border, edge-border) for edge in shape]
         r = np.random.randint(min_r, max_r)

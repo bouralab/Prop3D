@@ -1,69 +1,27 @@
 import os
-from cStringIO import StringIO
+import copy
+from io import StringIO
 
+import pandas as pd
+import numpy as np
 from sklearn.decomposition import PCA
 from Bio import PDB
 from Bio.PDB.NeighborSearch import NeighborSearch
+from Bio.PDB import Selection
 
 import warnings
 warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
 
-from molmimic.util import InvalidPDB, natural_keys
-
-def number_of_features(only_aa=False, only_atom=False, non_geom_features=False,
-  use_deepsite_features=False, course_grained=False):
-    if course_grained:
-        if non_geom_features:
-            return 35
-        elif only_aa:
-            return 21
-        else:
-            return 45
-    else:
-        if non_geom_features:
-            return 13
-        elif only_atom:
-            return 5
-        elif only_aa:
-            return 21
-        elif use_deepsite_features:
-            return 9
-        else:
-            return 73
-
-def get_feature_names(only_aa=False, only_atom=False, use_deepsite_features=False, course_grained=False):
-    if only_atom:
-        return ["C", "N", "O", "S", "Unk_element"]
-    if only_aa:
-        return PDB.Polypeptide.aa3
-    feature_names = [
-        "C", "CT", "CA", "N", "N2", "N3", "NA", "O", "O2", "OH", "S", "SH", "Unk_atom",
-        "C", "N", "O", "S", "Unk_element",
-        "vdw_volume", "charge", "neg_charge", "pos_charge", "neutral_charge",
-        "electrostatic_potential", "is_electropositive", "is_electronegative"
-        "cx", "is_concave", "is_convex", "is_concave_and_convex",
-        "hydrophobicity", "is_hydrophbic", "is_hydrophilic", "hydrophobicity_is_0"
-        "atom_asa", "atom_is_buried", "atom_exposed",
-        "residue_asa", "residue_buried", "residue_exposed"]
-    feature_names += PDB.Polypeptide.aa3
-    feature_names += ["Unk_residue", "is_helix", "is_sheet", "Unk_SS"]
-    feature_names += [ #DeepSite features
-        "hydrophobic_atom",
-        "aromatic_atom",
-        "hbond_acceptor",
-        "hbond_donor",
-        "metal",
-        "is_hydrogen",
-    ]
-    fearues_names += [
-        "conservation_normalized",
-        "conservation_scale",
-        "is_conserved"
-    ]
-    return feature_names
+from molmimic.util import natural_keys
+from molmimic.util.pdb import InvalidPDB
+from molmimic.common.ProteinTables import vdw_radii, vdw_aa_radii
+from molmimic.common.features import default_atom_feature_df, default_residue_feature_df, \
+    atom_features, residue_features
 
 class Structure(object):
-    def __init__(self, path, pdb, chain, sdi, domNo, input_format="pdb", feature_mode="r"):
+    def __init__(self, path, cath_domain, input_format="pdb",
+                 feature_mode="r", features_path=None, residue_feature_mode="r",
+                 reset_chain=False, volume=264):
         self.path = path
         if not os.path.isfile(self.path):
             raise InvalidPDB("Cannot find file {}".format(self.path))
@@ -81,49 +39,134 @@ class Structure(object):
         else:
             raise RuntimeError("Invalid PDB parser (pdb, mmcif, mmtf)")
 
+        self.cath_domain = self.sdi = cath_domain
+        self.pdb = cath_domain[:4]
+        self.chain = cath_domain[4]
+        self.domNo = cath_domain[5:]
+        self.volume = volume
+
         try:
-            self.structure = parser.get_structure(pdb, self.path)
+            self.structure = parser.get_structure(self.cath_domain, self.path)
         except KeyError:
             #Invalid mmcif file
-            raise InvalidPDB("Invalid PDB file: {} (path={})".format(pdb, self.path))
-
-        self.pdb = pdb
-        self.chain = chain
-        self.sdi = sdi
-        self.domNo = domNo
+            raise InvalidPDB("Invalid PDB file: {} (path={})".format(self.cath_domain, self.path))
 
         try:
             all_chains = list(self.structure[0].get_chains())
         except (KeyError, StopIteration):
-            raise InvalidPDB("Error get chains for {} {}".format(pdb, self.path))
+            raise InvalidPDB("Error get chains for {} {}".format(self.cath_domain, self.path))
 
         if len(all_chains) > 1:
-            raise InvalidPDB("Only accepts PDBs with 1 chain in {} {}".format(pdb, self.path))
+            raise InvalidPDB("Only accepts PDBs with 1 chain in {} {}".format(self.cath_domain, self.path))
 
-        self.id = "{}_{}_sdi{}_d{}".format(self.pdb, self.chain, self.sdi, self.domNo)
+        if reset_chain:
+            self.chain = all_chains[0].id
 
-        self.n_residue_features = number_of_features(course_grained=True)
-        self.n_atom_features = number_of_features(course_grained=False)
+        self.id = self.cath_domain #"{}{}{:02d}".format(self.pdb, self.chain, int(self.domNo))
+        self.n_residue_features = len(residue_features)
+        self.n_atom_features = len(atom_features)
 
-        try:
-            features_path = os.environ["MOLMIMIC_FEATURES"]
-        except KeyError:
-            features_path = work_dir
+        self.features_path = os.environ.get("MOLMIMIC_FEATURES", features_path)
 
-        self.residue_features_file = os.path.join(features_path,
-            "{}_residue.npy".format(self.id))
+        if features_path.endswith("_atom.h5"):
+            self.features_path = os.path.dirname(features_path)
+            self.atom_features_file = features_file
+            self.residue_features_file = os.path.join(self.features_path,
+                "{}_residue.h5".format(self.id))
+        elif features_path.endswith("_residue.h5"):
+            self.residue_features_file = features_file
+            self.atom_features_file = os.path.join(self.features_path,
+                "{}_atom.h5".format(self.id))
+        else:
+            self.atom_features_file = os.path.join(self.features_path,
+                "{}_atom.h5".format(self.id))
+            self.residue_features_file = os.path.join(self.features_path,
+                "{}_residue.h5".format(self.id))
 
-        self.atom_features_file = os.path.join(features_path,
-            "{}_atom.npy".format(self.id))
+        if not os.path.isdir(os.path.dirname(os.path.abspath(self.atom_features_file))):
+            os.makedirs(os.path.abspath(os.path.dirname(self.atom_features_file)))
 
-        self.residue_features = np.memmap(self.residue_features_file,
-            dtype=np.float, mode=feature_mode, shape=(self.course_grained_shape, self.n_residue_features))
-        self.atom_features = np.memmap(self.atom_features_file,
-            dtype=np.float, mode=feature_mode, shape=(self.atom_shape, self.n_atom_features))
+        if False and feature_mode == "r" and not os.path.isfile(self.atom_features_file):
+            self.atom_feature_mode = "w+"
+        else:
+            self.atom_feature_mode = feature_mode
+
+        if False and feature_mode == "r" and not os.path.isfile(self.residue_features_file):
+            self.residue_feature_mode = "w+"
+        else:
+            self.residue_feature_mode = residue_feature_mode
+
+        atom_index = [self._remove_altloc(a).serial_number for a in self.structure.get_atoms()]
+        if self.atom_feature_mode == "r":
+            self.atom_features = pd.read_hdf(self.atom_features_file, "table", mode="r")
+        else:
+            self.atom_features = default_atom_feature_df(len(atom_index)).reindex(atom_index, axis=0)
+
+        if self.residue_feature_mode == "r" and os.path.isfile(self.residue_features_file):
+            self.residue_features = pd.read_hdf(self.residue_features_file, "table", mode="r")
+        else:
+            residue_index = pd.MultiIndex.from_tuples(
+                [self._remove_inscodes(r).get_id() for r in \
+                self.structure.get_residues()], names=('HET_FLAG', 'resi', 'ins'))
+            self.residue_features = default_residue_feature_df(len(residue_index)).reindex(residue_index, axis=0)
+
+    def __abs__(self):
+        new = self.copy()
+        new.atom_features = new.atom_features.abs()
+        return new
+
+    def __sub__(self, other):
+        new = self.copy()
+        if isinstance(other, Structure):
+            new.atom_features -= other.atom_features
+        elif isinstance(other, (int, float)):
+            new.atom_features -= other
+        else:
+            raise TypeError
+        return new
+
+    def __add__(self, other):
+        new = self.copy()
+        if isinstance(other, Structure):
+            new.atom_features += other.atom_features
+        elif isinstance(other, (int, float)):
+            new.atom_features += other
+        else:
+            raise TypeError
+        return new
+
+    def __floordiv__(self, other):
+        new = self.copy()
+        if isinstance(other, Structure):
+            new.atom_features /= other.atom_features
+        elif isinstance(other, (int, float)):
+            new.atom_features /= other
+        else:
+            raise TypeError
+        return new
+
+    def __truediv__(self, other):
+        return self.__floordiv__(other)
+
+    def copy(self):
+        return copy.copy(self)
 
     def get_atoms(self, include_hetatms=False, exclude_atoms=None):
         for a in self.filter_atoms(self.structure.get_atoms(), include_hetatms=include_hetatms, exclude_atoms=exclude_atoms):
             yield a
+
+    def get_surface(self, level="R"):
+        if self.atom_features["residue_buried"].astype(int).sum() == 0:
+            raise RuntimeError("Must calculate features with featurizer before running this")
+
+        surface = self.atom_features[self.atom_features["residue_buried"]==False]
+
+        surface_atoms = [a for a in self.get_atoms() if a in surface.index]
+
+        if level == "A":
+            return surface_atoms
+
+        return Selection.unfold_entities(surface_atoms, level)
 
     def filter_atoms(self, atoms, include_hetatms=False, exclude_atoms=None):
         for a in atoms:
@@ -134,22 +177,63 @@ class Structure(object):
                 continue
             yield a
 
-    def save_pdb(self, path=None, file_like=False):
+    def save_pdb(self, path=None, header=None, file_like=False, rewind=True):
         lines = not path and not file_like
         if path is None:
             path = StringIO()
+
+        if header is not None:
+            new_header = ""
+            for line in header.splitlines():
+                if not line.startswith("REMARK"):
+                    line = "REMARK {}\n".format(line)
+                new_header += line
+            old_header = self.structure.header
+            self.structure.header = new_header
 
         writer = PDB.PDBIO()
         writer.set_structure(self.structure)
         writer.save(path)
 
-        if file_like:
+        if file_like and rewind:
             path.seek(0)
 
         if lines:
             path = path.read()
 
+        if header is not None:
+            self.structure.header = old_header
+
         return path
+
+    def write_features_to_pdb(self, features=None, name=None, coarse_grain=False,
+      work_dir=None):
+        if work_dir is None:
+            work_dir = os.getcwd()
+
+        if features is None:
+            features = self.atom_features if not coarse_grain else \
+                self.residue_features
+        else:
+            features = self.atom_features.loc[:, features] if not coarse_grain \
+                else self.residue_features.loc[:, features]
+
+        bfactors = [a.bfactor for a in self.structure.get_atoms()]
+
+        path = os.path.join(work_dir, self.cath_domain)
+        if name is not None:
+            path += "-"+name
+
+        outfiles = {}
+        for feature in features.columns:
+            self.update_bfactors(features.loc[:, feature]*100)
+            outfile = "{}-{}.pdb".format(path, feature)
+            self.save_pdb(outfile)
+            outfiles[feature] = outfile
+
+        self.update_bfactors(bfactors)
+
+        return outfiles
 
     def get_residue_from_resseq(self, resseq, model=0, chain=None):
         chain = chain or self.chain
@@ -167,7 +251,6 @@ class Structure(object):
                     try:
                         return self.structure[model][chain][res_seq]
                     except KeyError:
-                        print res_seq
                         return None
             else:
                 return None
@@ -198,46 +281,104 @@ class Structure(object):
             self.mean_coord_updated = True
         return self.mean_coord
 
-    def shift_coords_to_origin(self):
-        mean_coord = self.get_mean_coord()
-        coords = self.get_coords()-mean_coord
+    def get_max_coord(self):
+        return np.max(self.get_coords(), axis=0)
+
+    def get_min_coord(self):
+        return np.min(self.get_coords(), axis=0)
+
+    def get_max_length(self, buffer=0, pct_buffer=0):
+        length = int(np.ceil(np.linalg.norm(self.get_max_coord()-self.get_min_coord())))
+        if pct_buffer!=0:
+            length += int(np.ceil(length*pct_buffer))
+        else:
+            length += buffer
+        if length%2 == 1:
+            length += 1
+        return length
+
+    def shift_coords(self, new_center=None, from_origin=True):
+        """if new_center is None, it will shift to the origin"""
+        coords = self.get_coords()
+        if from_origin or new_center is None:
+            mean_coord = self.get_mean_coord()
+            coords -= mean_coord
+        if new_center is not None:
+            coords += new_center
         self.update_coords(coords)
         self.mean_coord_updated = False
         return np.mean(coords, axis=0)
 
+    def shift_coords_to_origin(self):
+        return self.shift_coords()
+
     def shift_coords_to_volume_center(self):
-        mean_coord = self.get_mean_coord()
-        coords = self.get_coords()-mean_coord
-        coords += np.array([self.volume/2]*3)
-        self.update_coords(coords)
-        self.mean_coord_updated = False
-        return np.mean(coords, axis=0)
+        return self.shift_coords(np.array([self.volume/2]*3))
+
+    def resize_volume(self, new_volume, shift=True):
+        self.volume = new_volume
+        if shift:
+            self.shift_coords_to_volume_center()
 
     def get_coords(self, include_hetatms=False, exclude_atoms=None):
         return np.array([a.get_coord() for a in self.get_atoms(
             include_hetatms=include_hetatms, exclude_atoms=exclude_atoms)])
 
-    def orient_to_pai(self, flip_axis=(0.2, 0.2, 0.2)):
+    def orient_to_pai(self, random_flip=False, flip_axis=(0.2, 0.2, 0.2)):
+        self.shift_coords_to_origin()
+
         coords = PCA(n_components = 3).fit_transform(self.get_coords())
-        coords = flip_around_axis(coords, axis=flip_axis)
+        if random_flip:
+            coords = flip_around_axis(coords, axis=flip_axis)
+
         self.update_coords(coords)
 
-    def rotate(self, num=1):
+        self.shift_coords_to_volume_center()
+
+    def rotate(self, rvs=None, num=1):
         """Rotate structure in randomly in place"""
         for r in range(num):
-            M, theta, phi, z = rotation_matrix(random=True)
+            if rvs is None:
+                M, theta, phi, z = rotation_matrix(random=True)
+                #print(M, theta, phi, z)
+            else:
+                M=rvs
             self.shift_coords_to_origin()
+            old_coords = self.get_coords()
             coords = np.dot(self.get_coords(), M)
             self.update_coords(coords)
+            # if rvs is None or rvs!=np.eye(3):
+            #     assert not np.array_equal(old_coords, self.get_coords()), M
             self.shift_coords_to_volume_center()
-            self.set_voxel_size(self.voxel_size)
-            yield r, theta, phi, z
+            # if rvs is None or rvs!=np.eye(3):
+            #     assert not np.array_equal(coords, self.get_coords()), M
+            yield r, M
 
     def update_coords(self, coords):
         for atom, coord in zip(self.structure.get_atoms(), coords):
             atom.set_coord(coord)
         self.mean_coord = None
         self.mean_coord_updated = False
+
+    def update_bfactors(self, b_factors):
+        for atom, b in zip(self.structure.get_atoms(), b_factors):
+            atom.set_bfactor(b)
+
+    def _remove_altloc(self, atom):
+        if isinstance(atom, PDB.Atom.Atom):
+            return atom
+        elif isinstance(atom, PDB.Atom.DisorderedAtom):
+            return atom.disordered_get_list()[0]
+        else:
+            raise RuntimeError("Invalid atom type")
+
+    def _remove_inscodes(self, residue):
+        if isinstance(residue, PDB.Residue.Residue):
+            return residue
+        elif isinstance(residue, PDB.Residue.DisorderedResidue):
+            return residue.disordered_get_list()[0]
+        else:
+            raise RuntimeError("Invalid residue type")
 
     def calculate_neighbors(self, d_cutoff=100.0, level="R"):
         """
@@ -264,20 +405,44 @@ class Structure(object):
 
         return all_list
 
+    def get_vdw(self, atom_or_residue):
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            return np.array([vdw_radii.get(atom_or_residue.element.title(), 1.7)])
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            #For coarse graining, not really a vdw radius
+            return np.array([vdw_aa_radii.get(atom_or_residue.get_resname(), 3.0)])
+
+    def get_dihedral_angles(self, atom_or_residue):
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            residue = atom_or_residue.get_parent()
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            residue = atom_or_residue
+        else:
+            raise RuntimeError("Input must be Atom or Residue")
+
+        if not hasattr(self, "_phi_psi"):
+            peptides = PDB.PPBuilder().build_peptides(self.structure[0][self.chain])[0]
+            self._phi_psi = {res.get_id():ppl for res, ppl in zip(
+                peptides, peptides.get_phi_psi_list())}
+
+        return self._phi_psi.get(residue.get_id(), (None, None))
+
+
 def flip_around_axis(coords, axis = (0.2, 0.2, 0.2)):
     'Flips coordinates randomly w.r.t. each axis with its associated probability'
-    for col in xrange(3):
+    for col in range(3):
         if np.random.binomial(1, axis[col]):
             coords[:,col] = np.negative(coords[:,col])
     return coords
 
-def rotation_matrix(random = False, theta = 0, phi = 0, z = 0):
+def rotation_matrix(random = False, theta = 0, phi = 0, z = 0, uniform=True):
     'Creates a rotation matrix'
     # Adapted from: http://blog.lostinmyterminal.com/python/2015/05/12/random-rotation-matrix.html
     # Initialization
     if random == True:
         randnums = np.random.uniform(size=(3,))
         theta, phi, z = randnums
+
     theta = theta * 2.0*np.pi  # Rotation about the pole (Z).
     phi = phi * 2.0*np.pi  # For direction of pole deflection.
     z = z * 2.0  # For magnitude of pole deflection.
@@ -293,6 +458,8 @@ def rotation_matrix(random = False, theta = 0, phi = 0, z = 0):
 
     # Construct the rotation matrix  ( V Transpose(V) - I ) R.
     M = (np.outer(V, V) - np.eye(3)).dot(R)
+
+    return M, theta, phi, z
 
 def unit_vector(vector):
     """ Returns the unit vector of the vector.  """

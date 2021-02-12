@@ -42,14 +42,11 @@ def infer_spheres(model, shape=(96,96,96), n_samples=3, start_index=0, index_ste
 
     runs = []
 
-    for sample in xrange(start_index, start_index+n_samples, index_step):
-        print "Running", sample
-
-
-        print data[sample]["id"]
+    for sample in range(start_index, start_index+n_samples, index_step):
+        print("Running", sample, data[sample]["id"])
         sphere = loader.sparse_collate([data[sample]])
 
-        print "center", np.mean(sphere["indices"][0], axis=0)
+        print("center", np.mean(sphere["indices"][0], axis=0))
 
         if mpl:
             ax = axes[sample]
@@ -75,7 +72,7 @@ def infer_spheres(model, shape=(96,96,96), n_samples=3, start_index=0, index_ste
         prediction = prediction.data.cpu().numpy()
         prediction = np.where(prediction==1)[0]
         prediction_voxels = sphere["indices"][0][prediction]
-        print prediction.shape, prediction_voxels.shape
+        print(prediction.shape, prediction_voxels.shape)
         colors = np.tile(np.array([0.95, 0.37, 0.18]), (prediction_voxels.size,1))
         if mpl:
             mv.plot_volume_matplotlib(
@@ -85,17 +82,17 @@ def infer_spheres(model, shape=(96,96,96), n_samples=3, start_index=0, index_ste
                 rot_z180=rot_z180,
                 rot_x45=rot_x45)
             #ax.set_title("Prediction", fontdict={"fontsize":20})
-        print data[sample]["id"]
-        print logs.meter["dice_avg"].val
-        print logs.meter["dice_class1"].val
-        print logs.meter["mcc_avg"].val
+        print(data[sample]["id"])
+        print(logs.meter["dice_avg"].val)
+        print(logs.meter["dice_class1"].val)
+        print(logs.meter["mcc_avg"].val)
         runs.append([data[sample]["id"], logs.meter["dice_avg"].val, logs.meter["dice_class1"].val, logs.meter["mcc_avg"].val])
-        print
+        print()
 
         if not mpl:
             view_in_pymol(data[sample]["id"], prediction_voxels, truth_voxels)
-    print "Saving Figure"
-    print runs
+    print("Saving Figure")
+    print(runs)
     if mpl:
         mv.save_fig(fig, "sphere_infer.pdf")
 
@@ -120,7 +117,7 @@ color gray90, {id}
             if len(atoms) > 0:
                 truth_atoms[atoms[0]] += 1
 
-        truth_atoms = [atom for atom, count in truth_atoms.iteritems() \
+        truth_atoms = [atom for atom, count in list(truth_atoms.items()) \
             if float(count)/atom_volume(structure, atom) >= voxel_atom_ratio]
 
         truth_residues = [str(r.get_id()[1]) for r in unfold_entities(truth_atoms, "R")]
@@ -137,7 +134,7 @@ color orange, true_binding_site
             if len(atoms) > 0:
                 predicted_atoms[atoms[0]] += 1
 
-        predicted_atoms = [atom for atom, count in predicted_atoms.iteritems() \
+        predicted_atoms = [atom for atom, count in list(predicted_atoms.items()) \
             if float(count)/atom_volume(structure, atom) >= voxel_atom_ratio]
 
         predicted_residues = [str(r.get_id()[1]) for r in unfold_entities(predicted_atoms, "R")]
@@ -155,7 +152,7 @@ color blue, false_positive_binding_site
 """.format(fp_resi=fp_resi)
 
     with open("{}_pymol.cmd".format(id), "w") as f:
-        print >> f, cmd
+        print(cmd, file=f)
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Infer spheres")

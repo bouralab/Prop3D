@@ -1,4 +1,4 @@
-from __future__ import print_function
+
 import os, sys
 
 import subprocess
@@ -232,7 +232,7 @@ def calculate_buried_surface_area(pdb_file, pdb, sdi_sel1=None, sdi_sel2=None, f
 
     result["bsa"] = result["c1_asa"]+result["c2_asa"]-result["complex_asa"]
 
-    for ppi_type, (low_cut, high_cut) in cutoffs.iteritems():
+    for ppi_type, (low_cut, high_cut) in list(cutoffs.items()):
         if low_cut <= result["bsa"] < high_cut:
             result["ppi_type"] = ppi_type
             break
@@ -308,10 +308,10 @@ def get_bsa(df):
     df[["int_sdi_to"]] = df[["int_sdi_to"]].fillna(0)
 
     try:
-        sdi1, sdi2 = zip(*[(
+        sdi1, sdi2 = list(zip(*[(
           "{}:{}".format(int(row.mol_sdi_from), int(row.mol_sdi_to)),
           "{}:{}".format(int(row.int_sdi_from), int(row.int_sdi_to) if row.int_sdi_to else "")) \
-          for row in df.itertuples()])
+          for row in df.itertuples()]))
     except ValueError:
         #There is a NaN in mol sdi or from to: Invalid!
         return pd.Series({
@@ -367,7 +367,7 @@ def observed_bsa(job, dataset_name, cdd, cores=NUM_WORKERS):
 
     cdd_interactome_path = prefix+".observed_interactome"
 
-    cdd_interactome = pd.read_hdf(unicode(cdd_interactome_path), "table")
+    cdd_interactome = pd.read_hdf(str(cdd_interactome_path), "table")
 
     if cdd_interactome.shape[0] == 0:
         job.log("CDD observed interactome is empty -- FIX!!!")
@@ -403,8 +403,8 @@ def observed_bsa(job, dataset_name, cdd, cores=NUM_WORKERS):
 
     cdd_interactome = pd.merge(cdd_interactome, bsa, how="left", on=key)
 
-    cdd_interactome.to_hdf(unicode(prefix+"_bsa.h5"), "observed", table=True, format='table', complevel=9, complib="bzip2")
-    print(unicode(prefix+"_bsa.h5"))
+    cdd_interactome.to_hdf(str(prefix+"_bsa.h5"), "observed", table=True, format='table', complevel=9, complib="bzip2")
+    print(str(prefix+"_bsa.h5"))
 
 def get_asa(df):
     df = df.reset_index(drop=True)
@@ -444,7 +444,7 @@ def get_asa(df):
     predicted_bsa = r.obs_bsa*ratio
     complex_asa = asa+r.c2_asa-predicted_bsa
 
-    for ppi_type, (low_cut, high_cut) in cutoffs.iteritems():
+    for ppi_type, (low_cut, high_cut) in list(cutoffs.items()):
         if low_cut <= predicted_bsa < high_cut:
             break
     else:
@@ -469,7 +469,7 @@ def inferred_bsa(job, dataset_name, cdd, cores=NUM_WORKERS):
         return
 
     print("Reading obs bsa")
-    store = pd.HDFStore(unicode(cdd_bsa_path+"_bsa.h5"))
+    store = pd.HDFStore(str(cdd_bsa_path+"_bsa.h5"))
 
     # if "/inferred" in store.keys():
     #     return
@@ -494,11 +494,11 @@ def inferred_bsa(job, dataset_name, cdd, cores=NUM_WORKERS):
         "ppi_type": "ppi_type_obs"
     })
 
-    inf_interactome_path = unicode(cdd_bsa_path+".inferred_interactome")
+    inf_interactome_path = str(cdd_bsa_path+".inferred_interactome")
     try:
         print("Reading  inf interactome")
-        int_store = pd.HDFStore(unicode(cdd_bsa_path+".inferred_interactome"))
-        if "/table" not in int_store.keys():
+        int_store = pd.HDFStore(str(cdd_bsa_path+".inferred_interactome"))
+        if "/table" not in list(int_store.keys()):
             return
         m = re.search("nrows->(\d+)", int_store.info())
         if not m:
@@ -539,8 +539,8 @@ def inferred_bsa(job, dataset_name, cdd, cores=NUM_WORKERS):
 
     inf_interactome = pd.merge(inf_interactome, bsa, how="left", on=["mol_sdi", "nbr_obs_int_id"])
 
-    inf_interactome.to_hdf(unicode(cdd_bsa_path+"_bsa.h5"), "inferred", format='table', append=True, complevel=9, complib="bzip2")
-    print(unicode(cdd_bsa_path+"_bsa.h5"))
+    inf_interactome.to_hdf(str(cdd_bsa_path+"_bsa.h5"), "inferred", format='table', append=True, complevel=9, complib="bzip2")
+    print(str(cdd_bsa_path+"_bsa.h5"))
     int_store.close()
 
 def inferred_bsa_dask(cdd_obs_bsa, cdd_bsa_path):
@@ -548,7 +548,7 @@ def inferred_bsa_dask(cdd_obs_bsa, cdd_bsa_path):
     so a dataframe the cannot fir into memory can still be process. This method
     is slower so not the default"""
 
-    inf_interactome = dd.read_hdf([unicode(cdd_bsa_path+".inferred_interactome")], "table")
+    inf_interactome = dd.read_hdf([str(cdd_bsa_path+".inferred_interactome")], "table")
     inf_interactome = inf_interactome.repartition(npartitions=NUM_WORKERS)
     inf_interactome = inf_interactome.merge(cdd_obs_bsa, how="left", on="nbr_obs_int_id")
 
@@ -580,8 +580,8 @@ def inferred_bsa_dask(cdd_obs_bsa, cdd_bsa_path):
 
     inf_interactome = inf_interactome.merge(bsa, how="left", on=["mol_sdi", "nbr_obs_int_id"])
 
-    inf_interactome.to_hdf(unicode(cdd_bsa_path+"_bsa.h5"), "inferred", table=True, format='table', append=True, complevel=9, complib="bzip2")
-    print(unicode(cdd_bsa_path+"_bsa.h5"))
+    inf_interactome.to_hdf(str(cdd_bsa_path+"_bsa.h5"), "inferred", table=True, format='table', append=True, complevel=9, complib="bzip2")
+    print(str(cdd_bsa_path+"_bsa.h5"))
 
 def start_toil(job, dataset_name, iteration=0, name="bsa"):
     if iteration > 1:
@@ -598,8 +598,8 @@ def start_toil(job, dataset_name, iteration=0, name="bsa"):
 
         if os.path.isfile(sfam_path+"_bsa.h5"):
             try:
-                store = pd.HDFStore(unicode(sfam_path+"_bsa.h5"))
-                keys = store.keys()
+                store = pd.HDFStore(str(sfam_path+"_bsa.h5"))
+                keys = list(store.keys())
             except (KeyboardInterrupt, SystemExit):
                 raise
             except:
@@ -613,7 +613,7 @@ def start_toil(job, dataset_name, iteration=0, name="bsa"):
                 keys = []
             elif "/inferred" in keys or store.get("/inferred")["ppi_type"].isnull().sum() > 0:
                 df = store.get("/observed")
-                df.to_hdf(unicode(sfam_path+"_bsa.h52"), "/observed")
+                df.to_hdf(str(sfam_path+"_bsa.h52"), "/observed")
                 store.close()
                 os.remove(sfam_path+"_bsa.h5")
                 shutil.move(sfam_path+"_bsa.h52", sfam_path+"_bsa.h5")

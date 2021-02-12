@@ -1,0 +1,556 @@
+- get_atom_type:
+    - name: "H"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "HD"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "HS"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "C"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "A"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "N"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "NA"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "NS"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "OA"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "OS"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "F"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "MG"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "P"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "SA"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "S"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "CL"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "CA"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "MN"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "FE"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "ZN"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "BR"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "I"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "Unk_atom"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+- get_element_type:
+    - name: "C_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "N_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "O_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "S_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "H_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "F_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "MG_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "P_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "CL_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "CA_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "MN_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "FE_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "ZN_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "BR_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "I_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "Unk_elem"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+- get_vdw:
+    - name: "vdw"
+      default: 1.0
+      combine: mean
+      residue: true
+      bool: false
+
+- get_charge_and_electrostatics:
+    - name: "charge"
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+    - name: "neg_charge"
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: "pos_charge"
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: "electrostatic_potential"
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+    - name: "is_electronegative"
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+- get_concavity:
+    - name: "cx"
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+    - name: "is_concave"
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+- get_hydrophobicity:
+    - name: "hydrophobicity"
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+    - name: "is_hydrophobic"
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: "biological_hydrophobicity"
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+    - name: "octanal_hydrophobicity"
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+- get_accessible_surface_area:
+    - name: "atom_asa"
+      default: 0.
+      combine: mean
+      residue: false
+      bool: false
+
+    - name: "residue_rasa"
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+    - name: "residue_buried"
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+- get_residue:
+    - name: ALA
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: CYS
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: ASP
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: GLU
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: PHE
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: GLY
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: HIS
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: ILE
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: LYS
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: LEU
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: MET
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: ASN
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: PRO
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: GLN
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: ARG
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: SER
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: THR
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: VAL
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: TRP
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: TYR
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: Unk_residue
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+- get_ss:
+    - name: phi
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+    - name: phi_sin
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+    - name: phi_cos
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+    - name: psi
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+    - name: psi_sin
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+    - name: psi_cos
+      default: 0.
+      combine: mean
+      residue: true
+      bool: false
+
+    - name: is_helix
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: is_sheet
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+    - name: Unk_SS
+      default: 0.
+      combine: max
+      residue: true
+      bool: true
+
+- get_deepsite_features:
+    - name: "hydrophobic_atom"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "aromatic_atom"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "hbond_acceptor"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "hbond_donor"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+    - name: "metal"
+      default: 0.
+      combine: max
+      residue: false
+      bool: true
+
+- get_evolutionary_conservation_score:
+    - name: "eppic_entropy"
+      default: 1.
+      combine: min
+      residue: true
+      bool: false
+
+    - name: "is_conserved"
+      default: 0.
+      combine: max
+      residue: true
+      bool: true

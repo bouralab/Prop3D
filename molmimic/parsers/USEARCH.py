@@ -1,63 +1,87 @@
 import os, sys
+import glob
 
-try:
-    from toil.lib.docker import apiDockerCall
-except ImportError:
-    apiDockerCall = None
-	import subprocess
+import pandas as pd
 
-def run_usearch(parameters, work_dir=None):
-    if work_dir is None:
-        work_dir = os.getcwd()
+from toil.realtimeLogger import RealtimeLogger
 
-    parameters = [p.format("/data/") for p in parameters if]
-    for p in parameters:
-        p
+from molmimic.parsers.container import Container
 
-    if apiDockerCall is not None:
-        _parameters = []
-        outfiles = []
-        for i, p in enumerate(parameters):
-            if p.startswith("{i}"):
-                full = p[3:]
-                short = os.path.basename(full)
-                if not os.path.abspath(os.path.dirname(full)) == os.path.abspath(work_dir):
-                    shutil.copy(full, work_dir)
-                _parameters.append(os.path.join("/data", short))
-            elif p.startswith("{o}"):
-                full = p[3:]
-                short = os.path.basename(full)
-                _parameters.append(os.path.join("/data", short))
-                outfiles.append(os.path.join(work_dir, short))
-            else:
-                _parameters.append(p)
+class USEARCH(Container):
+    IMAGE = 'docker://edraizen/usearch:latest'
+    LOCAL = ["usearch"]
+    RETURN_FILES = True
 
-        try:
-            apiDockerCall(job,
-                          image='edraizen/usearch:latest',
-                          working_dir=work_dir,
-                          parameters=_parameters)
-        except (SystemExit, KeyboardInterrupt):
-            raise
-        except:
-            return run(parameters, work_dir=work_dir)
+class ClusterFast(USEARCH):
+    ARG_START = "-"
+    PARAMETERS = [#"-cluster_fast",
+        ("fasta_file", "path:in", ["-cluster_fast", "{}"]),
+        (":id", "str"),
+        (":centroids", "path:out"),
+        (":uc", "path:out"),
+        (":consout", "path:out"),
+        (":msaout", "path:out:ignore"),
+        (":sort", "str"),
+        (":threads", "str")
+    ]
 
-	else:
-        _parameters = []
-        outfiles = []
-        for i, p in enumerate(parameters):
-            if p.startswith("{i}"):
-                _parameters.append(p[3:])
-            elif p.startswith("{o}"):
-                _parameters.append(p[3:])
-                outfiles.append(p[3:])
-            else:
-                _parameters.append(p)
-        command = ["usearch"]+parameters
+    def __call__(self, *args, **kwds):
+        output = super().__call__(*args, **kwds)
 
-        try:
-            subprocess.check_output(command, stderr=subprocess.PIPE)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("Unable to minimize file {}".format(pqr_file))
+        RealtimeLogger.info("FINISHED UCLUST {}".format(output))
+        if "msaout" in kwds and isinstance(output, dict):
+            name = output["msaout"]
+            RealtimeLogger.info("Similar files: {}".format([f for f in os.listdir(self.work_dir) if "all_binding_sites" in f][:5]))
+            output["msaout"] = list(glob.glob(os.path.join(self.work_dir, output["msaout"]+"*")))
+            RealtimeLogger.info("Number of MSAOUT: {} {}".format(name, len(output["msaout"])))
+        return output
 
-    return outfiles
+    def cluster(self, fasta_file, id=0.9, centroids=True, uc=True, msa=True, cons=False, parse_uc=True, sort=None, threads=None):
+        prefix = os.path.join(self.work_dir, os.path.splitext(os.path.basename(fasta_file))[0])
+
+        RealtimeLogger.info("CLUSTER: msa={}; centroids={};, uc={}; cons={}".format(msa, centroids, uc, cons))
+
+        parameters = {"fasta_file":fasta_file, "id":id}
+        if centroids:
+            parameters["centroids"] = os.path.join(self.work_dir, "{}_clusterfast.centroids".format(prefix))
+
+        if uc:
+            parameters["uc"] = os.path.join(self.work_dir, "{}_clusterfast.uc".format(prefix))
+
+        if msa:
+            parameters["msaout"] = os.path.join(self.work_dir, "{}_clusterfast_msa.fasta.".format(prefix))
+
+        if cons:
+            parameters["consout"] = os.path.join(self.work_dir, "{}_clusterfast_cons.fasta".format(prefix))
+
+        if isinstance(threads, int):
+            parameters["threads"] = str(threads)
+
+        RealtimeLogger.info("RUNNING UCLUST with {}".format(parameters))
+
+        cluster_output = self(**parameters)
+
+        if parse_uc and "uc" in cluster_output:
+            cluster_output["uc"] = self.parse_uc_file(cluster_output["uc"])
+
+        return cluster_output
+
+    @staticmethod
+    def parse_uc_file(uclust_file):
+        #Convert uclust to h5
+        uclust = pd.read_table(str(uclust_file), comment="#", header=None, names=[
+            "record_type",
+            "cluster",
+            "length",
+            "pctId",
+            "strand",
+            "unk1",
+            "unk2",
+            "alignment",
+            "label_query",
+            "label_target"
+        ])
+        del uclust["unk1"]
+        del uclust["unk2"]
+
+        return uclust

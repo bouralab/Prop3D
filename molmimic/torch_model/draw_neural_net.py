@@ -120,7 +120,7 @@ class DrawCNN(object):
         conv_type = "Inputs" if len(self.layers)==0 else "Channels"
         name = "{}\n{}@{}".format(conv_type, in_channels, "x".join(map(str, [size]*dim)))
         self._label(self.xy+np.array([0,draw_size]), name)
-        for ind in xrange(num):
+        for ind in range(num):
             #print ind * self.loc_diff
             patch = Rectangle(self.xy + ind * self.loc_diff, draw_size, draw_size)
             color = Medium if ind % 2 else Light

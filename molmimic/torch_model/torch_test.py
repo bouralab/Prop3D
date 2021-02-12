@@ -8,7 +8,7 @@ import time
 import multiprocessing
 import math
 from datetime import datetime
-from itertools import izip, groupby
+from itertools import groupby
 
 import matplotlib
 matplotlib.use("Agg")
@@ -50,7 +50,7 @@ def get_gpu_memory_map():
         ])
     # Convert lines into a dictionary
     gpu_memory = [int(x) for x in result.strip().split('\n')]
-    gpu_memory_map = dict(zip(range(len(gpu_memory)), gpu_memory))
+    gpu_memory_map = dict(list(zip(list(range(len(gpu_memory))), gpu_memory)))
     return gpu_memory_map
     #return {torch.cuda.getMemoryUsage(i) for i in xrange(torch.cuda.device_count())}
 
@@ -181,16 +181,16 @@ class ModelStats(object):
         pp.close()
         plt.close(f)
 
-def test(model_file, ibis_data, input_shape=(512,512,512), only_aa=False, only_atom=False, expand_atom=False, num_workers=None, batch_size=20, shuffle=True, use_gpu=True, data_split=0.8, test_full=False, no_batch_norm=False): 
+def test(model_file, ibis_data, input_shape=(512,512,512), only_aa=False, only_atom=False, expand_atom=False, num_workers=None, batch_size=20, shuffle=True, use_gpu=True, data_split=0.8, test_full=False, no_batch_norm=False):
 
     if num_workers is None:
         num_workers = multiprocessing.cpu_count()-1
-    print "Using {} workers".format(num_workers)
+    print("Using {} workers".format(num_workers))
 
     since = time.time()
 
     if ibis_data == "spheres":
-        from torch_loader import SphereDataset
+        from .torch_loader import SphereDataset
         datasets = SphereDataset.get_training_and_validation(input_shape, cnt=1, n_samples=1000, data_split=0.99)
         nFeatures = 1
         validation_batch_size = 1
@@ -237,8 +237,6 @@ def test(model_file, ibis_data, input_shape=(512,512,512), only_aa=False, only_a
 
     stats = ModelStats()
 
-    print "Starting Test..."
-
     for data_iter_num, data in enumerate(dataloader):
         if data["data"].__class__.__name__ == "InputBatch":
             sparse_input = True
@@ -256,7 +254,7 @@ def test(model_file, ibis_data, input_shape=(512,512,512), only_aa=False, only_a
             inputs = scn.InputBatch(3, inputSpatialSize)
             labels = scn.InputBatch(3, inputSpatialSize)
 
-            for sample, (indices, features, truth) in enumerate(izip(data["indices"], data["data"], data["truth"])):
+            for sample, (indices, features, truth) in enumerate(zip(data["indices"], data["data"], data["truth"])):
                 inputs.addSample()
                 labels.addSample()
 
@@ -284,7 +282,7 @@ def test(model_file, ibis_data, input_shape=(512,512,512), only_aa=False, only_a
 
         elif isinstance(data["data"], torch.FloatTensor):
             #Input is dense
-            print "Input is Dense"
+            print("Input is Dense")
             sparse_input = False
             if use_gpu:
                 inputs = inputs.cuda()
@@ -296,7 +294,7 @@ def test(model_file, ibis_data, input_shape=(512,512,512), only_aa=False, only_a
             except:
                 pass
             labels = Variable(data["truth"])
-            
+
         else:
             raise RuntimeError("Invalid data from dataset")
 
@@ -306,7 +304,7 @@ def test(model_file, ibis_data, input_shape=(512,512,512), only_aa=False, only_a
             loss = criterion(outputs.features, labels.features)
 
             if math.isnan(loss.data[0]):
-                print "Loss is Nan?"
+                print("Loss is Nan?")
                 import pdb; pdb. set_trace()
 
             stats.update(outputs.features.data, labels.features.data, loss.data[0])
@@ -315,15 +313,15 @@ def test(model_file, ibis_data, input_shape=(512,512,512), only_aa=False, only_a
             loss = criterion(outputs.cpu(), labels.cpu())
             stats.update(outputs.data.cpu().view(-1), labels.data.cpu().view(-1), loss.data[0])
 
-        print "Batch {}: corrects:{:.2f}% nll:{:.2f}% dice:{:.4f}% time:{:.1f}s".format(
-            data_iter_num, stats.correctpct(), stats.nllpct(), loss.data[0]*-100, time.time() - since)
+        print("Batch {}: corrects:{:.2f}% nll:{:.2f}% dice:{:.4f}% time:{:.1f}s".format(
+            data_iter_num, stats.correctpct(), stats.nllpct(), loss.data[0]*-100, time.time() - since))
 
         save_batch_prediction(outputs)
 
         stats.save("val", 0)
     stats.plot_final()
     time_elapsed = time.time() - since
-    print 'Testing complete in {:.0f}m {:.0f}s'.format(time_elapsed/60, time_elapsed % 60)
+    print('Testing complete in {:.0f}m {:.0f}s'.format(time_elapsed/60, time_elapsed % 60))
 
 class DiceLoss(_Loss):
     def __init__(self, size_average=True, smooth=1.):
@@ -353,7 +351,6 @@ class IoULoss(_Loss):
         # y_true_f = target.view(target.numel())
         # intersection = torch.sum(y_true_f*y_pred_f)
         # dice = (2. * intersection + self.smooth)/(torch.sum(y_true_f) + torch.sum(y_pred_f) + self.smooth)
-        # print dice
         # return dice
         iflat = input.view(-1)
         tflat = target.view(-1)
@@ -362,11 +359,11 @@ class IoULoss(_Loss):
         return ((intersection + self.smooth) / ((iflat.sum() + tflat.sum() + intersection + self.smooth)))
 
 def save_batch_prediction(outputs):
-    print outputs
-    for sample, scores in groupby(izip(outputs.getSpatialLocations(), outputs.features.split(1)), key=lambda x:x[0][3]):
-        print sample
+    print(outputs)
+    for sample, scores in groupby(list(zip(outputs.getSpatialLocations(), outputs.features.split(1))), key=lambda x:x[0][3]):
+        print(sample)
         for loc, score in scores:
-            print "   ", loc.numpy().tolist(), score.cpu().data.numpy()[0]
+            print("   ", loc.numpy().tolist(), score.cpu().data.numpy()[0])
 
 
     import pdb; pdb.set_trace()

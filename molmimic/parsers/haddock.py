@@ -1,3 +1,4 @@
+from __future__ import print_function
 import os
 import sys
 import tarfile
@@ -7,7 +8,8 @@ import tempfile
 
 from toil.realtimeLogger import RealtimeLogger
 
-from molmimic.generate_data.util import PDB_TOOLS, SubprocessChain
+from molmimic.util.pdb import PDB_TOOLS
+from molmimic.util import SubprocessChain
 
 try:
     from toil.lib.docker import apiDockerCall
@@ -61,8 +63,6 @@ def run_haddock(dock_name, setup=False, work_dir=None, docker=True, toil=False, 
     if work_dir is None:
         work_dir = os.getcwd()
 
-    if job:
-        print str(os.listdir(work_dir))
     assert any(os.path.isfile(os.path.join(work_dir, f)) for f in ("new.html", "run.cns"))
 
     if toil:
@@ -169,12 +169,12 @@ def analyze_haddock(analysis_dir, docker=True, job=None):
 
 def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, structures0=1000,
   structures1=200, waterrefine=200, anastruc1=200, refine=False, small_refine=False,
-  tbl_file=None, settings_file=None, work_dir=None, docker=True, cores=2, job=None):
+  tbl_file=None, settings_file=None, work_dir=None, clean_docked_file=True,
+  docker=True, cores=2, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
     #Write AIR TBL_FILE
-    print "TBL FILE", tbl_file
     if tbl_file is None:
         tbl_file = os.path.join(work_dir, "{}.tbl".format(int_id))
         with open(tbl_file, "w") as tbl:
@@ -242,7 +242,6 @@ def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, structures0=1000,
         with open(settings_file, "w") as settings:
             settings.write(start_file.format(**parameters))
 
-    print "Wrote settings file"
     with open(settings_file) as f:
         job.log(f.read())
 
@@ -273,37 +272,25 @@ def dock(int_id, pdb1, chain1, sites1, pdb2, chain2, sites2, structures0=1000,
     results = analyze_haddock(water_dir, job=job)
 
     _complex_file = os.path.join(water_dir, results["haddock_#struc"])
-    assert os.path.isfile(_complex_file)
-    with open(_complex_file) as f:
-        job.log("PDB SEG: {}".format(f.read()))
-
     complex_file = os.path.join(work_dir, "{}.min.pdb".format(int_id))
 
-    cmds = [
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_segxchain.py"), _complex_file],
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
-    ]
-    with open(complex_file, "w") as f:
-        SubprocessChain(cmds, f)
-
-    with open(complex_file) as f:
-        job.log("PDB CHAIN: {}".format(f.read()))
-
-    assert os.path.isfile(complex_file)
-
     _orig_file = os.path.join(run_dir, "begin", "molmimic_1.pdb")
-    assert os.path.isfile(_orig_file)
-
-    cmds = [
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_segxchain.py"), _orig_file],
-        [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
-    ]
-
     orig_file = os.path.join(work_dir, "{}.min.pdb".format(int_id))
-    with open(orig_file, "w") as f:
-        SubprocessChain(cmds, f)
 
-    assert os.path.isfile(orig_file)
+    for pre_f, post_f in [(_complex_file, complex_file), (_orig_file, orig_file)]:
+        assert os.path.isfile(pre_f)
+
+        if clean_docked_file:
+            cmds = [
+                [sys.executable, os.path.join(PDB_TOOLS, "pdb_segxchain.py"), pre_f],
+                [sys.executable, os.path.join(PDB_TOOLS, "pdb_tidy.py")]
+            ]
+        else:
+            cmds = [[sys.executable, os.path.join(PDB_TOOLS, "pdb_segxchain.py"), pre_f]]
+        with open(post_f, "w") as f:
+            SubprocessChain(cmds, f)
+
+        assert os.path.isfile(post_f)
 
     results_zip = os.path.join(work_dir, "{}.tar.gz".format(int_id))
     tar = tarfile.open(results_zip, "w:gz")
@@ -320,15 +307,15 @@ def generate_air_restraints(chain1, binding_site1, chain2, binding_site2, out):
     for i, (molchain, molsites) in enumerate(sites):
         intchain, intsites = sites[1-i]
         for j, r1 in enumerate(molsites):
-            print >> out, "assign ( resid {0} and segid {1})".format(r1, molchain)
-            print >> out, "       ("
+            print("assign ( resid {0} and segid {1})".format(r1, molchain), file=out)
+            print("       (", file=out)
             for k, r2 in enumerate(intsites):
-                print >> out, "        ( resid {0} and segid {1})".format(r2, intchain)
+                print("        ( resid {0} and segid {1})".format(r2, intchain), file=out)
                 if k<len(intsites)-1:
-                    print >> out, "     or"
-            print >> out, "       )  2.0 2.0 0.0"
+                    print("     or", file=out)
+            print("       )  2.0 2.0 0.0", file=out)
             if j<len(molsites)-1:
-                print >> out, "!"
+                print("!", file=out)
 
 def score_complex(pdb_file, chain, iteration=None, work_dir=None, docker=True, job=None):
     if work_dir is None:

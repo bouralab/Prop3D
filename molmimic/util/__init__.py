@@ -1,94 +1,10 @@
 import os
 import sys
 import re
+import subprocess
+import requests
+import shutil
 from contextlib import contextmanager
-
-import pandas as pd
-
-data_path_prefix = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-
-structures_path_prefix = os.path.join(data_path_prefix, "structures")
-
-features_path_prefix = os.path.join(data_path_prefix, "features")
-
-interfaces_path_prefix = os.path.join(data_path_prefix, "interfaces")
-
-def get_structures_path(dataset_name):
-    return os.path.join(structures_path_prefix, dataset_name)
-
-def get_features_path(dataset_name):
-    features_path = os.path.join(features_path_prefix, dataset_name)
-    if not os.path.isdir(features_path):
-        features_path = os.path.join(features_path_prefix, "features_{}".format(dataset_name))
-    return features_path
-
-def get_interfaces_path(dataset_name):
-    return os.path.join(interfaces_path_prefix, dataset_name)
-
-def initialize_data(dataset_name):
-    os.environ["MOLMIMIC_STRUCTURES"] = get_structures_path(dataset_name)
-    os.environ["MOLMIMIC_FEATURES"] = get_features_path(dataset_name)
-    os.environ["MOLMIMIC_INTERFACES"] = get_interfaces_path(dataset_name)
-
-def iter_cdd(use_label=True, use_id=False, label=None, id=None):
-    if use_label and not use_id:
-        col = 1
-    elif not use_label and use_id:
-        col = 2
-
-    CDD = pd.read_hdf(os.path.join(data_path_prefix, "MMDB.h5"), "Superfamilies")
-    CDD = CDD[["label", "sfam_id"]].drop_duplicates().dropna()
-
-    if label is not None:
-        CDD = CDD[CDD["label"]==label]
-    elif id is not None:
-        CDD = CDD[CDD["sfam_id"]==id]
-
-    CDD["label"] = CDD["label"].apply(lambda cdd: cdd.replace("/", "").replace("'", "\'") if isinstance(cdd, str) else cdd)
-    CDD.sort_values("label", inplace=True)
-
-    if use_label and use_id:
-        for cdd in CDD.itertuples():
-            yield cdd[1], cdd[2]
-    else:
-        for cdd in CDD.itertuples():
-            yield cdd[col]
-
-class InvalidPDB(RuntimeError):
-    pass
-
-def download_pdb(id):
-    pdbl = PDB.PDBList()
-    try:
-        fname = pdbl.retrieve_pdb_file(id.upper(), file_format="mmCif")
-        if not os.path.isfile(fname):
-            raise InvalidPDB(id)
-        return fname, "mmcif"
-    except IOError:
-        raise InvalidPDB(id)
-
-def get_first_chain(pdb_file):
-    try:
-        with open(pdb_file) as f:
-            for line in f:
-                if line.startswith("ATOM"):
-                    return line[21]
-    except IOError:
-        pass
-
-    return None
-
-def get_all_chains(pdb_file):
-    chains = set()
-    try:
-        with open(pdb_file) as f:
-            for line in f:
-                if line.startswith("ATOM"):
-                    chains.add(line[21])
-    except IOError:
-        pass
-
-    return chains
 
 def atof(text, use_int=False):
     converter = int if use_int else float
@@ -105,7 +21,19 @@ def natural_keys(text, use_int=False):
     (See Toothy's implementation in the comments)
     float regex comes from https://stackoverflow.com/a/12643073/190597
     '''
-    return [ atof(c, use_int=use_int) for c in re.split(r'[+-]?([0-9]+(?:[.][0-9]*)?|[.][0-9]+)', str(text)) ]
+    if isinstance(text, (list,tuple)):
+        if len(text)==3 and isinstance(text[0], str) and isinstance(text[0], int) and isinstance(text[2], str):
+            return text
+        assert 0, "{} must be str".format(text)
+    key =  [ atof(c, use_int=use_int) for c in re.split(r'[+-]?([0-9]+(?:[.][0-9]*)?|[.][0-9]+)', str(text)) ]
+    assert len(key)==3, "key:{}; text:{}".format(key, text)
+    key[0] = ' '.join(key[0].split())
+    key[2] = ' '.join(key[2].split())
+    if len(key[0]) == "":
+        key[0] = " "
+    if len(key[2]) == "":
+        key[2] = " "
+    return tuple(key)
 
 def to_int(s):
     if isinstance(s, int):
@@ -120,6 +48,92 @@ def number_of_lines(path):
     with open(path) as f:
         numlines = sum([1 for line in f])
     return numlines
+
+def SubprocessChain(commands, output=subprocess.PIPE):
+    if len(commands) > 2:
+        prev_proc = subprocess.Popen(
+            commands[0],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=os.environ)
+        for cmd in commands[1:-1]:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=prev_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=os.environ)
+            prev_proc = proc
+        final_proc = subprocess.Popen(
+            commands[-1],
+            stdin=prev_proc.stdout,
+            stdout=output,
+            stderr=subprocess.PIPE,
+            env=os.environ)
+        return final_proc.communicate()
+    elif len(commands) == 2:
+        prev_proc = subprocess.Popen(
+            commands[0],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=os.environ)
+        final_proc = subprocess.Popen(
+            commands[1],
+            stdin=prev_proc.stdout,
+            stdout=output,
+            stderr=subprocess.PIPE,
+            env=os.environ)
+        return final_proc.communicate()
+    elif len(commands) == 1:
+        final_proc = subprocess.Popen(
+            commands[0],
+            stdout=output,
+            stderr=subprocess.PIPE,
+            env=os.environ)
+    else:
+        raise RuntimeError
+    return final_proc.communicate()
+
+def safe_remove(files, warn=False):
+    if isinstance(files, str):
+        files = [files]
+
+    success = []
+    for f in files:
+        if isinstance(f, str) and os.path.exists(f):
+            try:
+                os.remove(f)
+                success.append(True)
+            except (OSError, FileNotFoundError) as e:
+                success.append(False)
+                pass
+        else:
+            success.append(False)
+
+    from toil.realtimeLogger import RealtimeLogger
+    
+    if isinstance(files, str):
+        return success[0]
+
+    return success
+
+def safe_call(job, func, input, *args, **kwds):
+    try:
+        return func(job, input, *args, **kwds)
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except:
+        raise
+
+def download_file(url, local_filename=None):
+    if local_filename is None:
+        local_filename = url.split('/')[-1]
+    with requests.get(url, stream=True) as r:
+        with open(local_filename, 'wb') as f:
+            r.raw.read = functools.partial(response.raw.read, decode_content=True)
+            shutil.copyfileobj(r.raw, f)
+
+    return local_filename
 
 @contextmanager
 def silence_stdout():
@@ -138,3 +152,93 @@ def silence_stderr():
         yield new_target
     finally:
         sys.stderr = old_target
+
+def getcwd():
+    """Get current working directory. Uses shell to avoid drive mapping names from python"""
+    return subprocess.check_output("pwd", shell=True).decode("utf-8").strip()
+
+def izip_missing(iterA, iterB, **kwds):
+    """Iterate through two iterables, while making sure they are in the same
+    order. If there are missing values, you can skip the value entirely or
+    return only the iterator with the value and a special fill value.
+    Parameters:
+    ___________
+    iterA : the first iterator
+    iterB : the second iterator
+    key : function that returns items to compare. Must return strings, ints, or
+        an object with the __lt__, __gt__, and __eq__ methods. Optional.
+    fillvalue : The value to return if the item is missing. Optional.
+    Returns:
+    ________
+    A : item from first iterator, or fillValue
+    B : item from second iterator, or fillValue
+    """
+    #Get the comparison functions
+    key = kwds.get("key", lambda x: x)
+    keyA = kwds.get("keyA", key)
+    keyB = kwds.get("keyB", key)
+
+    useMissing = "fillvalue" in kwds
+    fillvalue = kwds.get("fillvalue")
+
+    verbose = kwds.get("verbose", False)
+
+    #Start both iterators
+    A = next(iterA)
+    B = next(iterB)
+    try:
+        while True:
+            if keyA(A) == keyB(B):
+                if verbose:
+                    print(keyA(A), "==", keyB(B))
+                yield A, B
+                A = next(iterA)
+                B = next(iterB)
+            elif keyA(A) < keyB(B):
+                if verbose:
+                    print(keyA(A), "<", keyB(B))
+                if useMissing:
+                    yield(A, fillvalue)
+                A = next(iterA)
+            elif keyA(A) > keyB(B):
+                if verbose:
+                    print(keyA(A), ">", keyB(B))
+                if useMissing:
+                    yield fillvalue, B
+                B = next(iterB)
+            else:
+                raise RuntimeError("Invalid comparator")
+    except StopIteration:
+        pass
+
+def reset_ip():
+    import requests
+    import boto.ec2
+
+    conn = boto.ec2.connect_to_region("us-east-1")
+
+    try:
+        response = requests.get('http://169.254.169.254/latest/meta-data/instance-id')
+    except ConnectionError:
+        return
+
+    instance_id = response.text
+
+    reservations = conn.get_all_instances(filters={'instance-id' : instance_id})
+    instance = reservations[0].instances[0]
+
+    old_address = instance.ip_address
+
+
+    RealtimeLogger.info("Changing {} IP from {}".format(instance_id, old_address))
+
+
+    conn.disassociate_address(old_address)
+
+    new_address = conn.allocate_address().public_ip
+
+    RealtimeLogger.info("Changing {} IP from {} to {}".format(instance_id, old_address, new_address))
+
+    conn.associate_address(instance_id, new_address)
+
+    RealtimeLogger.info("Changed {} IP from {} to {}".format(instance_id, old_address, new_address))

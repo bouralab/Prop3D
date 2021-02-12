@@ -1,6 +1,6 @@
 import torch
-import skorch
-from skorch.callbacks import LRScheduler
+from . import skorch
+from .skorch.callbacks import LRScheduler
 
 from molmimic.torch_model.torch_model import UNet3D, ResNetUNet
 from molmimic.torch_model.torch_loader import IBISDataset, sparse_collate
@@ -8,7 +8,7 @@ from molmimic.torch_model.torch_loader import IBISDataset, sparse_collate
 p = 0.01 #Update with true values
 true_distribution = torch.FloatTensor([1-p,p])
 
-class 3DUnet(skorch.NeuralNet):
+class Unet3D(skorch.NeuralNet):
     number_of_features = 70
     number_of_classes = 1
 

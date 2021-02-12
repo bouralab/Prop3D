@@ -18,7 +18,7 @@ import torch
 
 values = {}
 epoch_values = {}
-def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, n_classes=2, smooth=1.0):
+def add_to_logger(logger, phase, epoch, batch, total_batches, output, target, weight, locations=None, n_classes=2, smooth=1.0, autoencoder=False):
     weight_sum = weight.sum()
 
     dice_combined = 0.0
@@ -28,60 +28,60 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
     kappa_combined = 0.0
     f1_combined = 0.0
 
-    for c in xrange(n_classes):
+    for c in range(n_classes):
         iflat = output[:,c].cpu().view(-1)
         tflat = target[:,c].cpu().view(-1)
         intersection = (iflat * tflat).sum()
 
-        dice = ((2. * intersection + smooth) / ((iflat.sum() + tflat.sum() + smooth))).data[0]
+        dice = ((2. * intersection + smooth) / ((iflat.sum() + tflat.sum() + smooth))).item()
         weighted_dice = weight[c]*dice
 
         iflat = (iflat > .7).long()
         tflat = tflat.long()
         mcc = metrics.matthews_corrcoef(tflat.data.numpy(), iflat.data.numpy())
-        precision = metrics.precision_score(tflat.data.numpy(), iflat.data.numpy())
+        #precision = metrics.precision_score(tflat.data.numpy(), iflat.data.numpy())#, average="samples")
         kappa = metrics.cohen_kappa_score(tflat.data.numpy(), iflat.data.numpy())
-        f1 =  metrics.f1_score(tflat.data.numpy(), iflat.data.numpy())
+        #f1 =  metrics.f1_score(tflat.data.numpy(), iflat.data.numpy())
 
-        logger.update_loss(np.array([dice]),          meter='dice_class{}'.format(c))
-        logger.update_loss(np.array([weighted_dice]), meter='weighted_dice_class{}'.format(c))
-        logger.update_loss(np.array([mcc]),           meter='mcc_class{}'.format(c))
-        logger.update_loss(np.array([precision]),     meter='precision_class{}'.format(c))
-        logger.update_loss(np.array([kappa]),         meter='kappa_class{}'.format(c))
-        logger.update_loss(np.array([f1]),            meter='f1_class{}'.format(c))
+        logger.update_loss(np.array([dice], dtype="float"),          meter='dice_class{}'.format(c))
+        logger.update_loss(np.array([weighted_dice], dtype="float"), meter='weighted_dice_class{}'.format(c))
+        logger.update_loss(np.array([mcc], dtype="float"),           meter='mcc_class{}'.format(c))
+        #logger.update_loss(np.array([precision], dtype="float"),     meter='precision_class{}'.format(c))
+        logger.update_loss(np.array([kappa], dtype="float"),         meter='kappa_class{}'.format(c))
+        #logger.update_loss(np.array([f1], dtype="float"),            meter='f1_class{}'.format(c))
 
         dice_combined += dice
         weighted_dice_combined += weighted_dice
         mcc_combined += mcc
-        precision_combined += precision
+        #precision_combined += precision
         kappa_combined += kappa
-        f1_combined += f1
+        #f1_combined += f1
 
         del iflat
         del tflat
         del intersection
         del mcc
-        del precision
+        #del precision
         del kappa
-        del f1
+        #del f1
 
-    logger.update_loss(np.array([dice_combined]),          meter='dice_sum')
-    logger.update_loss(np.array([weighted_dice_combined]), meter='weighted_dice_sum')
+    logger.update_loss(np.array([dice_combined], dtype="float"),          meter='dice_sum')
+    logger.update_loss(np.array([weighted_dice_combined], dtype="float"), meter='weighted_dice_sum')
 
     weighted_dice_combined /= weight_sum
-    logger.update_loss(np.array([weighted_dice_combined]), meter='weighted_dice_wavg')
+    logger.update_loss(np.array([weighted_dice_combined], dtype="float"), meter='weighted_dice_wavg')
 
     dice_combined /= float(n_classes)
     mcc_combined /= float(n_classes)
-    precision_combined /= float(n_classes)
+    #precision_combined /= float(n_classes)
     kappa_combined /= float(n_classes)
-    f1_combined /= float(n_classes)
+    #f1_combined /= float(n_classes)
 
-    logger.update_loss(np.array([dice_combined]),      meter='dice_avg')
-    logger.update_loss(np.array([mcc_combined]),       meter='mcc_avg')
-    logger.update_loss(np.array([precision_combined]), meter='precision_avg')
-    logger.update_loss(np.array([kappa_combined]),     meter='kappa_avg')
-    logger.update_loss(np.array([f1_combined]),        meter='f1_avg')
+    logger.update_loss(np.array([dice_combined], dtype="float"),      meter='dice_avg')
+    logger.update_loss(np.array([mcc_combined], dtype="float"),       meter='mcc_avg')
+    #logger.update_loss(np.array([precision_combined]), meter='precision_avg')
+    logger.update_loss(np.array([kappa_combined], dtype="float"),     meter='kappa_avg')
+    #logger.update_loss(np.array([f1_combined]),        meter='f1_avg')
 
     if n_classes == 2:
         result = (output>0.7).cpu().float()
@@ -95,16 +95,16 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
         dice = ((2. * intersection + smooth) / ((iflat.sum() + tflat.sum() + smooth))).data[0]
         weighted_dice = weight_sum*dice
         mcc = metrics.matthews_corrcoef(tflat.data.numpy(), iflat.data.numpy())
-        precision = metrics.precision_score(tflat.data.numpy(), iflat.data.numpy())
+        #precision = metrics.precision_score(tflat.data.numpy(), iflat.data.numpy())
         kappa = metrics.cohen_kappa_score(tflat.data.numpy(), iflat.data.numpy())
-        f1 = metrics.f1_score(tflat.data.numpy(), iflat.data.numpy())
+        #f1 = metrics.f1_score(tflat.data.numpy(), iflat.data.numpy())
 
-        logger.update_loss(np.array([dice]),          meter='dice_flat')
-        logger.update_loss(np.array([weighted_dice]), meter='weighted_dice_flat')
-        logger.update_loss(np.array([mcc]),           meter='mcc_flat')
-        logger.update_loss(np.array([precision]),     meter='precision_flat')
-        logger.update_loss(np.array([kappa]),         meter='kappa_flat')
-        logger.update_loss(np.array([f1]),            meter='f1_flat')
+        logger.update_loss(np.array([dice], dtype="float"),          meter='dice_flat')
+        logger.update_loss(np.array([weighted_dice], dtype="float"), meter='weighted_dice_flat')
+        logger.update_loss(np.array([mcc], dtype="float"),           meter='mcc_flat')
+        #logger.update_loss(np.array([precision]),     meter='precision_flat')
+        logger.update_loss(np.array([kappa], dtype="float"),         meter='kappa_flat')
+        #logger.update_loss(np.array([f1]),            meter='f1_flat')
 
         del result
         del results_flat
@@ -115,7 +115,7 @@ def add_to_logger(logger, phase, epoch, output, target, weight, locations=None, 
         del intersection
 
     with open("{}_epoch{}_stats.txt".format(phase, epoch), "a+") as statsfile:
-        print >> statsfile, format_meter(logger, phase)
+        print(format_meter(logger, phase, epoch, batch, total_batches), file=statsfile)
 
     return statsfile
 
@@ -147,7 +147,7 @@ def format_meter(logger, mode, iepoch=0, ibatch=1, totalbatch=1, meterlist=None,
     space = len(pstr)
 
     if meterlist is None:
-        meterlist = ["loss"]+[m for m in logger.meter.keys() if m != "loss"]
+        meterlist = ["loss"]+[m for m in list(logger.meter.keys()) if m != "loss"]
     for i, meter in enumerate(meterlist):
         if i > 0:
             pstr += " "*space
@@ -165,14 +165,15 @@ def format_meter(logger, mode, iepoch=0, ibatch=1, totalbatch=1, meterlist=None,
     #pstr += "{} {:.2f} s/its".format(" "*space, logger.timer.value())
     return pstr
 
-def graph_logger(logger, phase, epoch, final=False, meterlist=None, graph=False):
+def graph_logger(logger, phase, epoch, batch, num_batches, final=False, meterlist=None, graph=False):
+    global values
     if meterlist is None:
-        meterlist = logger.meter.keys()
+        meterlist = list(logger.meter.keys())
 
     if not final:
         stats_fname = "Sparse3DUnet_statistics_{}.tsv".format(phase)
         with open(stats_fname, "a") as stats_file:
-            print >> stats_file, "epoch {} {}".format(epoch, format_meter(logger, phase))
+            print("epoch {} {}".format(epoch, format_meter(logger, phase, batch, num_batches)), file=stats_file)
     else:
         stats_fname = None
 
@@ -201,7 +202,6 @@ def graph_logger(logger, phase, epoch, final=False, meterlist=None, graph=False)
             del ax
             pdfs.append(pdf)
 
-    global values
     del values
     values = {}
 
@@ -287,13 +287,11 @@ class ModelStats(object):
             #predicted_corrects_raw_sample = batch_predictions>=0.8
             predicted_corrects_sample = batch_predictions.cpu().float()
 
-            print "target", tflat.sum().data[0], "of", sample_size
-            print "output", iflat.sum().data[0], "of", sample_size
+            print("target", tflat.sum().data[0], "of", sample_size)
+            print("output", iflat.sum().data[0], "of", sample_size)
             predicted_corrects_num_sample = iflat.eq(tflat)
-            print "equal", predicted_corrects_num_sample.sum().data[0], "of", sample_size
-            #predicted_corrects_num_sample = predicted_corrects_num_sample
-            #print "sum", predicted_corrects_num_sample
-            #predicted_corrects_num_sample /= sample_size
+            print("equal", predicted_corrects_num_sample.sum().data[0], "of", sample_size)
+
             predicted_corrects_batch += predicted_corrects_num_sample.sum().data[0]
 
             prediction = (predicted_corrects_sample>0.7).int().cpu().data.numpy()
@@ -314,7 +312,7 @@ class ModelStats(object):
         dice_batch /= num_samples
         predicted_corrects_batch /= float(batchSize)
 
-        print """Epoch {} {}:
+        print("""Epoch {} {}:
     loss:      {:.4f}
     dice:      {:.4f}%    {:.4f}%
     accuracy:  {:.2f}%    {:.2f}%
@@ -332,7 +330,7 @@ class ModelStats(object):
             precision*100, precision_batch*100,
             kappa*100, kappa_batch*100,
             f1*100, f1_batch*100,
-            time.time() - since)
+            time.time() - since))
 
         # try:
         #     fpr, tpr, _ = metrics.roc_curve(_target.view(-1).numpy(), predicted_corrects.view(-1).numpy(), pos_label=1.)
@@ -352,11 +350,11 @@ class ModelStats(object):
         # self.kappa += kappa
         # self.f1 += f1
         # self.n += n
-        # print "Epoch {} {}: corrects:{}% dice:{}% mcc:{}% precision:{}% kappa:{}% f1:{}% time:{}s".format(
-        #     epoch, self.phase, accuracy*100, dice*100, mcc*100, precision*100, kappa*100, f1*100, time.time() - since)
+        # print("Epoch {} {}: corrects:{}% dice:{}% mcc:{}% precision:{}% kappa:{}% f1:{}% time:{}s".format(
+        #     epoch, self.phase, accuracy*100, dice*100, mcc*100, precision*100, kappa*100, f1*100, time.time() - since))
 
-        # print "Epoch {} {}: accuracy:{:.2f}% avg-acc:{:.2f}% dice:{:.4f}% mcc:{:.4f}% precision:{:.4f}% kappa:{:.4f}% f1:{:.4f}% time:{:.1f}s".format(
-        #     epoch, self.phase, accuracy*100, running_corrects_num*100, dice*100, mcc*100, precision*100, kappa*100, f1*100, time.time() - since)
+        # print("Epoch {} {}: accuracy:{:.2f}% avg-acc:{:.2f}% dice:{:.4f}% mcc:{:.4f}% precision:{:.4f}% kappa:{:.4f}% f1:{:.4f}% time:{:.1f}s".format(
+        #     epoch, self.phase, accuracy*100, running_corrects_num*100, dice*100, mcc*100, precision*100, kappa*100, f1*100, time.time() - since))
 
         #self.accuracies.append(predicted_corrects_num/float(batchSize))
         #self.losses.append(loss)

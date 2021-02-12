@@ -3,7 +3,7 @@ import glob
 
 import pandas as pd
 from joblib import Parallel, delayed
-from util import get_interfaces_path, iter_cdd
+from molmimic.generate_data.util import iter_cdd
 
 import dask.dataframe as dd
 
@@ -20,7 +20,7 @@ def get_counts(dataset_name, sfam_id):
     except:
         return
 
-    if len(store.keys()) == 0:
+    if len(list(store.keys())) == 0:
         store.close()
         return
 
@@ -31,7 +31,7 @@ def get_counts(dataset_name, sfam_id):
         obs_sizes.loc[:, "status"] = "observed"
     del obs
 
-    if not "/inferred" in store.keys():
+    if not "/inferred" in list(store.keys()):
         store.close()
         return obs_sizes.set_index("ppi_type")
 
@@ -75,7 +75,7 @@ def plot_ppi_types(dataset_name, superfams=None, histograms=True, violin=False):
                     sizes = _size.fillna(0.0)
 
         return sizes.fillna(0.0)
-    
+
     if violin:
         files = glob.glob(os.path.join(get_interfaces_path(dataset_name), "by_superfamily",
             "*", "*_bsa.h5"))

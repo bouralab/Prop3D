@@ -4,6 +4,8 @@ import sparseconvnet as scn
 import torch.nn.functional as F
 from torch.autograd.variable import Variable
 
+from molmimic.torch_model.UNetDropout import UNetDropout
+
 class UNet3D(nn.Module):
     """Sparse 3D Unet for voxel level prediction.
 
@@ -78,127 +80,127 @@ class UNet3D(nn.Module):
 
     def forward(self, x):
         verbose = self.log_level
-        if verbose > 0: print "input", x, x.spatial_size.tolist(), x.features.size()
-        if verbose > 1: print "   ", x.features.view(-1).cpu().data.numpy().tolist()
+        if verbose > 0: print("input", x, x.spatial_size.tolist(), x.features.size())
+        if verbose > 1: print("   ", x.features.view(-1).cpu().data.numpy().tolist())
 
         conv1_1 = self.conv1_1(x)
-        if verbose > 0: print "conv1_1", conv1, conv1.spatial_size.tolist(), conv1.features, conv1.features.size()
-        if verbose > 1: print "   ", conv1.features
+        if verbose > 0: print("conv1_1", conv1, conv1.spatial_size.tolist(), conv1.features, conv1.features.size())
+        if verbose > 1: print("   ", conv1.features)
 
         conv1_2 = self.conv1_2(conv1_1)
         del conv1_1
-        if verbose > 0: print "conv1_2", conv1, conv1.spatial_size.tolist(), conv1.features, conv1.features.size()
-        if verbose > 1: print "   ", conv1.features
+        if verbose > 0: print("conv1_2", conv1, conv1.spatial_size.tolist(), conv1.features, conv1.features.size())
+        if verbose > 1: print("   ", conv1.features)
 
         pool1 = self.pool1(conv1_2)
-        if verbose > 0: print "pool1", pool1.spatial_size.tolist(), pool1.features.size()
-        if verbose > 1: print "   ", pool1.features
+        if verbose > 0: print("pool1", pool1.spatial_size.tolist(), pool1.features.size())
+        if verbose > 1: print("   ", pool1.features)
 
         conv2_1 = self.conv2_1(pool1)
         del pool1
-        if verbose > 0: print "conv2_1", conv2.spatial_size.tolist(), conv2.features.size()
-        if verbose > 1: print "   ", conv2.features
+        if verbose > 0: print("conv2_1", conv2.spatial_size.tolist(), conv2.features.size())
+        if verbose > 1: print("   ", conv2.features)
 
         conv2_2 = self.conv2_2(conv2_1)
         del conv2_1
-        if verbose > 0: print "conv2_2", conv2.spatial_size.tolist(), conv2.features.size()
-        if verbose > 1: print "   ", conv2.features
+        if verbose > 0: print("conv2_2", conv2.spatial_size.tolist(), conv2.features.size())
+        if verbose > 1: print("   ", conv2.features)
 
         pool2 = self.pool2(conv2_2)
-        if verbose > 0: print "pool2", pool2.spatial_size.tolist(), pool2.features.size()
-        if verbose > 1: print "   ", pool2.features
+        if verbose > 0: print("pool2", pool2.spatial_size.tolist(), pool2.features.size())
+        if verbose > 1: print("   ", pool2.features)
 
         conv3_1 = self.conv3_1(pool2)
         del pool2
-        if verbose > 0: print "conv3_1", conv3.spatial_size.tolist(), conv3.features.size()
-        if verbose > 1: print "   ", conv3.features
+        if verbose > 0: print("conv3_1", conv3.spatial_size.tolist(), conv3.features.size())
+        if verbose > 1: print("   ", conv3.features)
 
         conv3_2 = self.conv3_2(conv3_1)
         del conv3_1
-        if verbose > 0: print "conv3_3", conv3.spatial_size.tolist(), conv3.features.size()
-        if verbose > 1: print "   ", conv3.features
+        if verbose > 0: print("conv3_3", conv3.spatial_size.tolist(), conv3.features.size())
+        if verbose > 1: print("   ", conv3.features)
 
         pool3 = self.pool3(conv3_2)
-        if verbose > 0: print "pool3", pool3.spatial_size.tolist(), pool3.features.size()
-        if verbose > 1: print "   ", pool3.features
+        if verbose > 0: print("pool3", pool3.spatial_size.tolist(), pool3.features.size())
+        if verbose > 1: print("   ", pool3.features)
 
         conv4_1 = self.conv4_1(pool3)
         del pool3
-        if verbose > 0: print "conv4_1", conv4.spatial_size.tolist(), conv4.features.size()
-        if verbose > 1: print "   ", conv4.features
+        if verbose > 0: print("conv4_1", conv4.spatial_size.tolist(), conv4.features.size())
+        if verbose > 1: print("   ", conv4.features)
 
         conv4_2 = self.conv4_2(conv4_1)
         del conv4_1
-        if verbose > 0: print "conv4_2", conv4.spatial_size.tolist(), conv4.features.size()
-        if verbose > 1: print "   ", conv4.features
+        if verbose > 0: print("conv4_2", conv4.spatial_size.tolist(), conv4.features.size())
+        if verbose > 1: print("   ", conv4.features)
 
         up5_1 = self.up5_1(conv4_2)
         del conv4_2
-        if verbose > 0: print "up5_1", up5.spatial_size.tolist(), up5.features.size()
-        if verbose > 1: print "   ", up5.features
+        if verbose > 0: print("up5_1", up5.spatial_size.tolist(), up5.features.size())
+        if verbose > 1: print("   ", up5.features)
 
         up5_2 = self.up5_2((up5_1, conv3_2))
         del up5_1
         del conv3_2
-        if verbose > 0: print "up5_2", up5.spatial_size.tolist(), up5.features.size()
-        if verbose > 1: print "   ", up5.features
+        if verbose > 0: print("up5_2", up5.spatial_size.tolist(), up5.features.size())
+        if verbose > 1: print("   ", up5.features)
 
         conv5_1 = self.conv5_1(up5_2)
         del up5_2
-        if verbose > 0: print "conv5_1", conv5.spatial_size.tolist(), conv5.features.size()
-        if verbose > 1: print "   ", conv5.features
+        if verbose > 0: print("conv5_1", conv5.spatial_size.tolist(), conv5.features.size())
+        if verbose > 1: print("   ", conv5.features)
 
         conv5_2 = self.conv5_2(conv5_1)
         del conv5_1
-        if verbose > 0: print "conv5_2", conv5.spatial_size.tolist(), conv5.features.size()
-        if verbose > 1: print "   ", conv5.features
+        if verbose > 0: print("conv5_2", conv5.spatial_size.tolist(), conv5.features.size())
+        if verbose > 1: print("   ", conv5.features)
 
         up6_1 = self.up6_1(conv5_2)
         del conv5_2
-        if verbose > 0: print "up6_1", up6.spatial_size.tolist(), up6.features.size()
-        if verbose > 1: print "   ", up6.features
+        if verbose > 0: print("up6_1", up6.spatial_size.tolist(), up6.features.size())
+        if verbose > 1: print("   ", up6.features)
 
         up6_2 = self.up6_2((up6_1, conv2_2))
         del up6_1
         del conv2_2
-        if verbose > 0: print "up6_2", up6.spatial_size.tolist(), up6.features.size()
-        if verbose > 1: print "   ", up6.features
+        if verbose > 0: print("up6_2", up6.spatial_size.tolist(), up6.features.size())
+        if verbose > 1: print("   ", up6.features)
 
         conv6_1 = self.conv6_1(up6_2)
         del up6_2
-        if verbose > 0: print "conv6_1", conv6.spatial_size.tolist(), conv6.features.size()
-        if verbose > 1: print "   ", conv6.features
+        if verbose > 0: print("conv6_1", conv6.spatial_size.tolist(), conv6.features.size())
+        if verbose > 1: print("   ", conv6.features)
 
         conv6_2 = self.conv6_2(conv6_1)
         del conv6_1
-        if verbose > 0: print "conv6_2", conv6.spatial_size.tolist(), conv6.features.size()
-        if verbose > 1: print "   ", conv6.features
+        if verbose > 0: print("conv6_2", conv6.spatial_size.tolist(), conv6.features.size())
+        if verbose > 1: print("   ", conv6.features)
 
         up7_1 = self.up7_1(conv6_2)
         del conv6_2
-        if verbose > 0: print "up7_1", up7.spatial_size.tolist(), up7.features.size()
-        if verbose > 1: print "   ", up7.features
+        if verbose > 0: print("up7_1", up7.spatial_size.tolist(), up7.features.size())
+        if verbose > 1: print("   ", up7.features)
 
         up7_2 = self.up7_2((up7_1, conv1_2))
         del up7_1
         del conv1_2
-        if verbose > 0: print "up7_2", up7.spatial_size.tolist(), up7.features.size()
-        if verbose > 1: print "   ", up7.features
+        if verbose > 0: print("up7_2", up7.spatial_size.tolist(), up7.features.size())
+        if verbose > 1: print("   ", up7.features)
 
         conv7_1 = self.conv7_1(up7_2)
         del up7_2
-        if verbose > 0: print "conv7_1", conv7.spatial_size.tolist(), conv7.features.size()
-        if verbose > 1: print "   ", conv7.features
+        if verbose > 0: print("conv7_1", conv7.spatial_size.tolist(), conv7.features.size())
+        if verbose > 1: print("   ", conv7.features)
 
         conv7_2 = self.conv7_2(conv7_1)
         del conv7_1
-        if verbose > 0: print "conv7_2", conv7.spatial_size.tolist(), conv7.features.size()
-        if verbose > 1: print "   ", conv7.features
+        if verbose > 0: print("conv7_2", conv7.spatial_size.tolist(), conv7.features.size())
+        if verbose > 1: print("   ", conv7.features)
 
         conv8 = self.conv8(conv7_2)
         del conv7_2
-        if verbose > 0: print "conv8", conv8.spatial_size.tolist(), conv8.features.size()
-        if verbose > 1: print "   ", conv8.features
+        if verbose > 0: print("conv8", conv8.spatial_size.tolist(), conv8.features.size())
+        if verbose > 1: print("   ", conv8.features)
 
         act = self.act(conv8)
         del conv8
@@ -218,7 +220,7 @@ class ResNetUNet(nn.Module):
             self.wide = nn.Linear(nInputFeatures, 1)
             #self.wide_and_deep = scn.JoinTable()
             self.linear = nn.Linear(65, nClasses)
-            print "Using wide model"
+            print("Using wide model")
         else:
             self.linear = nn.Linear(64, nClasses)
 
@@ -430,4 +432,27 @@ class SuperfamilySegmenter(nn.Module):
     def forward(self,x):
         x=self.sparseModel(x)
         x=self.linear(x)
+        return x
+    
+
+class SCN3DUnet(nn.Module):
+    dimension = 3
+    reps = 1 #Conv block repetition factor
+    m = 32 #Unet number of features
+    nPlanes = [m, 2*m, 3*m, 4*m, 5*m] #UNet number of features per level
+    def __init__(self, nFeatures, nClasses=2, spatialSize=256):
+        nn.Module.__init__(self)
+        spatialSize = torch.LongTensor([spatialSize]*3)
+        self.sparseModel = scn.Sequential().add(
+           scn.InputLayer(SCN3DUnet.dimension, spatialSize, mode=3)).add(
+           scn.SubmanifoldConvolution(SCN3DUnet.dimension, nFeatures, SCN3DUnet.m, 3, False)).add(
+           UNetDropout(SCN3DUnet.dimension, SCN3DUnet.reps, SCN3DUnet.nPlanes, residual_blocks=False, dropout_p=0.5, downsample=[2,2])).add(
+           scn.BatchNormReLU(SCN3DUnet.m)).add(
+           scn.OutputLayer(SCN3DUnet.dimension))
+        self.linear = nn.Linear(SCN3DUnet.m, nClasses)
+        self.activation = nn.Softmax(dim=1)
+    def forward(self,x):
+        x=self.sparseModel(x)
+        x=self.linear(x)
+        x=self.activation(x)
         return x

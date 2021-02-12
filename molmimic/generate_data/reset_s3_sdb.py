@@ -1,3 +1,4 @@
+from __future__ import print_function
 import boto3
 import boto.sdb
 import botocore
@@ -8,8 +9,9 @@ while len(conn.get_all_domains()) > 0:
        conn.delete_domain(d.name)
 
 s3 = boto3.resource('s3', "us-east-1", config=botocore.client.Config(signature_version='s3v4'))
-buckets = [bucket for bucket in s3.buckets.all() if not bucket.name.startswith("molmimic")]
+buckets = [bucket for bucket in s3.buckets.all() if bucket.name.endswith("--files")]
 for bucket in buckets:
+    print("Removing", bucket.name)
     bucket.objects.all().delete()
     for obj in bucket.objects.all():
         obj.delete()
@@ -18,13 +20,13 @@ for bucket in buckets:
     bucket.delete()
 
 client = boto3.client('ec2', 'us-east-1')
-spots = client.describe_spot_instance_requests()
-for spot in spots["SpotInstanceRequests"]:
-    if spot["State"] == "active":
-        client.terminate_instances(InstanceIds=[spot["InstanceId"]])
-    if spot["State"] in ["open", "active"]:
-        print "Closing", spot["SpotInstanceRequestId"]
-        client.cancel_spot_instance_requests(SpotInstanceRequestIds=[spot["SpotInstanceRequestId"]])
+spots = [s for s in client.describe_spot_instance_requests()["SpotInstanceRequests"] if s["State"] in ["open", "active"]]
+for i in range(0, len(spots)+1, 50):
+    ids_ = [s["InstanceId"] for s in spots[i:i+50]]
+    spotids_ = [s["SpotInstanceRequestId"] for s in spots[i:i+50]]
+    client.terminate_instances(InstanceIds=ids_)#[spot["InstanceId"]])
+    print("Closing", spotids_)
+    client.cancel_spot_instance_requests(SpotInstanceRequestIds=spotids_) #[spot["SpotInstanceRequestId"]])
 
 response = client.describe_instances()
 for reservation in response["Reservations"]:

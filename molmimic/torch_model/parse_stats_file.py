@@ -42,12 +42,16 @@ def parse_stats_file(stats_file):
     stats = defaultdict(dict)
     for line in stats_file:
         if line.strip() == "": continue
-        if line.startswith("epoch"):
-            epoch = int(line.split(" ", 2)[1])
-            line = line.split("] ", 1)[1]
-
+        if line.startswith("Train"):
+            #epoch = int(line.split(" ", 2)[1])
+            start, line = line.split("] ", 1)
+            epoch, batch = start[8:].split("][", 1)
+            batch = int(batch.split("/",1)[0])
+            epoch = (int(epoch), batch)
+            print(epoch)
+        
         fields = line.strip().split()
-
+        print(fields)
         if fields[0].startswith("Acc"):
             stats[epoch][fields[0]] = float(fields[1][:-1])
             stats[epoch][fields[2]] = float(fields[3][:-1])
@@ -57,14 +61,14 @@ def parse_stats_file(stats_file):
             try:
                 stats[epoch][fields[0]] = float(fields[1])
                 stats[epoch][fields[0]+"_avg"] = float(fields[2][1:-1])
-            except IndexError, ValueError:
+            except (IndexError,ValueError):
                 pass
 
     return stats
 
 def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=None, metrics=None, start_epoch=0, end_epoch=None, step_epoch=1, merge_min=False, combine=False):
-    print "run"
     stats = [parse_stats_file(f) for f in stats_files]
+    print(stats)
 
     if stats_file2 is not None:
         stats2 = [parse_stats_file(f) for f in stats_file2]
@@ -79,7 +83,7 @@ def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=No
         elif isinstance(names, (list, tuple)) and len(names) != len(stats_files):
             raise RuntimeError("Names must be the same length as stats_files")
     else:
-        names = [str(i) for i in xrange(len(stats_files))]
+        names = [str(i) for i in range(len(stats_files))]
 
     if stats_file2 is not None and names2 is not None:
         if isinstance(names2, str) or (isinstance(names2, (list, tuple)) and len(names2) == 1):
@@ -90,9 +94,8 @@ def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=No
         elif isinstance(names, (list, tuple)) and len(names) != len(stats_files):
             raise RuntimeError("Names must be the same length as stats_files")
     elif stats_file2 is not None:
-        names2 = [str(i) for i in xrange(len(stats_files2))]
+        names2 = [str(i) for i in range(len(stats_files2))]
 
-    print names
     if merge_min:
         names = names[:1]
         if names2 is not None:
@@ -101,15 +104,15 @@ def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=No
     colors = flatui if len(names) <= 6 else _104_colors
 
     if metrics is None:
-        metrics = stats[0][0].keys()
+        metrics = list(stats[0][0].keys())
 
-    num_epochs = max(stats[0].keys())+1
+    num_epochs = max(stats[0].keys())[0]+1
 
-    x = range(len(stats_files))
+    x = list(range(len(stats_files)))
     #use_raw_color = len(names)<=2**len(names[0])
     if end_epoch is None or end_epoch>num_epochs:
         end_epoch = num_epochs
-    epochs = range(start_epoch, end_epoch, step_epoch)
+    epochs = list(range(start_epoch, end_epoch, step_epoch))
 
     if combine:
         pp = PdfPages('compare_all_epochs.pdf')
@@ -129,23 +132,25 @@ def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=No
         ax.set_xlabel("Epoch #")
         ax.set_ylabel("")
         if merge_min:
-            print "merging min"
+            print("merging min")
             all_y = {epoch:format_worst_meter(metric)([stat[epoch][metric] for stat in stats]) for epoch in epochs}
-            all_x, all_y = zip(*sorted(all_y.iteritems(), key=lambda x:x[0]))
-            print metric, all_y
+            all_x, all_y = list(zip(*sorted(iter(list(all_y.items())), key=lambda x:x[0])))
+            print(metric, all_y)
             ax.plot(all_y, label=names[0].format(meter=format_meter_name(metric)), color=colors[start])
             if stats2 is None:
                 start += 1
         else:
             for i, stat in enumerate(stats):
+                #for i, ((epoch, batch), val) in enumerate(stats.items()):
                 #y = [stat[epoch][metric] for epoch in epochs]
                 y=[]
-                for epoch in epochs:
-                    y.append(stat[epoch][metric])
+                for epoch, val in sorted(stat.items()):
+                    print(val)
+                    y.append(val) #stat[epoch][metric])
                 if False and use_raw_color:
                     ax.plot(y, label=names[i].format(meter=format_meter_name(metric)), color=[int(x) for x in names[i]])
                 else:
-                    print i, names[i]
+                    print(i, names[i])
                     ax.plot(y, label=names[i].format(meter=format_meter_name(metric)), color=colors[start])
                 if stats2 is None:
                      start += 1
@@ -153,7 +158,7 @@ def plot_stats(stats_files, stats_file2=None, names=None, names2=None, prefix=No
         if stats2 is not None:
             if merge_min:
                 all_y = {epoch:min(stat[epoch][metric] for stat in stats2) for epoch in epochs}
-                all_x, all_y = zip(*sorted(all_y.iteritems(), key=lambda x:x[0]))
+                all_x, all_y = list(zip(*sorted(iter(list(all_y.items())), key=lambda x:x[0])))
                 ax.plot(all_y, label=names2[0].format(meter=format_meter_name(metric)), color=colors[start], linestyle="--", alpha=0.6)
                 start += 1
             else:
@@ -252,10 +257,8 @@ def parse_args():
 
     return args
 
-print __name__
 if __name__ == "__main__":
     args = parse_args()
-    print args
     plot_stats(
         args.stats_file,
         stats_file2=args.stats_file2,
