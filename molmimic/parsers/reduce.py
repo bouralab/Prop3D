@@ -5,7 +5,7 @@ from molmimic.parsers.container import Container
 PDB_SECTIONS = [
     #Title
     "HEADER", "OBSLTE", "TITLE", "SPLT", "CAVEAT", "COMPND", "SOURCE", "KEYWDS",
-    "EXPDTA", "NUMMDL", "MDLTYP", "AUTHOR", "REVDAT", "SPRSDE", "JRNL", "REMARKS",
+    "EXPDTA", "NUMMDL", "MDLTYP", "AUTHOR", "REVDAT", "SPRSDE", "JRNL", "REMARKS", "REMARK",
 
     #Primary Structure
     "DBREF", "DBREF1", "DBREF2", "SEQADV", "SEQRES", "MODRES",

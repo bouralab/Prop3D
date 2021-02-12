@@ -133,7 +133,7 @@ class APBS(Container):
                     if "mol pqr" in line:
                         line = f"    mol pqr {self.format_in_path(None, pqr_file)}\n"
                     if "write pot" in line:
-                        line = f"    write pot {line.strip().split()[2]} {pot_path[:-4]}\n"
+                        line = f"    write pot {line.strip().split()[2]} {pot_path[:-3]}\n"
                     print(line.rstrip(), file=f2)
                     print(line.rstrip())
         else:
