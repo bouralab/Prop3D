@@ -75,13 +75,19 @@ def map_job(job, func, inputs, *args, **kwds):
     # The value for num_partitions is a tested value
     num_partitions = 100
     partition_size = int(ceil(len(inputs)/num_partitions))
-    if partition_size > 1:
+    final_loop = kwds.get("final_loop", False)
+    if (final_loop and partition_size>num_partitions) or partition_size > 1:
         RealtimeLogger.info("MAP_JOB: total: {}; paritions_size: {}".format(
             len(inputs), partition_size
         ))
         for partition in partitions(inputs, partition_size):
             job.addChildJobFn(map_job, func, partition, *args, **kwds)
+    elif final_loop:
+        kwds.pop("final_loop", None)
+        for input in inputs:
+            yield safe_call(job, func, input, *args, **kwds)
     else:
+        kwds.pop("final_loop", None)
         RealtimeLogger.info("MAP_JOB: Running: {}".format(len(inputs)))
         for sample in inputs:
             job.addChildJobFn(func, sample, *args, **kwds)
