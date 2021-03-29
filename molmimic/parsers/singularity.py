@@ -232,6 +232,7 @@ def apiSingularityCall(job,
                        stream=stream,
                        bind=bind,
                        **kwargs)
+
         else:
             out = client.execute(image=image,
                                  command=command,

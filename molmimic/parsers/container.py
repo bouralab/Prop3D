@@ -13,10 +13,10 @@ from toil.job import Job
 from molmimic.util import silence_stdout, silence_stderr
 from molmimic.util.iostore import IOStore
 
-class RealtimeLogger:
-    @staticmethod
-    def info(*args):
-        print(args)
+# class RealtimeLogger:
+#     @staticmethod
+#     def info(*args):
+#         print(args)
 
 CONTAINER_PATH = os.environ.get("CONTAINER_PATH", os.environ["HOME"])
 
@@ -154,7 +154,7 @@ class Container(object):
 
         for i, p in enumerate(self.PARAMETERS):
             if isinstance(p, str):
-                self.parameters.append(p)
+                self.parameters.append([p])
             elif isinstance(p, (list, tuple)):
                 if len(p) == 1 and isinstance(p[0], str):
                     #ignore, treat as string
@@ -235,6 +235,7 @@ class Container(object):
         assert self.job is not None
 
         parameters = self.format_parameters(args, kwds)
+        RealtimeLogger.info(parameters)
 
         image = pullContainer(self.IMAGE, pull_folder=CONTAINER_PATH)
 

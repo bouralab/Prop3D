@@ -22,13 +22,10 @@ class CATHApi(JSONApi):
         if ".pdb" in key:
             #Make sure file can open and is PDB file
             with open(file_path) as f:
-                print("Reading pdb file")
                 for line in f:
                     if line.startswith("ATOM"):
-                        print("is a pdb file", line)
                         break
                 else:
-                    print("not a pdb file")
                     raise ValueError("{} not a PDB file".format(file_path))
 
 

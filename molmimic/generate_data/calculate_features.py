@@ -22,12 +22,13 @@ from toil.realtimeLogger import RealtimeLogger
 from botocore.exceptions import ClientError
 
 class CalculateFeaturesError(RuntimeError):
-    def __init__(self, cath_domain, stage, message, errors=None, *args, **kwds):
+    def __init__(self, job, cath_domain, stage, message, errors=None, *args, **kwds):
         super().__init__(*args, **kwds)
         self.cath_domain = cath_domain
         self.stage = stage
         self.message = message
         self.errors = errors if isinstance(errors, list) else []
+        self.jobStoreName = os.path.basename(job.fileStore.jobStore.config.jobStore.split(":")[-1])
 
     def __str__(self):
         return "Error during {}: {}\nErrors:\n".format(self.stage, self.message,
@@ -40,8 +41,9 @@ class CalculateFeaturesError(RuntimeError):
         with open(fail_file, "w") as f:
             print(self.message, file=f)
             print(self.errors, file=f)
+
         store.write_output_file(fail_file,
-            "errors/"+os.path.basename(fail_file))
+            f"errors/{self.jobStoreName}/{os.path.basename(fail_file)}")
         safe_remove(fail_file)
 
 def calculate_features(job, cath_domain, cathcode, update_features=None, work_dir=None):
@@ -98,12 +100,12 @@ def calculate_features(job, cath_domain, cathcode, update_features=None, work_di
             raise
         except Exception as e:
             tb = traceback.format_exc()
-            CalculateFeaturesError(cath_domain, ext.split(".",1)[0], tb).save()
+            CalculateFeaturesError(job, cath_domain, ext.split(".",1)[0], tb).save()
             return
 
         data_stores.cath_features.write_output_file(
             feature_file, "{}_{}".format(cath_key, ext))
-        
+
         safe_remove(feature_file)
         RealtimeLogger.info("Finished features for: {}".format(feature_file))
 

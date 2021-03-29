@@ -1,10 +1,12 @@
 import os
+import sys
 import copy
 from io import StringIO
 
 import pandas as pd
 import numpy as np
 from sklearn.decomposition import PCA
+from sklearn import preprocessing
 from Bio import PDB
 from Bio.PDB.NeighborSearch import NeighborSearch
 from Bio.PDB import Selection
@@ -21,7 +23,7 @@ from molmimic.common.features import default_atom_feature_df, default_residue_fe
 class Structure(object):
     def __init__(self, path, cath_domain, input_format="pdb",
                  feature_mode="r", features_path=None, residue_feature_mode="r",
-                 reset_chain=False, volume=264):
+                 reset_chain=False, volume=256):
         self.path = path
         if not os.path.isfile(self.path):
             raise InvalidPDB("Cannot find file {}".format(self.path))
@@ -110,6 +112,9 @@ class Structure(object):
                 self.structure.get_residues()], names=('HET_FLAG', 'resi', 'ins'))
             self.residue_features = default_residue_feature_df(len(residue_index)).reindex(residue_index, axis=0)
 
+        self.atom_feature_names = copy.copy(atom_features)
+        self.residue_feature_names = copy.copy(residue_features)
+
     def __abs__(self):
         new = self.copy()
         new.atom_features = new.atom_features.abs()
@@ -148,8 +153,78 @@ class Structure(object):
     def __truediv__(self, other):
         return self.__floordiv__(other)
 
-    def copy(self):
-        return copy.copy(self)
+    def normalize_features(self, columns=None):
+        new = self.copy()
+
+        if columns is not None:
+            if not isinstance(columns, (list, tuple)):
+                columns = [columns]
+            data = new.atom_features[columns]
+        else:
+            data = new.atom_features
+
+        min_max_scaler = preprocessing.MinMaxScaler()
+        data_scaled = min_max_scaler.fit_transform(data.values)
+
+        if columns is not None:
+            new.atom_features.loc[:, columns] = data_scaled
+        else:
+            new.atom_features.loc[:] = data_scaled
+
+        return new
+
+    def copy(self, empty=False):
+        new = copy.deepcopy(self)
+        return new
+        # del new.atom_features
+        # setattr(new, "atom_features", pd.DataFrame(
+        #     np.nan if empty else np.array(copy.deepcopy(self.atom_features.values.tolist())),
+        #     index=pd.Index(copy.deepcopy(self.atom_features.index.tolist())),
+        #     columns=copy.deepcopy(self.atom_features.columns.tolist()))) #  self.atom_features.copy(deep="all") #Use deep=all to get a full eep copy, including the index
+        # # new.atom_features = new.atom_features.assign(fuck_it=np.nan)
+        # #new.atom_features.values = copy.deepcopy(new.atom_features.values)
+        # new.residue_features = self.residue_features.copy(deep="all")
+        #
+        # del new.residue_features
+        # setattr(new, "residue_features", pd.DataFrame(
+        #     np.nan if empty else np.array(copy.deepcopy(self.residue_features.values.tolist())),
+        #     index=pd.Index(copy.deepcopy(self.residue_features.index.tolist())),
+        #     columns=copy.deepcopy(self.residue_features.columns.tolist())))
+        #
+        # assert np.may_share_memory(new.atom_features, self.atom_features)
+        #new.residue_features.values = copy.deepcopy(new.residue_features.values)
+        #Make sure original files do not get overwritten
+        new.features_path = os.getcwd()
+        unique_id = int.from_bytes(os.urandom(4), sys.byteorder)
+        new.atom_features_file = os.path.join(new.features_path , f"{os.path.basename(self.atom_features_file)}_{unique_id}.h5")
+        new.residue_feature_file = os.path.join(new.features_path , f"{os.path.basename(self.atom_features_file)}_{unique_id}.h5")
+        return new
+
+    def __deepcopy__(self, memo):
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        empty = False
+        for k, v in self.__dict__.items():
+            if k == "atom_features":
+                setattr(result, "atom_features", pd.DataFrame(
+                    np.nan if empty else np.array(copy.deepcopy(self.atom_features.values.tolist())),
+                    index=pd.Index(copy.deepcopy(self.atom_features.index.tolist())),
+                    columns=copy.deepcopy(self.atom_features.columns.tolist())))
+            elif k == "residue_features":
+                setattr(result, "residue_features", pd.DataFrame(
+                    np.nan if empty else np.array(copy.deepcopy(self.residue_features.values.tolist())),
+                    index=pd.Index(copy.deepcopy(self.residue_features.index.tolist())),
+                    columns=copy.deepcopy(self.residue_features.columns.tolist())))
+            else:
+                setattr(result, k, copy.deepcopy(v, memo))
+
+        setattr(result, "features_path", os.getcwd())
+        unique_id = int.from_bytes(os.urandom(4), sys.byteorder)
+        setattr(result, "atom_features_file", os.path.join(result.features_path , f"{os.path.splitext(os.path.basename(result.atom_features_file))[0]}_{unique_id}.h5"))
+        setattr(result, "residue_feature_file", os.path.join(result.features_path , f"{os.path.splitext(os.path.basename(result.atom_features_file))[0]}_{unique_id}.h5"))
+
+        return result
 
     def get_atoms(self, include_hetatms=False, exclude_atoms=None):
         for a in self.filter_atoms(self.structure.get_atoms(), include_hetatms=include_hetatms, exclude_atoms=exclude_atoms):
@@ -206,17 +281,53 @@ class Structure(object):
 
         return path
 
-    def write_features_to_pdb(self, features=None, name=None, coarse_grain=False,
-      work_dir=None):
+    def write_features(self, features=None, coarse_grained=False, name=None, work_dir=None):
+        if work_dir is not None or name is not None:
+            if work_dir is None:
+                work_dir = self.features_path
+
+            if name is not None:
+                residue_features_file = os.path.join(work_dir, name)
+                atom_features_file = os.path.join(work_dir, name)
+            else:
+                residue_features_file = os.path.join(work_dir, os.path.basename(self.residue_features_file))
+                atom_features_file = os.path.join(work_dir, os.path.basename(self.atom_features_file))
+        else:
+            residue_features_file = self.residue_features_file
+            atom_features_file = self.atom_features_file
+
+        if features is not None:
+            if not isinstance(features, (list, tuple)):
+                features = [features]
+        else:
+            features = self.residue_feature_names if coarse_grained else self.atom_feature_names
+
+        print("Feats to save", features)
+
+        if coarse_grained:
+            self.residue_features = self.residue_features.astype(np.float64)
+            self.residue_features = self.residue_features.drop(columns=
+                [col for col in self.residue_features if col not in \
+                features]) #self.residue_feature_names])
+            self.residue_features.to_hdf(residue_features_file, "table")
+        else:
+            self.atom_features = self.atom_features.astype(np.float64)
+            self.atom_features = self.atom_features.drop(columns=
+                [col for col in self.atom_features if col not in \
+                features]) #self.atom_feature_names])
+            self.atom_features.to_hdf(atom_features_file, "table")
+
+    def write_features_to_pdb(self, features_to_use=None, name=None, coarse_grain=False,
+      work_dir=None, other=None):
         if work_dir is None:
             work_dir = os.getcwd()
 
-        if features is None:
+        if features_to_use is None:
             features = self.atom_features if not coarse_grain else \
                 self.residue_features
         else:
-            features = self.atom_features.loc[:, features] if not coarse_grain \
-                else self.residue_features.loc[:, features]
+            features = self.atom_features.loc[:, features_to_use] if not coarse_grain \
+                else self.residue_features.loc[:, features_to_use]
 
         bfactors = [a.bfactor for a in self.structure.get_atoms()]
 
@@ -234,6 +345,16 @@ class Structure(object):
         self.update_bfactors(bfactors)
 
         return outfiles
+
+    def add_features(self, coarse_grained=False, **features):
+        if coarse_grained:
+            assert [len(f)==len(self.residue_features) for f in features.values()]
+            self.residue_features = self.residue_features.assign(**features)
+            self.residue_feature_names += list(features.values())
+        else:
+            assert [len(f)==len(self.atom_features) for f in features.values()]
+            self.atom_features = self.atom_features.assign(**features)
+            self.atom_feature_names += list(features.keys())
 
     def get_residue_from_resseq(self, resseq, model=0, chain=None):
         chain = chain or self.chain

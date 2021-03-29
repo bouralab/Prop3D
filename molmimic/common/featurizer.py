@@ -24,7 +24,7 @@ from molmimic.parsers.eppic import EPPICApi, EPPICLocal
 from molmimic.common.Structure import Structure, angle_between, get_dihedral
 from molmimic.common.ProteinTables import hydrophobicity_scales
 from molmimic.common.features import atom_features, residue_features, \
-    atom_features_by_category, residue_features_by_category
+    atom_features_by_category, residue_features_by_category, default_atom_features
 
 class ProteinFeaturizer(Structure):
     def __init__(self, path, cath_domain, job, work_dir,
@@ -70,20 +70,6 @@ class ProteinFeaturizer(Structure):
             only_aa=only_aa, only_atom=only_atom,
             non_geom_features=non_geom_features,
             use_deepsite_features=use_deepsite_features)
-
-    def write_features(self, coarse_grained=False):
-        if coarse_grained:
-            self.residue_features = self.residue_features.astype(np.float64)
-            self.residue_features = self.residue_features.drop(columns=
-                [col for col in self.residue_features if col not in \
-                residue_features])
-            self.residue_features.to_hdf(self.residue_features_file, "table")
-        else:
-            self.atom_features = self.atom_features.astype(np.float64)
-            self.atom_features = self.atom_features.drop(columns=
-                [col for col in self.atom_features if col not in \
-                atom_features])
-            self.atom_features.to_hdf(self.atom_features_file, "table")
 
     def get_features_per_atom(self, residue_list):
         """Get features for eah atom, but not organized in grid"""
@@ -165,14 +151,14 @@ class ProteinFeaturizer(Structure):
       use_deepsite_features=False, warn_if_buried=False):
         """Calculate FEATUREs"""
         if self.update_features is not None:
-            for feat_type, feat_names in residue_features_categories.items():
+            for feat_type, feat_names in residue_features_by_category.items():
                 if feat_type in self.update_features:
-                    getattr(self, feat_type)(atom)
+                    getattr(self, feat_type)(residue)
                 else:
                     use_feats = [feat_name in self.update_features for feat_name \
                         in feat_names]
                     if any(use_feats):
-                        getattr(self, feat_type)(atom)
+                        getattr(self, feat_type)(residue)
             if warn_if_buried:
                 if "residue_buried" not in self.residue_features.columns:
                     is_buried = self.get_accessible_surface_area(residue, save=False)
@@ -217,17 +203,17 @@ class ProteinFeaturizer(Structure):
             self._autodock = prep.get_autodock_atom_types(self.path)
 
         try:
-            atom_type, h_bond_donor = self._autodock[atom.serial_number]
+            atom_type, h_bond_donor = self._autodock[int(atom.serial_number)]
         except KeyError:
             atom_type = "Unk_atom"
 
-        if atom_type == "  ":
+        if atom_type not in atom_features_by_category["get_atom_type"]: # == "  ":
             atom_type = "Unk_atom"
 
-        try:
-            self.atom_features.loc[atom.serial_number, atom.get_name().strip()] = 1.
-        except KeyError:
-            self.atom_features.loc[atom.serial_number, "Unk_atom"] = 1.
+        values = default_atom_features[atom_features_by_category["get_atom_type"]]
+        values[atom_type] = 1.0
+
+        self.atom_features.loc[atom.serial_number, atom_features_by_category["get_atom_type"]] = values #1.0
 
         return self.atom_features.loc[atom.serial_number,
             atom_features_by_category["get_atom_type"]]
@@ -236,10 +222,14 @@ class ProteinFeaturizer(Structure):
         elems = "CNOS"
         elem_col = "{}_elem".format(atom.element)
 
+        values = default_atom_features[atom_features_by_category["get_element_type"]]
+
         if elem_col in atom_features_by_category["get_element_type"]:
-            self.atom_features.loc[atom.serial_number, elem_col] = 1.
+            values[elem_col] = 1.0
         else:
-            self.atom_features.loc[atom.serial_number, "Unk_elem"] = 1.
+            values["Unk_elem"] = 1.0
+
+        self.atom_features.loc[atom.serial_number, atom_features_by_category["get_element_type"]] = values
 
         return self.atom_features.loc[atom.serial_number,
             atom_features_by_category["get_element_type"]]
@@ -259,50 +249,85 @@ class ProteinFeaturizer(Structure):
             return self.residue_features.loc[idx, ["vdw_radii"]]
 
     def get_charge_and_electrostatics(self, atom_or_residue, only_charge=False,
-      only_bool=False):
+      only_bool=False, calculate=True):
+
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            atom = atom_or_residue
+            return self.get_charge_and_electrostatics_for_atom(atom,
+                only_charge=only_charge, only_bool=only_bool, calculate=calculate)
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            residue = atom_or_residue
+            self.get_charge_and_electrostatics_for_residue(residue,
+                only_charge=only_charge, only_bool=only_bool, calculate=calculate)
+            return self.residue_features.loc[idx, cols]
+        else:
+            raise RuntimeError("Input must be Atom or Residue: {}".format(type(atom_or_residue)))
+
+    def get_charge_and_electrostatics_for_residue(self, atom_or_residue, only_charge=False,
+      only_bool=False, calculate=True):
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            is_atom = True
+            atom = atom_or_residue
+            residue = atom_or_residue.get_parent()
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            is_atom = False
+            residue = atom_or_residue
+        else:
+            raise RuntimeError("Input must be Atom or Residue, not {}".format(atom_or_residue))
+
         if self.update_features is not None:
             if "electrostatic_potential" not in self.update_features and \
               "is_electropositive" not in self.update_features and \
               "is_electronegative" not in self.update_features:
                  only_charge = True
+            if "get_charge_and_electrostatics" not in self.update_features:
+                calculate = False
 
-        if isinstance(atom_or_residue, PDB.Atom.Atom):
-            atom = atom_or_residue
-        elif isinstance(atom_or_residue, PDB.Residue.Residue):
-            residue = atom_or_residue
-            atoms = pd.concat([self.get_charge_and_electrostatics(
-                self._remove_altloc(a)) for a in residue], axis=0)
-            charge_value = atoms["charge"].sum()
-            electrostatic_pot_value = atoms["electrostatic_potential"].sum()
+        atoms = pd.concat([self.get_charge_and_electrostatics_for_atom(
+            self._remove_altloc(a)) for a in residue], axis=0)
+        charge_value = atoms["charge"].sum()
+        electrostatic_pot_value = atoms["electrostatic_potential"].sum()
 
-            charge = [
-                charge_value,
-                float(charge_value < 0),
-                float(charge_value > 0)]
-            cols = residue_features_by_category["get_charge_and_electrostatics"][:3]
+        charge = [
+            charge_value,
+            float(charge_value < 0),
+            float(charge_value > 0)]
+        cols = residue_features_by_category["get_charge_and_electrostatics"][:3]
+        if not only_charge:
+            charge += [
+                electrostatic_pot_value,
+                float(electrostatic_pot_value < 0)]
+            cols += residue_features_by_category["get_charge_and_electrostatics"][3:]
+
+        if only_bool:
+            charge = charge[1:3]
+            cols = cols[1:3]
             if not only_charge:
-                charge += [
-                    electrostatic_pot_value,
-                    float(electrostatic_pot_value < 0)]
-                cols += residue_features_by_category["get_charge_and_electrostatics"][3:]
+                charge += charge[4:]
+                cols += charge[4:]
 
-            if only_bool:
-                charge = charge[1:3]
-                cols = cols[1:3]
-                if not only_charge:
-                    charge += charge[4:]
-                    cols += charge[4:]
+        idx = residue.get_id()
+        self.residue_features.loc[idx, cols] = charge
+        return self.residue_features.loc[idx, cols]
 
-            idx = residue.get_id()
-            self.residue_features.loc[idx, cols] = charge
-            return self.residue_features.loc[idx, cols]
-        else:
-            raise RuntimeError("Input must be Atom or Residue: {}".format(type(atom_or_residue)))
+    def get_charge_and_electrostatics_for_atom(self, atom, only_charge=False,
+      only_bool=False, calculate=True):
+        if not isinstance(atom, PDB.Atom.Atom):
+            raise RuntimeErorr("Input must be Atom")
 
-        if not hasattr(self, "_pqr") or (not only_charge and len(list(self._pqr.values())[0])==1):
+        if self.update_features is not None:
+            if "electrostatic_potential" not in self.update_features and \
+              "is_electropositive" not in self.update_features and \
+              "is_electronegative" not in self.update_features:
+                 only_charge = True
+            if "get_charge_and_electrostatics" not in self.update_features:
+                calculate = False
+
+        self._pqr = {}
+        if calculate and not hasattr(self, "_pqr") or (not only_charge and len(list(self._pqr.values())[0])==1):
             try:
                 if only_charge:
-                    pdb2pqr = Pdb2Pqr(work_dir=self.work_dir, job=self.job)
+                    pdb2pqr = Pdb2pqr(work_dir=self.work_dir, job=self.job)
                     self._pqr = pdb2pqr.get_charge_from_pdb_file(self.path, with_charge=False)
                 else:
                     apbs = APBS(work_dir=self.work_dir, job=self.job)
@@ -320,36 +345,43 @@ class ProteinFeaturizer(Structure):
             #pdb2pqr removes alternate conformations and only uses the first
             atom_id = (atom_id[0], (atom_id[1][0], " "))
 
-        if only_charge:
-            charge_value = self._pqr.get(atom_id, np.nan)
-            electrostatic_pot_value = np.nan
-        else:
-            try:
-                charge_value, electrostatic_pot_value = self._pqr[atom_id]
-            except KeyError:
-                charge_value, electrostatic_pot_value = np.NaN, np.NaN
+        if calculate:
+            if only_charge:
+                charge_value = self._pqr.get(atom_id, np.nan)
+                electrostatic_pot_value = np.nan
+            else:
+                try:
+                    charge_value, electrostatic_pot_value = self._pqr[atom_id]
+                except KeyError:
+                    charge_value, electrostatic_pot_value = np.NaN, np.NaN
 
-        charge = [
-            charge_value,
-            float(charge_value < 0),
-            float(charge_value > 0)]
+
+            charge = [
+                charge_value,
+                float(charge_value < 0),
+                float(charge_value > 0)]
+
         cols = atom_features_by_category["get_charge_and_electrostatics"][:3]
         if not only_charge:
-            charge += [
-                electrostatic_pot_value,
-                float(electrostatic_pot_value < 0)]
+            if calculate:
+                charge += [
+                    electrostatic_pot_value,
+                    float(electrostatic_pot_value < 0)]
             cols += atom_features_by_category["get_charge_and_electrostatics"][3:]
 
         if only_bool:
-            charge = charge[1:3]
+            if calculate:
+                charge = charge[1:3]
             cols = cols[1:3]
             if not only_charge:
-                charge += charge[4:]
+                if calculate:
+                    charge += charge[4:]
                 cols += charge[4:]
 
-        charge = np.array(charge)
         idx = atom.serial_number
-        self.atom_features.loc[idx, cols] = charge
+        if calculate:
+            charge = np.array(charge)
+            self.atom_features.loc[idx, cols] = charge
 
         return self.atom_features.loc[idx, cols]
 
@@ -421,12 +453,12 @@ class ProteinFeaturizer(Structure):
         if use_atom:
             idx = atom.serial_number
             cols = atom_features_by_category["get_hydrophobicity"]
-            self.atom_features.loc[idx, cols] = hydrophobicity
+            self.atom_features.loc[idx, cols] = result
             return self.atom_features.loc[idx, cols]
         else:
             idx = residue.get_id()
             cols = residue_features_by_category["get_hydrophobicity"]
-            self.residue_features.loc[idx, cols] = hydrophobicity
+            self.residue_features.loc[idx, cols] = result
             return self.residue_features.loc[idx, cols]
 
     def get_accessible_surface_area(self, atom_or_residue, save=True):
@@ -558,13 +590,15 @@ class ProteinFeaturizer(Structure):
         col = residue.get_resname() if residue.get_resname() in PDB.Polypeptide.aa3 \
             else "Unk_element"
 
+        all_aas = PDB.Polypeptide.aa3+["Unk_element"]
+
         if is_atom:
-            self.atom_features.loc[atom.serial_number, PDB.Polypeptide.aa3] = 0.
+            self.atom_features.loc[atom.serial_number, all_aas] = 0.
             self.atom_features.loc[atom.serial_number, col] = 1.
             return self.atom_features.loc[atom.serial_number,
                 atom_features_by_category["get_residue"]]
         else:
-            self.residue_features.loc[residue.get_id(), PDB.Polypeptide.aa3] = 0.
+            self.residue_features.loc[residue.get_id(), all_aas] = 0.
             self.residue_features.loc[residue.get_id(), col] = 1.
             return self.residue_features.loc[residue.get_id(),
                 residue_features_by_category["get_residue"]]
@@ -583,6 +617,9 @@ class ProteinFeaturizer(Structure):
         if not hasattr(self, "_dssp"):
             dssp = DSSP(work_dir=self.work_dir, job=self.job)
             self._dssp = dssp.get_dssp(self.structure, self.path)
+            print(self._dssp.keys())
+
+        print(residue.get_full_id()[2:], residue.get_full_id()[2:] in self._dssp)
 
         try:
             atom_ss = self._dssp[residue.get_full_id()[2:]][2]
@@ -624,6 +661,9 @@ class ProteinFeaturizer(Structure):
     def get_deepsite_features(self, atom, calc_charge=True, calc_conservation=True):
         """Use DeepSites rules for autodock atom types
         """
+        if not isinstance(atom, PDB.Atom.Atom):
+            raise RuntimeError("Input must be Atom")
+
         if not hasattr(self, "_autodock"):
             prep = mgltools.PrepareReceptor(job=self.job, work_dir=self.work_dir)
             self._autodock = prep.get_autodock_atom_types(self.path, verify=True)
@@ -634,7 +674,7 @@ class ProteinFeaturizer(Structure):
             atom_type = "  "
 
         idx = atom.serial_number
-        cols = atom_features_by_category["get_deepsite_features"]
+        cols = atom_features_by_category["get_deepsite_features"][:5]
 
         features = np.array([ #zeros(nFeatures, dtype=bool)
             #hydrophobic
@@ -653,12 +693,12 @@ class ProteinFeaturizer(Structure):
         self.atom_features.loc[idx, cols] = features
 
         if calc_charge:
-            charge = self.get_charge_and_electrostatics(atom, only_charge=True, only_bool=True)
-            cols += charge.columns.tolist()
+            charge = self.get_charge_and_electrostatics(atom, only_charge=True, only_bool=True, calculate=False)
+            cols += charge.index.tolist()
 
         if calc_conservation:
             cons = self.get_evolutionary_conservation_score(atom, only_bool=True)
-            cols += cons.columns.tolist()
+            cols += cons.index.tolist()
 
         return self.atom_features.loc[idx, cols]
 
@@ -683,7 +723,7 @@ class ProteinFeaturizer(Structure):
           "is_conserved" not in self.update_features or \
           "eppic_entropy" not in self.update_features):
             #No need to update
-            return self.atom_features.loc[atom.serial_number, cols] if is_atom else \
+            return self.atom_features.loc[atom.serial_number, cols] if use_atom else \
                 self.residue_features.loc[idx, cols]
 
         if not hasattr(self, "_eppic"):

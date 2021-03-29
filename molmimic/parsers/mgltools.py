@@ -43,19 +43,20 @@ class MGLTools(Container):
     IMAGE = "docker://edraizen/mgltools"
 
 class PrepareReceptor(MGLTools):
+    ENTRYPOINT="/opt/mgltools/build/bin/pythonsh"
     PARAMETERS = [
         "/opt/mgltools/utilities/prepare_receptor4.py",
         ("receptor", "path:in", ["-r", "{}"]),
         ("out_file", "path:out", ["-o", "{}"]),
         (":v", "str"),
         (":A", "str"),
-        (":C", "str", "c"),
+        (":C", "store_true"),
         (":p", "str"),
         (":U", "str"),
-        (":e", "str"),
-        (":M", "str"),
+        (":e", "store_true"),
+        (":M", "store_true"),
         (":d", "str"),
-        (":w", "str")
+        (":w", "store_true")
     ]
     RETURN_FILES = True
     ARG_START = "-"
@@ -104,7 +105,7 @@ class PrepareReceptor(MGLTools):
             assert sum([len(x) for x in missing.values()])==0, "Error residues in receptor do not match residues in the generated pdbqt file. (Missing: {}; Extra: {})".format(missing, extra)
             assert pdbqt_atoms==pdb_atoms
 
-        autodock_atom_types = {atom[0]: (atom[-1], atom_type_h_bond_donor.get(atom[-1], False)) \
+        autodock_atom_types = {int(atom[0]): (atom[-1], atom_type_h_bond_donor.get(atom[-1], False)) \
             for atom in self.parse_pdbqt(pdbqt_file)}
         return autodock_atom_types
 
@@ -120,7 +121,7 @@ class PrepareReceptor(MGLTools):
                     resid = (line[21], line[17:20], line[22:27].strip()) #chain, resn, resi,
                     if not pdb:
                         charge = line[70:76]
-                        atom_type = line[77:79]
+                        atom_type = line[77:79].strip()
                         yield serial, atom_name, resid, charge, atom_type
                     else:
                         yield serial, atom_name, resid

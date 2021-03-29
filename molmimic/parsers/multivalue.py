@@ -33,8 +33,6 @@ class Multivalue(Container):
         else:
             raise RuntimeError(f"Invlaid vertices -- must be list, array, or file, not {type(coordinates)}")
 
-        print(dx_file)
-
         out_file = self(coordinates_file=coordinates_file, dx_file=dx_file,
             out_file=out_file)
 

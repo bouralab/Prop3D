@@ -4,138 +4,184 @@
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "HD"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "HS"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "C"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "A"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "N"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "NA"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "NS"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "OA"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "OS"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "F"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "MG"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "P"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "SA"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "S"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "CL"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "CA"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "MN"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "FE"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "ZN"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "BR"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "I"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "Unk_atom"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
 - get_element_type:
     - name: "C_elem"
@@ -143,96 +189,128 @@
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "N_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "O_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "S_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "H_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "F_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "MG_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "P_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "CL_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "CA_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "MN_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "FE_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "ZN_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "BR_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "I_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "Unk_elem"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
 - get_vdw:
     - name: "vdw"
@@ -240,6 +318,8 @@
       combine: mean
       residue: true
       bool: false
+      min: 1.2
+      max: 2.75
 
 - get_charge_and_electrostatics:
     - name: "charge"
@@ -247,18 +327,24 @@
       combine: mean
       residue: true
       bool: false
+      min: -1.
+      max: 1.
 
     - name: "neg_charge"
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "pos_charge"
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "electrostatic_potential"
       default: 0.
@@ -271,6 +357,8 @@
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
 - get_concavity:
     - name: "cx"
@@ -284,6 +372,8 @@
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
 - get_hydrophobicity:
     - name: "hydrophobicity"
@@ -291,24 +381,32 @@
       combine: mean
       residue: true
       bool: false
+      min: -4.5
+      max: 4.5
 
     - name: "is_hydrophobic"
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "biological_hydrophobicity"
       default: 0.
       combine: mean
       residue: true
       bool: false
+      min: -3.49
+      max: 0.60
 
     - name: "octanal_hydrophobicity"
       default: 0.
       combine: mean
       residue: true
       bool: false
+      min: -3.63
+      max: 2.09
 
 - get_accessible_surface_area:
     - name: "atom_asa"
@@ -316,18 +414,24 @@
       combine: mean
       residue: false
       bool: false
+      min: 0.
+      max: 87.11
 
     - name: "residue_rasa"
       default: 0.
       combine: mean
       residue: true
       bool: false
+      min: 104.0
+      max: 285.0
 
     - name: "residue_buried"
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
 - get_residue:
     - name: ALA
@@ -335,72 +439,96 @@
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: CYS
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: ASP
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: GLU
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: PHE
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: GLY
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: HIS
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: ILE
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: LYS
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: LEU
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: MET
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: ASN
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: PRO
       default: 0.
@@ -413,6 +541,8 @@
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: ARG
       default: 0.
@@ -425,36 +555,48 @@
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: THR
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: VAL
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: TRP
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: TYR
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: Unk_residue
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
 - get_ss:
     - name: phi
@@ -462,54 +604,72 @@
       combine: mean
       residue: true
       bool: false
+      min: -360.0
+      max: 360.0
 
     - name: phi_sin
       default: 0.
       combine: mean
       residue: true
       bool: false
+      min: -1
+      max: 1
 
     - name: phi_cos
       default: 0.
       combine: mean
       residue: true
       bool: false
+      min: -1
+      max: 1
 
     - name: psi
       default: 0.
       combine: mean
       residue: true
       bool: false
+      min: -360.0
+      max: 360.0
 
     - name: psi_sin
       default: 0.
       combine: mean
       residue: true
       bool: false
+      min: -1
+      max: 1
 
     - name: psi_cos
       default: 0.
       combine: mean
       residue: true
       bool: false
+      min: -1
+      max: 1
 
     - name: is_helix
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: is_sheet
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
     - name: Unk_SS
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.
 
 - get_deepsite_features:
     - name: "hydrophobic_atom"
@@ -517,30 +677,40 @@
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "aromatic_atom"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "hbond_acceptor"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "hbond_donor"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
     - name: "metal"
       default: 0.
       combine: max
       residue: false
       bool: true
+      min: 0.
+      max: 1.
 
 - get_evolutionary_conservation_score:
     - name: "eppic_entropy"
@@ -548,9 +718,13 @@
       combine: min
       residue: true
       bool: false
+      min: 1.
+      max: 0.
 
     - name: "is_conserved"
       default: 0.
       combine: max
       residue: true
       bool: true
+      min: 0.
+      max: 1.

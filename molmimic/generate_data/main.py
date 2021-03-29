@@ -1,5 +1,7 @@
 import os
+from datetime import datetime
 
+from molmimic.util import safe_remove
 from molmimic.util.iostore import IOStore
 from molmimic.util.cath import run_cath_hierarchy
 from molmimic.util.hdf import get_file, filter_hdf_chunks
@@ -60,6 +62,13 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
                 #Failed
                 return
 
+    if update_features is not None:
+        jobStoreName = os.path.basename(job.fileStore.jobStore.config.jobStore.split(":")[-1])
+        done_file = job.fileStore.getLocalTempFile()
+        data_stores.data_eppic_cath_features.write_output_file(done_file,
+            f"updates/{jobStoreName}/{superfamily}/{cath_domain}")
+        safe_remove(done_file)
+
 def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
   force=False, further_parallize=True):
     cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
@@ -72,6 +81,8 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
         drop_duplicates=True,
         cathcode=cathcode)["cath_domain"].tolist()
 
+
+
     if not force and update_features is None:
         #Get domians that have edge features uploaded (last feature file to be uploaded so we know its done)
         done_domains = [os.path.basename(domain).split("_")[0] for domain in \
@@ -80,6 +91,15 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
         n_domains = len(cath_domains)
         cath_domains = list(set(cath_domains)-set(done_domains))
         RealtimeLogger.info("Running {}/{} domains from {}".format(len(cath_domains), n_domains, cathcode))
+    elif update_features is not None:
+        #oldest = datetime.date(2021, 2, 9)
+        jobStoreName = os.path.basename(job.fileStore.jobStore.config.jobStore.split(":")[-1])
+        updated_domains = [cath_domain for cath_domain, last_modified in \
+            data_stores.data_eppic_cath_features.list_input_directory(
+                f"updates/{jobStoreName}/{superfamily}/", with_times=True)] # \
+                #if datetime.strptime(last_modified, '%Y-%m-%dT%H:%M:%S')<oldest]
+
+        cath_domains = list(set(cath_domains)-set(updated_domains))
     else:
         RealtimeLogger.info("Running {} domains from {}".format(len(cath_domains), cathcode))
 
@@ -116,14 +136,14 @@ def start_toil(job, cathFileStoreID, cathcode=None, update_features=None, force=
             cathcode = [cathcode]
         RealtimeLogger.info("Running sfams: {}".format(cathcode))
 
-        if update_features is None:
+        if update_features is None and not force:
             done_domains = [os.path.basename(domain).split("_")[0] for sfam in cathcode \
                 for domain in data_stores.cath_features.list_input_directory(sfam.replace(".", "/")) \
                 if domain.endswith("edges.txt.gz")]
         else:
             done_domains = None
     else:
-        if update_features is None:
+        if update_features is None and not force:
             done_domains = [os.path.basename(domain).split("_")[0] for domain in \
                 data_stores.cath_features.list_input_directory() \
                 if domain.endswith("edges.txt.gz")]

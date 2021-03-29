@@ -1,4 +1,5 @@
 import os
+import sys
 import copy
 from io import StringIO
 from collections import defaultdict
@@ -12,6 +13,10 @@ from Bio.PDB.NeighborSearch import NeighborSearch
 from molmimic.common.Structure import Structure
 from molmimic.common.ProteinTables import vdw_radii, vdw_aa_radii
 from molmimic.common.features import atom_features_by_category, number_of_features
+
+def isRotationMatrix(M):
+    I = np.identity(M.shape[0])
+    return np.all((np.matmul(M, M.T)) == I) and (np.linalg.det(M)==1)
 
 class ProteinVoxelizer(Structure):
     def __init__(self, path, cath_domain, input_format="pdb",
@@ -33,17 +38,21 @@ class ProteinVoxelizer(Structure):
         self.use_features = use_features
         self.ligand = ligand
 
-        if rotate is None:
+        if rotate is None or (isinstance(rotate, bool) and not rotate):
             self.shift_coords_to_volume_center()
             self.set_voxel_size(self.voxel_size)
         elif isinstance(rotate, str) and rotate == "pai":
             self.orient_to_pai()
             self.set_voxel_size(self.voxel_size)
-        else:
+        elif (isinstance(rotate, str) and rotate == "random") or (isinstance(rotate, bool) and rotate):
+            next(self.rotate())
+        elif isinstance(rotate, np.ndarray) and isRotationMatrix(rotate):
             next(self.rotate(rotate))
+        else:
+            raise RuntimeError("Invalid rotation option. Must be None or False for no rotation, 'pai' to orient to princple axis, 'random' for random rotation matrix, or an actual roation matrix")
 
     def voxels_from_pdb(self, autoencoder=False, only_surface=False,
-      return_voxel_map=False):
+      use_deepsite_features=False, return_voxel_map=False, return_atom2voxels=False, use_numpy=False):
         import torch
         dtypei = 'torch.cuda.LongTensor' if torch.cuda.is_available() else \
             'torch.LongTensor'
@@ -54,14 +63,28 @@ class ProteinVoxelizer(Structure):
         indices, data, truth, voxel_map, serial, bfactors = self.map_atoms_to_voxel_space(
             autoencoder=autoencoder,
             only_surface=only_surface,
-            return_voxel_map=return_voxel_map,
+            use_deepsite_features=use_deepsite_features,
+            return_voxel_map=return_voxel_map or return_atom2voxels,
             return_b=True,
-            return_serial=True
+            return_serial=True,
+            verbose=True
             )
+
+
         inputs = [
-            torch.from_numpy(indices).type(dtypei),
-            torch.from_numpy(data).type(dtype)]
-        labels = torch.from_numpy(truth).type(label_dtype)
+            torch.from_numpy(indices).type(dtypei) if not use_numpy else indices,
+            torch.from_numpy(data).type(dtype) if not use_numpy else data]
+        labels = torch.from_numpy(truth).type(label_dtype) if not use_numpy else truth
+
+        if return_atom2voxels:
+            atom2voxels = defaultdict(list)
+
+            for voxel, atoms in voxel_map.items():
+                voxel = tuple(map(int, voxel))
+                for atom in atoms:
+                    atom2voxels[atom].append(voxel)
+            return inputs, labels, atom2voxels
+
         if return_voxel_map:
             return inputs, labels, voxel_map
         return inputs, labels
@@ -110,7 +133,7 @@ class ProteinVoxelizer(Structure):
       use_deepsite_features=False, non_geom_features=False,
       only_surface=True, autoencoder=False, return_voxel_map=False,
       undersample=False,
-      return_serial=False, return_b=False, nClasses=2, simple_fft=None):
+      return_serial=False, return_b=False, nClasses=2, simple_fft=None, verbose=False):
         """Map atoms to sparse voxel space.
 
         Parameters
@@ -224,6 +247,7 @@ class ProteinVoxelizer(Structure):
 
             for atom_grid in self.get_vdw_grid_coords_for_atom(atom):
                 atom_grid = tuple(atom_grid.tolist())
+
                 try:
                     data_value = np.maximum(features, data_voxels[atom_grid])
                     data_voxels[atom_grid] = data_value
@@ -233,7 +257,9 @@ class ProteinVoxelizer(Structure):
                 if not autoencoder:
                     truth_voxels[atom_grid] = np.maximum(
                         truth_value, truth_voxels.get(atom_grid, truth_value))
+
                 voxel_map[atom_grid].append(atom.serial_number) #get_parent().get_id())
+
                 b_factors_voxels[atom_grid] = np.maximum(
                     atom.bfactor, b_factors_voxels.get(atom_grid, atom.bfactor))
                 serial_number_voxels[atom_grid].append(atom.serial_number)
@@ -258,7 +284,7 @@ class ProteinVoxelizer(Structure):
             raise
 
         if return_voxel_map:
-            outputs.append(list(voxel_map.values()))
+            outputs.append(voxel_map)
         else:
             outputs.append(None)
 
@@ -421,7 +447,7 @@ class ProteinVoxelizer(Structure):
                 else:
                     return feats
             elif self.use_features is not None:
-                feats = features[self.use_feats]
+                feats = features[self.use_features]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
@@ -556,6 +582,14 @@ class ProteinVoxelizer(Structure):
             self.atom_tree = NeighborSearch(list(self.structure.get_atoms()))
 
         return self.atom_tree.search(grid, radius, level=level)
+
+    def get_overlapping_voxels(self):
+        neighbor_atoms = self.calculate_neighbors(d_cutoff=5.0, level="A")
+        for a1, a2 in neighbor_atoms:
+            v1 = set(self.get_vdw_grid_coords_for_atom(a1))
+            v2 = set(self.get_vdw_grid_coords_for_atom(a2))
+            overlap = v1.intersection(v2)
+            yield a1, a2, overlap
 
 if __name__ == "__main__":
   import sys

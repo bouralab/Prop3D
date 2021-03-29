@@ -25,12 +25,9 @@ class APBS(Container):
         pqr_file = pdb2pqr.create_pqr(pdb_file, force_field=force_field,
             **pdb2pqr_kwds)
 
-        print(os.listdir(os.path.dirname(pqr_file)))
         apbs_in_file = f"{os.path.splitext(pdb_file)[0]}.in"
         if not pdb2pqr_kwds.get("apbs_input", False) or not os.path.isfile(apbs_in_file):
             apbs_in_file =  None
-
-        print("apbs_in_file", apbs_in_file, pdb_file, f"{os.path.splitext(pdb_file)[0]}.in")
 
         if remove_pdb:
             self.files_to_remove.append(pdb_file)
@@ -73,10 +70,7 @@ class APBS(Container):
                 except:
                     pass
             raise e
-        print(atom_pot_file)
-        print(input_file)
 
-        print()
         return atom_pot_file
 
     def get_atom_potentials_from_pqr(self, pqr_file, apbs_in_file=None, with_charge=True):
@@ -135,7 +129,6 @@ class APBS(Container):
                     if "write pot" in line:
                         line = f"    write pot {line.strip().split()[2]} {pot_path[:-3]}\n"
                     print(line.rstrip(), file=f2)
-                    print(line.rstrip())
         else:
             #Atom pot has the .txt extension
             pot_path = self.format_out_path(None, output_prefix+".txt")
