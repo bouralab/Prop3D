@@ -103,7 +103,7 @@ def parse_cath_chunk(chunk, cath_file, line_start, line_end):
                 elif field == "ENDSEG":
                     current_domain["nseg"] = nseg+1
                     append_domain(current_domain)
-                    current_domain = _current_domain
+                    current_domain = _current_domain.copy()
                     nseg += 1
                 elif field == "SRANGE":
                     m = srange_re.match(value)

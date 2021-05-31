@@ -40,10 +40,13 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
                 #Failed, do not proceed in calculating features
                 return
 
-    #Check if any feature files exist
-    feat_files = ["{}/{}_{}".format(superfamily, cath_domain, ext) for ext in \
-        ('atom.h5', 'residue.h5', 'edges.h5')]
-    feats_exist = [data_stores.cath_features.exists(f) for f in feat_files]
+    if not force:
+        #Check if any feature files exist
+        feat_files = ["{}/{}_{}".format(superfamily, cath_domain, ext) for ext in \
+            ('atom.h5', 'residue.h5', 'edges.h5')]
+        feats_exist = [data_stores.cath_features.exists(f) for f in feat_files]
+    else:
+        feats_exist = [False]
 
     RealtimeLogger.info(f"get_domain_structure_and_features FEATURES {force} {update_features}, {all(feats_exist)}")
 
@@ -120,7 +123,7 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
             except:
                 pass
 
-def start_toil(job, cathFileStoreID, cathcode=None, update_features=None, force=False):
+def start_toil(job, cathFileStoreID, cathcode=None, skip_cathcode=None, update_features=None, force=False):
     RealtimeLogger.info("started")
 
     cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
@@ -138,7 +141,7 @@ def start_toil(job, cathFileStoreID, cathcode=None, update_features=None, force=
 
         if update_features is None and not force:
             done_domains = [os.path.basename(domain).split("_")[0] for sfam in cathcode \
-                for domain in data_stores.cath_features.list_input_directory(sfam.replace(".", "/")) \
+                for domain in data_stores.cath_features.list_input_directory("/".join(sfam) if isinstance(sfam, (list,tuple)) else sfam.replace(".", "/")) \
                 if domain.endswith("edges.txt.gz")]
         else:
             done_domains = None
@@ -150,7 +153,7 @@ def start_toil(job, cathFileStoreID, cathcode=None, update_features=None, force=
         else:
             done_domains = None
 
-    if update_features is None:
+    if update_features is None and done_domains is not None:
         domains_to_run = cath_domains[~cath_domains["cath_domain"].isin(done_domains)]
     else:
         domains_to_run = cath_domains
@@ -160,10 +163,13 @@ def start_toil(job, cathFileStoreID, cathcode=None, update_features=None, force=
 
     if len(domains_to_run) > 500:
         #Start CATH hiearchy
+        RealtimeLogger.info("Starting CATH Hierachy")
         run_cath_hierarchy(job, cathcode, process_superfamily, cathFileStoreID,
-            update_features=update_features, force=force)
+            skip_cathcode=skip_cathcode, update_features=update_features, force=force)
     else:
         superfamilies = domains_to_run["cathcode"].drop_duplicates().str.replace(".", "/")
+        if skip_cathcode is not None and len(skip_cathcode) > 0:
+            superfamilies = superfamilies[~superfamilies.isin(skip_cathcode)]
         RealtimeLogger.info("Superfamilies to run: {}".format(len(superfamilies)))
         map_job(job, process_superfamily, superfamilies, cathFileStoreID,
             update_features=update_features, force=force)
@@ -178,6 +184,10 @@ if __name__ == "__main__":
     parser = Job.Runner.getDefaultArgumentParser()
     parser.add_argument(
         "-c", "--cathcode",
+        nargs='+',
+        default=None)
+    parser.add_argument(
+        "-s", "--skip_cathcode",
         nargs='+',
         default=None)
     parser.add_argument(
@@ -197,6 +207,9 @@ if __name__ == "__main__":
     if options.cathcode is not None:
         options.cathcode = [c.split(".") for c in options.cathcode]
 
+    if options.skip_cathcode is not None:
+        options.skip_cathcode = [c.replace(".", "/") for c in options.skip_cathcode if c.count(".")==3]
+
     sfam_file = os.path.abspath("cath.h5")
     if not os.path.isfile(sfam_file):
         store = IOStore.get("aws:us-east-1:molmimic-cath")
@@ -206,7 +219,7 @@ if __name__ == "__main__":
         if not workflow.options.restart:
             cathFileStoreID = workflow.importFile("file://" + os.path.abspath(sfam_file))
             job = Job.wrapJobFn(start_toil, cathFileStoreID, cathcode=options.cathcode,
-                update_features=options.features, force=options.force)
+                skip_cathcode=options.skip_cathcode, update_features=options.features, force=options.force)
             workflow.start(job)
         else:
             workflow.restart()

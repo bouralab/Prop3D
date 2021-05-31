@@ -73,24 +73,47 @@ def map_job(job, func, inputs, *args, **kwds):
     """
     # num_partitions isn't exposed as an argument in order to be transparent to the user.
     # The value for num_partitions is a tested value
+    RealtimeLogger.info("start map job")
+    print("MAP ?>??")
     num_partitions = 100
     partition_size = int(ceil(len(inputs)/num_partitions))
     final_loop = kwds.get("final_loop", False)
+    RealtimeLogger.info("start map job {} {}".format(partition_size, type(final_loop), "True" if final_loop else "False"))
+
     if (final_loop and partition_size>num_partitions) or partition_size > 1:
-        RealtimeLogger.info("MAP_JOB: total: {}; paritions_size: {}".format(
-            len(inputs), partition_size
-        ))
+        RealtimeLogger.info("Loop over {} partitions with {}".format(num_partitions, len(inputs)))
         for partition in partitions(inputs, partition_size):
             job.addChildJobFn(map_job, func, partition, *args, **kwds)
+
     elif final_loop:
-        kwds.pop("final_loop", None)
-        for input in inputs:
-            yield safe_call(job, func, input, *args, **kwds)
-    else:
-        kwds.pop("final_loop", None)
-        RealtimeLogger.info("MAP_JOB: Running: {}".format(len(inputs)))
+        RealtimeLogger.info("Loop over {} final samples in this job".format(len(inputs)))
+        if "final_loop" in kwds:
+            del kwds["final_loop"]
         for sample in inputs:
+            RealtimeLogger.info("Adding job for: {}".format(sample))
+            safe_call(job, func, sample, *args, **kwds)
+
+    else:
+        RealtimeLogger.info("Loop over {} samples in child job".format(len(inputs)))
+        if "final_loop" in kwds:
+            del kwds["final_loop"]
+        for sample in inputs:
+            RealtimeLogger.info("Adding job for: {}".format(sample))
             job.addChildJobFn(func, sample, *args, **kwds)
+    # if (final_loop and partition_size>num_partitions) or partition_size > 1:
+    #     RealtimeLogger.info("MAP_JOB: total: {}; paritions_size: {}".format(
+    #         len(inputs), partition_size))
+    #     for partition in partitions(inputs, partition_size):
+    #         job.addChildJobFn(map_job, func, partition, *args, **kwds)
+    # elif final_loop:
+    #     kwds.pop("final_loop", None)
+    #     for input in inputs:
+    #         yield safe_call(job, func, input, *args, **kwds)
+    # else:
+    #     kwds.pop("final_loop", None)
+    #     RealtimeLogger.info("MAP_JOB: Running: {}".format(len(inputs)))
+    #     for sample in inputs:
+    #         job.addChildJobFn(func, sample, *args, **kwds)
 
 def map_job_follow_ons(job, func, inputs, *args, **kwds):
     # num_partitions isn't exposed as an argument in order to be transparent to the user.
