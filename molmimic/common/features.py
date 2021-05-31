@@ -48,6 +48,9 @@ residue_features_by_category = [(list(category.keys())[0],
 residue_features_by_category = OrderedDict([rfeat for rfeat in \
     residue_features_by_category if len(rfeat[1])>0])
 
+atom_feature_aggregegation = OrderedDict([(feature["name"],feature["aggregate"]) \
+    for category in features for feature in list(category.values())[0]])
+
 def default_atom_feature_df(natoms):
     return pd.concat([default_atom_features] * natoms, axis=1).T
 

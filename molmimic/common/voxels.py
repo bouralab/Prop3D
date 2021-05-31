@@ -14,14 +14,10 @@ from molmimic.common.Structure import Structure
 from molmimic.common.ProteinTables import vdw_radii, vdw_aa_radii
 from molmimic.common.features import atom_features_by_category, number_of_features
 
-def isRotationMatrix(M):
-    I = np.identity(M.shape[0])
-    return np.all((np.matmul(M, M.T)) == I) and (np.linalg.det(M)==1)
-
 class ProteinVoxelizer(Structure):
     def __init__(self, path, cath_domain, input_format="pdb",
       volume=264, voxel_size=1.0, rotate=True, features_path=None,
-      residue_feature_mode=None, use_features=None, ligand=False):
+      residue_feature_mode=None, use_features=None, predict_features=None, ligand=False):
         super().__init__(path, cath_domain,
             input_format=input_format, feature_mode="r",
             features_path=features_path,
@@ -36,6 +32,7 @@ class ProteinVoxelizer(Structure):
         self.atom_tree = None
 
         self.use_features = use_features
+        self.predict_features = predict_features
         self.ligand = ligand
 
         if rotate is None or (isinstance(rotate, bool) and not rotate):
@@ -46,7 +43,7 @@ class ProteinVoxelizer(Structure):
             self.set_voxel_size(self.voxel_size)
         elif (isinstance(rotate, str) and rotate == "random") or (isinstance(rotate, bool) and rotate):
             next(self.rotate())
-        elif isinstance(rotate, np.ndarray) and isRotationMatrix(rotate):
+        elif isinstance(rotate, np.ndarray):
             next(self.rotate(rotate))
         else:
             raise RuntimeError("Invalid rotation option. Must be None or False for no rotation, 'pai' to orient to princple axis, 'random' for random rotation matrix, or an actual roation matrix")
@@ -132,8 +129,8 @@ class ProteinVoxelizer(Structure):
       include_full_protein=True, only_aa=False, only_atom=False,
       use_deepsite_features=False, non_geom_features=False,
       only_surface=True, autoencoder=False, return_voxel_map=False,
-      undersample=False,
-      return_serial=False, return_b=False, nClasses=2, simple_fft=None, verbose=False):
+      undersample=False, return_serial=False, return_b=False, nClasses=2,
+      simple_fft=None, verbose=False):
         """Map atoms to sparse voxel space.
 
         Parameters
@@ -149,9 +146,10 @@ class ProteinVoxelizer(Structure):
         indices : np.array((nVoxels,3))
         data : np.array((nVoxels,nFeatures))
         """
-        assert [isinstance(truth_residues, (list, tuple)), autoencoder].count(True) == 1, \
+        assert [isinstance(truth_residues, (list, tuple)), autoencoder, isinstance(self.predict_features, (list, tuple))].count(True) == 1, \
             "Only truth_residues or autoencoder can be set"
         if truth_residues is not None:
+            predicting_features = False
             if not include_full_protein:
                 atoms = sorted((a for r in truth_residues for a in r),
                     key=lambda a: a.get_serial_number())
@@ -171,6 +169,7 @@ class ProteinVoxelizer(Structure):
             nAtoms = len(atoms)
             binding_site_atoms = []
             non_binding_site_atoms = []
+            predicting_features = isinstance(self.predict_features, (list, tuple))
 
 
         nFeatures = number_of_features(
@@ -183,7 +182,7 @@ class ProteinVoxelizer(Structure):
         data_voxels = defaultdict(lambda: np.zeros(nFeatures if self.use_features is None else len(self.use_features)))
         truth_voxels = {} #defaultdict(list)
 
-        voxel_map = defaultdict(list)
+        voxel_map = {} #defaultdict(list)
 
         b_factors_voxels = {} #defaultdict(list)
         serial_number_voxels = defaultdict(list)
@@ -203,11 +202,10 @@ class ProteinVoxelizer(Structure):
             true_value_ = np.array([1.])
             neg_value_ = np.array([0.])
 
-
         for atom in atoms:
             atom = self._remove_altloc(atom)
 
-            if autoencoder:
+            if autoencoder or predicting_features:
                 truth = True
             elif truth_residues is None:
                 truth = False
@@ -242,11 +240,17 @@ class ProteinVoxelizer(Structure):
 
             features = features.astype(float)
 
-            if not autoencoder:
+            #Handle truth values if its not an autoencoder
+            if predicting_features:
+                truth_value = self.get_features_for_atom(atom, prediction=True)
+            elif truth_residues is not None:
                 truth_value = true_value_.copy() if truth else neg_value_.copy()
 
-            for atom_grid in self.get_vdw_grid_coords_for_atom(atom):
-                atom_grid = tuple(atom_grid.tolist())
+            grid_coords = [tuple(g) for g in self.get_vdw_grid_coords_for_atom(atom)]
+            voxel_map[atom.serial_number] = grid_coords
+
+            for atom_grid in grid_coords:#self.get_vdw_grid_coords_for_atom(atom):
+                #atom_grid = tuple(atom_grid.tolist())
 
                 try:
                     data_value = np.maximum(features, data_voxels[atom_grid])
@@ -258,7 +262,7 @@ class ProteinVoxelizer(Structure):
                     truth_voxels[atom_grid] = np.maximum(
                         truth_value, truth_voxels.get(atom_grid, truth_value))
 
-                voxel_map[atom_grid].append(atom.serial_number) #get_parent().get_id())
+                #voxel_map[atom_grid].append(atom.serial_number) #get_parent().get_id())
 
                 b_factors_voxels[atom_grid] = np.maximum(
                     atom.bfactor, b_factors_voxels.get(atom_grid, atom.bfactor))
@@ -275,7 +279,7 @@ class ProteinVoxelizer(Structure):
             else:
                 data = np.array(list(data_voxels.values())) #Always in same order as put in
                 if autoencoder:
-                    truth = data
+                    truth = None #data
                 else:
                     truth = np.array([truth_voxels[grid] for grid in data_voxels])
                 outputs = [np.array(list(data_voxels)), data, truth]
@@ -358,6 +362,157 @@ class ProteinVoxelizer(Structure):
             truth = np.array([truth_voxels[grid] for grid in list(data_voxels.keys())])
             return np.array(list(data_voxels)), np.array(list(data_voxels.values())), truth
 
+    def get_atoms_and_features(self, truth_residues=None,
+      include_full_protein=True, only_aa=False, only_atom=False,
+      use_deepsite_features=False, non_geom_features=False,
+      only_surface=True, autoencoder=False, return_voxel_map=False,
+      undersample=False, return_serial=False, return_b=False, nClasses=2,
+      simple_fft=None, verbose=False):
+        """Map atoms to sparse voxel space.
+
+        Parameters
+        ----------
+        truth_residues : list of Bio.PDB.Residue objects or None
+            If a binding is known, add the list of Bio.PDB.Residue objects, usually
+            obtained by Structure.align_seq_to_struc()
+        include_full_protein : boolean
+            If true, all atoms from the protein are used. Else, just the atoms from the
+            defined binding site. Only makes sense if truth_residues is not None
+        Returns
+        -------
+        indices : np.array((nVoxels,3))
+        data : np.array((nVoxels,nFeatures))
+        """
+        assert [isinstance(truth_residues, (list, tuple)), autoencoder].count(True) == 1, \
+            "Only truth_residues or autoencoder can be set"
+        if truth_residues is not None:
+            if not include_full_protein:
+                atoms = sorted((a for r in truth_residues for a in r),
+                    key=lambda a: a.get_serial_number())
+                atoms = list(self.filter_atoms(atoms))
+                binding_site_atoms = [a.get_serial_number() for a in atoms]
+                non_binding_site_atoms = []
+                nAtoms = len(atoms)
+            else:
+                atoms = list(self.get_atoms(include_hetatms=True))
+                nAtoms = len(atoms)
+                binding_site_atoms = [a.get_serial_number() for r in truth_residues for a in r]
+                non_binding_site_atoms = []
+                atoms = list(atoms)
+
+        else:
+            atoms = list(self.get_atoms(include_hetatms=True))
+            nAtoms = len(atoms)
+            binding_site_atoms = []
+            non_binding_site_atoms = []
+
+
+        nFeatures = number_of_features(
+            only_aa=only_aa,
+            only_atom=only_atom,
+            non_geom_features=non_geom_features,
+            use_deepsite_features=use_deepsite_features,
+            coarse_grained=False) if simple_fft is None else 1
+
+        atom_coords = np.zeros((len(self.atom_features), 4))
+        data = np.zeros((len(self.atom_features), nFeatures if self.use_features is None else len(self.use_features)))
+
+        if not autoencoder:
+            truth_values = np.zeros((len(self.atom_features), nClasses)) #defaultdict(list)
+
+        #voxel_map = defaultdict(list)
+
+        #b_factors_voxels = {} #defaultdict(list)
+        #serial_number_voxels = defaultdict(list)
+
+        skipped = 0
+        skipped_inside = []
+
+        if nClasses == 2:
+            true_value_ = np.array([0.,1.])
+            neg_value_ = np.array([1.,0.])
+        elif nClasses == 1:
+            true_value_ = np.array([1.])
+            neg_value_ = np.array([0.])
+        elif nClasses == "sfams":
+            raise RuntimeError("Sfams not implemented")
+        else:
+            true_value_ = np.array([1.])
+            neg_value_ = np.array([0.])
+
+
+        for i, atom in enumerate(atoms):
+            atom = self._remove_altloc(atom)
+
+            if autoencoder:
+                truth = True
+            elif truth_residues is None:
+                truth = False
+            else:
+                truth = atom.get_serial_number() in binding_site_atoms
+
+            if not truth and undersample and atom.get_serial_number() not in non_binding_site_atoms:
+                skipped += 1
+                continue
+
+            if only_surface and simple_fft is None:
+                features, is_buried = self.get_features_for_atom(
+                    atom,
+                    only_aa=only_aa,
+                    only_atom=only_atom,
+                    non_geom_features=non_geom_features,
+                    use_deepsite_features=use_deepsite_features,
+                    warn_if_buried=True)
+                if not truth and is_buried:
+                    skipped += 1
+                    skipped_inside.append((atom, features, is_buried))
+                    continue
+            elif simple_fft is not None:
+                features = self.simple_fft_scoring_features(atom, mode=simple_fft)
+            else:
+                features = self.get_features_for_atom(
+                    atom,
+                    only_aa=only_aa,
+                    only_atom=only_atom,
+                    non_geom_features=non_geom_features,
+                    use_deepsite_features=use_deepsite_features)
+
+            features = features.astype(float)
+
+            atom_coords[i] = np.concatenate((atom.coord, np.array(self.get_vdw(atom))), axis=0)
+            data[i] = features
+
+            if not autoencoder:
+                truth_value = true_value_.copy() if truth else neg_value_.copy()
+                truth_values[i] = truth_value
+
+            #voxel_map[atom_grid].append(atom.serial_number) #get_parent().get_id())
+
+            #b_factors_voxels[atom_grid] = atom.bfactor
+            #serial_number_voxels[atom_grid].append(atom.serial_number)
+
+
+        #assert len(list(data_voxels)) > 0, (self.pdb, self.chain, self.sdi, data_voxels, list(data_voxels), np.array(list(data_voxels)), skipped, nAtoms, skipped_inside)
+        atom_coords = np.stack(atom_coords)
+        data = np.stack(data)
+        outputs = None
+
+        try:
+            if truth_residues is None and not autoencoder:
+                outputs = [atom_coords, data]
+            else:
+                if autoencoder:
+                    truth = None
+                else:
+                    truth = np.stack(truth_values)
+                outputs = [atom_coords, data, truth]
+        except Exception as e:
+            print(e)
+            raise
+
+        return outputs
+
+
     def voxel_set_insection_and_difference(self, atom1, atom2):
         A = self.atom_spheres[atom1.get_serial_number()]
         B = self.atom_spheres[atom2.get_serial_number()]
@@ -378,7 +533,7 @@ class ProteinVoxelizer(Structure):
         return intersection, onlyA, onlyB
 
     def get_features_for_atom(self, atom, only_aa=False, only_atom=False,
-      non_geom_features=False, use_deepsite_features=False, warn_if_buried=False):
+      non_geom_features=False, use_deepsite_features=False, warn_if_buried=False, prediction=False):
         """Calculate FEATUREs"""
         if isinstance(atom, PDB.Atom.DisorderedAtom):
             #All altlocs have been removed so onlt one remains
@@ -388,10 +543,16 @@ class ProteinVoxelizer(Structure):
             features = self.atom_features.loc[atom.serial_number]
             is_buried = bool(features["residue_buried"])
 
-            if self.use_features is not None:
+            if self.use_features is not None or (prediction and self.predict_features is not None):
                 #Only use hand-selected features
+
+                if prediction:
+                    feat_names = self.predict_features
+                else:
+                    feat_names = self.use_features
+
                 try:
-                    feats = features[self.use_features]
+                    feats = features[feat_names]
                 except KeyError:
                     err_keys = [feat for feat in self.use_features if feat not in features.index]
                     raise KeyError("{} not in data: {}".format(err_keys, features.index))
@@ -531,7 +692,8 @@ class ProteinVoxelizer(Structure):
 
     def get_vdw_grid_coords_for_atom(self, atom):
         dist = self.get_vdw(atom)[0]
-        neighbors = self.voxel_tree.query_ball_point(atom.coord, r=dist)
+        coord = np.around(atom.coord, decimals=4)
+        neighbors = self.voxel_tree.query_ball_point(coord, r=dist)
         for idx in neighbors:
             yield self.voxel_tree.data[idx]
 
@@ -562,12 +724,21 @@ class ProteinVoxelizer(Structure):
         super().resize_volume(new_volume, shift=shift)
         self.set_voxel_size(self.voxel_size)
 
-    def set_voxel_size(self, voxel_size=None):
+    def set_voxel_size(self, voxel_size=None, full_grid=True):
         self.voxel_size = voxel_size or 1.0
 
         coords = self.get_coords()
         min_coord = np.floor(np.min(coords, axis=0))-5
         max_coord = np.ceil(np.max(coords, axis=0))+5
+
+        if full_grid:
+            min_coord_ = np.zeros(3)
+            max_coord_ = np.array([self.volume]*3)
+            assert np.any(min_coord_<=min_coord), f"Min coordinate outside grid: {min_coord} < {min_coord_}"
+            assert np.any(max_coord<=max_coord_), f"Max coordinate outside grid: {max_coord} > {max_coord_}"
+            max_coord = max_coord
+            min_coord = min_coord
+
         extent_x = np.arange(min_coord[0], max_coord[0], self.voxel_size)
         extent_y = np.arange(min_coord[1], max_coord[1], self.voxel_size)
         extent_z = np.arange(min_coord[2], max_coord[2], self.voxel_size)

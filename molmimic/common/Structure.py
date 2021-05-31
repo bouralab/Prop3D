@@ -68,22 +68,25 @@ class Structure(object):
         self.n_residue_features = len(residue_features)
         self.n_atom_features = len(atom_features)
 
-        self.features_path = os.environ.get("MOLMIMIC_FEATURES", features_path)
+        if features_path is None:
+            features_path = os.environ.get("MOLMIMIC_FEATURES", os.getcwd())
 
         if features_path.endswith("_atom.h5"):
             self.features_path = os.path.dirname(features_path)
-            self.atom_features_file = features_file
+            self.atom_features_file = features_path
             self.residue_features_file = os.path.join(self.features_path,
                 "{}_residue.h5".format(self.id))
         elif features_path.endswith("_residue.h5"):
-            self.residue_features_file = features_file
+            self.residue_features_file = features_path
             self.atom_features_file = os.path.join(self.features_path,
                 "{}_atom.h5".format(self.id))
         else:
-            self.atom_features_file = os.path.join(self.features_path,
+            self.atom_features_file = os.path.join(features_path,
                 "{}_atom.h5".format(self.id))
-            self.residue_features_file = os.path.join(self.features_path,
+            self.residue_features_file = os.path.join(features_path,
                 "{}_residue.h5".format(self.id))
+
+        self.features_path = os.path.dirname(self.atom_features_file)
 
         if not os.path.isdir(os.path.dirname(os.path.abspath(self.atom_features_file))):
             os.makedirs(os.path.abspath(os.path.dirname(self.atom_features_file)))
@@ -356,6 +359,34 @@ class Structure(object):
             self.atom_features = self.atom_features.assign(**features)
             self.atom_feature_names += list(features.keys())
 
+    def get_pdb_dataframe(self, coarse_grained=False, include_features=False):
+        if course_grained:
+            df = pd.DataFrame([
+                [
+                    "".join(map(str, residue.id[1:])),
+                    residue.get_parent().id,
+                    np.mean([a.get_bfactor() for a in residue]),  # isotropic B factor
+                    *np.mean([a.get_coord() for a in residue], axis=0)
+                ] for residue in self.structure.get_residues()],
+                columns=["residue_id", "chain", "bfactor", "occupancy", "X", "Y", "Z"])
+            if include_features:
+                df = pd.concat((df, self.residue_features), axis=1)
+        else:
+            df = pd.DataFrame([
+                [
+                    atom.serial_number,
+                    atom.get_fullname(),
+                    "".join(map(str, atom.get_parent().id[1:])),
+                    atom.get_parent().get_parent().id,
+                    atom.get_bfactor(),  # isotropic B factor
+                    *atom.coord
+                ] for atom in self.structure.get_atoms()],
+                columns=["serial_number", "atom_name", "residue_id", "chain", "bfactor",
+                "X", "Y", "Z"])
+            if include_features:
+                df = pd.concat((df, self.atom_features), axis=1)
+        return df
+
     def get_residue_from_resseq(self, resseq, model=0, chain=None):
         chain = chain or self.chain
         try:
@@ -398,7 +429,7 @@ class Structure(object):
 
     def get_mean_coord(self):
         if not self.mean_coord_updated:
-            self.mean_coord = np.mean(self.get_coords(), axis=0)
+            self.mean_coord = np.around(np.mean(self.get_coords(), axis=0), decimals=4)
             self.mean_coord_updated = True
         return self.mean_coord
 
@@ -425,7 +456,8 @@ class Structure(object):
             mean_coord = self.get_mean_coord()
             coords -= mean_coord
         if new_center is not None:
-            coords += new_center
+            coords += np.around(new_center, decimals=4)
+
         self.update_coords(coords)
         self.mean_coord_updated = False
         return np.mean(coords, axis=0)
@@ -443,7 +475,7 @@ class Structure(object):
 
     def get_coords(self, include_hetatms=False, exclude_atoms=None):
         return np.array([a.get_coord() for a in self.get_atoms(
-            include_hetatms=include_hetatms, exclude_atoms=exclude_atoms)])
+            include_hetatms=include_hetatms, exclude_atoms=exclude_atoms)]).round(decimals=4)
 
     def orient_to_pai(self, random_flip=False, flip_axis=(0.2, 0.2, 0.2)):
         self.shift_coords_to_origin()
@@ -466,13 +498,14 @@ class Structure(object):
                 M=rvs
             self.shift_coords_to_origin()
             old_coords = self.get_coords()
-            coords = np.dot(self.get_coords(), M)
+            coords = np.dot(self.get_coords(), M).round(decimals=4)
             self.update_coords(coords)
             # if rvs is None or rvs!=np.eye(3):
             #     assert not np.array_equal(old_coords, self.get_coords()), M
             self.shift_coords_to_volume_center()
             # if rvs is None or rvs!=np.eye(3):
             #     assert not np.array_equal(coords, self.get_coords()), M
+
             yield r, M
 
     def update_coords(self, coords):

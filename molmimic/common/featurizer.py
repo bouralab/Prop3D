@@ -30,7 +30,7 @@ class ProteinFeaturizer(Structure):
     def __init__(self, path, cath_domain, job, work_dir,
       input_format="pdb", force_feature_calculation=False, update_features=None, features_path=None, **kwds):
         feature_mode = "w+" if force_feature_calculation else "r"
-        if features_path is None and update_features is not None:
+        if features_path is None: # and update_features is not None:
             features_path = work_dir
         super(ProteinFeaturizer, self).__init__(
             path, cath_domain,
@@ -44,14 +44,14 @@ class ProteinFeaturizer(Structure):
         self.update_features = update_features
 
     def calculate_flat_features(self, coarse_grained=False, only_aa=False, only_atom=False,
-      non_geom_features=False, use_deepsite_features=False):
+      non_geom_features=False, use_deepsite_features=False, write=True):
         if coarse_grained:
             features = [self.calculate_features_for_residue(
                 self._remove_inscodes(r), only_aa=only_aa,
                 non_geom_features=non_geom_features,
                 use_deepsite_features=use_deepsite_features) \
                 for r in self.structure.get_residues()]
-            if self.residue_feature_mode == "w+" or self.update_features is not None:
+            if write and (self.residue_feature_mode == "w+" or self.update_features is not None):
                 self.write_features(coarse_grained=True)
             return features, self.residue_features_file
         else:
@@ -60,7 +60,7 @@ class ProteinFeaturizer(Structure):
                 only_atom=only_atom, non_geom_features=non_geom_features,
                 use_deepsite_features=use_deepsite_features) \
                 for atom in self.structure.get_atoms()]
-            if self.atom_feature_mode == "w+" or self.update_features is not None:
+            if write and (self.atom_feature_mode == "w+" or self.update_features is not None):
                 self.write_features()
             return features, self.atom_features_file
 
