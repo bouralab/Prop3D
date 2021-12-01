@@ -140,7 +140,7 @@ class MODELLER(Container):
             return None
 
         best_model = min(results["scores"], key=lambda x: x["score"])
-        best_pdb = os.path.join(self.work_dir, best_model["name"])
+        best_pdb = os.path.join(self.work_dir, os.path.basename(best_model["name"]))
         assert os.path.isfile(best_pdb)
 
         #Remove other lower scoring models
@@ -159,6 +159,11 @@ class MODELLER(Container):
         self.is_local = True
         if hasattr(self, "running_automodel") and self.running_automodel:
             modeller_file = self.make_modeller_file()
+            if len(args) >= 1:
+                args = [modeller_file]+args[1:]
+            kwds["modeller_file"] = modeller_file
+        elif hasattr(self, "running_modloop") and self.running_modloop:
+            modeller_file = self.make_loop_modeller_file()
             if len(args) >= 1:
                 args = [modeller_file]+args[1:]
             kwds["modeller_file"] = modeller_file
@@ -200,7 +205,7 @@ class MODELLER(Container):
             num_models=num_models, extra_modeller_code=ca_model_text,
             automodel_command="CaModel", return_best=return_best, clean=2 if clean else 0)
 
-    def mutate_structure(template_pdb, mutants, chain=None, num_models=5, return_best=True, clean=True):
+    def mutate_structure(self, template_pdb, mutants, chain=None, num_models=5, return_best=True, clean=True):
         if chain is None:
             chain = get_first_chain(template_pdb)
 
@@ -237,6 +242,66 @@ class MODELLER(Container):
         return self.automodel(template_id, target_id, pir_file,
             num_models=num_models, extra_modeller_code=ca_model_text,
             automodel_command="CaModel", return_best=return_best, clean=2 if clean else 0)
+
+    def model_loops(self, template_pdb, loops, ss_restraints=None, sequences=None, chain=None, num_models=5, return_best=True, clean=True):
+        if chain is None:
+            chain = get_first_chain(template_pdb)
+
+        if chain is None:
+            raise ValueError("Invalid PDB")
+
+        self.template_pdb = template_pdb
+        self.loops = loops
+        self.ss_restraints = ss_restraints
+        self.num_models = num_models
+        self.prefix = os.path.splitext(os.path.basename(template_pdb))[0]
+        self.target_id = f"{self.prefix}_target"
+
+
+        self.pir_file = None
+        if sequences is not None:
+            template_pdb = f"{self.prefix}_template"
+            shutil.copy(self.template_pdb, f"{template_pdb}.pdb")
+            self.pir_file = self.make_pir(template_pdb, chain, sequences[0],
+                self.target_id, chain, sequences[1])
+            self.template_pdb = template_pdb
+
+
+        modeller_file = self.make_loop_modeller_file()
+
+        self.running_modloop = True
+        with silence_stdout(), silence_stderr():
+            outputs = self(modeller_file=modeller_file)
+        self.running_modloop = False
+
+        #target_id = os.path.splitext(os.path.basename(template_pdb))[0]
+
+        try:
+            with open(os.path.join(self.work_dir, "{}.dope_scores".format(self.target_id))) as fh:
+                dope_scores = json.load(fh)
+        except (IOError, FileNotFoundError):
+            raise RuntimeError("Error running modeller, no dope score file found")
+
+        if return_best:
+            output = self.select_best_model(dope_scores)
+
+            files_to_remove = []
+            clean = int(clean)
+            if clean>0:
+                files_to_remove.append(modeller_file)
+                files_to_remove += glob.glob(os.path.join(self.work_dir,
+                    "{}.*".format(self.target_id)))
+            if clean>1:
+                files_to_remove += glob.glob(os.path.join(self.work_dir,
+                        "{}.*".format(self.template_pdb)))
+            files_to_remove = set(files_to_remove)
+            files_to_remove -= set([output])
+        else:
+            output = dope_scores
+
+        #safe_remove(files_to_remove)
+
+        return output
 
     def make_pir(self, template_id, template_chain, template_seq, target_id,
       target_chain, target_seq):
@@ -285,4 +350,128 @@ class MODELLER(Container):
 
             f.write(_modeller_text)
 
+        return modeller_file
+
+    def make_loop_modeller_file(self):
+        """Modified from modloop"""
+        residue_range = []
+        for start, stop in self.loops:
+            residue_range.append("           self.residue_range"
+                                 "('%s:%s', '%s:%s')," % (*start, *stop))
+        residue_range = "\n".join(residue_range)
+
+        alpha_range = []
+        beta_range = []
+        if self.ss_restraints is not None:
+            for ss_type, start, stop in self.ss_restraints:
+                if ss_type == "E":
+                    beta_range.append("           self.residue_range"
+                                         "('%s:%s', '%s:%s')," % (*start, *stop))
+                else:
+                    alpha_range.append("           self.residue_range"
+                                         "('%s:%s', '%s:%s')," % (*start, *stop))
+        alpha_range = "\n".join(alpha_range)
+        beta_range = "\n".join(beta_range)
+
+        template_pdb = self.template_pdb
+        target_id = self.target_id
+        modeller_file = os.path.join(self.work_dir, "run_modloop_{}.py".format(
+            self.prefix))
+        work_dir = self.work_dir
+
+        if self.pir_file is not None:
+            pir_file = self.format_in_path(None, self.pir_file)
+
+        with open(modeller_file, "w") as f:
+            f.write("""
+# Run this script with something like
+#    python loop.py N > N.log
+# where N is an integer from 1 to the number of models.
+#
+# ModLoop does this for N from 1 to 300 (it runs the tasks in parallel on a
+# compute cluster), then returns the single model with the best (lowest)
+# value of the Modeller objective function.
+
+import sys, os, json
+
+# to get different starting models for each task
+taskid = int(sys.argv[1]) if len(sys.argv) > 1 else 5
+
+os.chdir('{work_dir}')
+
+from modeller import *
+from modeller.automodel import *
+
+env = environ()
+env.io.hydrogen = env.io.hetatm = env.io.water = True
+env.io.atom_files_directory = ['{work_dir}', os.getcwd()]
+
+class MyLoop(loopmodel):
+    def special_patches(self, aln):
+        # Rename both chains and renumber the residues in each
+        self.rename_segments(segment_ids=[c.name for c in aln[self.sequence].chains])
+
+    def select_loop_atoms(self):
+        rngs = (
+{residue_range}
+        )
+        for rng in rngs:
+            if len(rng) > 30:
+                raise ModellerError("loop too long")
+        s = selection(rngs)
+        if len(s.only_no_topology()) > 0:
+            raise ModellerError("some selected residues have no topology")
+        return s
+
+    def special_restraints(self, aln):
+        rsr = self.restraints
+        for a in (
+{alpha_range}
+        ):
+            rsr.add(secondary_structure.alpha(a))
+        for b in (
+{beta_range}
+        ):
+            rsr.add(secondary_structure.strand(b))
+""".format(**locals()))
+            if self.pir_file is None:
+                f.write("""
+m = MyLoop(env, inimodel='{template_pdb}',
+    sequence='{target_id}',
+    assess_methods=(assess.DOPE),
+    loop_assess_methods=(assess.DOPE)
+)
+""".format(**locals()))
+            else:
+                f.write("""
+m = MyLoop(env, alnfile = '{pir_file}',
+    knowns = '{template_pdb}',
+    sequence = '{target_id}',
+    assess_methods=(assess.DOPE),
+    loop_assess_methods=(assess.DOPE)
+)
+m.starting_model= 1
+m.ending_model  = 1
+""".format(**locals()))
+
+            f.write("""m.loop.md_level = refine.slow
+m.loop.starting_model = 1
+m.loop.ending_model = taskid
+m.make()
+
+results = {{"scores":[], "errors":[]}}
+results["scores"] = [{{
+    "name": x["name"],
+    "score":x["DOPE score"]}} for x in m.loop.outputs if x['failure'] is None]
+results["errors"] = [{{
+    "name": x["name"],
+    "score":str(x["failure"])}} for x in m.loop.outputs if x['failure'] is not None]
+if len(results["scores"]) == 0:
+    del results["scores"]
+if len(results["errors"]) == 0:
+    del results["errors"]
+
+with open("{target_id}.dope_scores", "w") as fh:
+    json.dump(results, fh)
+""".format(**locals()))
         return modeller_file
