@@ -73,15 +73,6 @@ class ProteinVoxelizer(Structure):
             torch.from_numpy(data).type(dtype) if not use_numpy else data]
         labels = torch.from_numpy(truth).type(label_dtype) if not use_numpy else truth
 
-        if return_atom2voxels:
-            atom2voxels = defaultdict(list)
-
-            for voxel, atoms in voxel_map.items():
-                voxel = tuple(map(int, voxel))
-                for atom in atoms:
-                    atom2voxels[atom].append(voxel)
-            return inputs, labels, atom2voxels
-
         if return_voxel_map:
             return inputs, labels, voxel_map
         return inputs, labels
