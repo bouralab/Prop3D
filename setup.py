@@ -13,6 +13,7 @@ packages = [
     "molmimic.generate_data",
     "molmimic.parsers",
     "molmimic.parsers.CNS-Templates",
+    "molmimic.parsers.superpose",
     "molmimic.torch_model",
     "molmimic.util",
     "molmimic.visualize",

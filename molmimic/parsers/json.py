@@ -2,12 +2,16 @@ import os
 import json
 from shutil import copyfileobj
 from functools import partial
-
+import urllib.request
 import requests
-#from joblib import Memory
-#memory = Memory(os.getcwd(), verbose=0)
+from contextlib import closing
 
-from toil.realtimeLogger import RealtimeLogger
+#from toil.realtimeLogger import RealtimeLogger
+
+class RealtimeLogger:
+    #staticmethod
+    def info(*args, **kwds):
+        print(args, kwds)
 
 class WebService(object):
     def __init__(self, base_url, store, work_dir=None, download=True, clean=True, max_attempts=2):
@@ -155,11 +159,18 @@ class WebService(object):
         RealtimeLogger.info("Downloading {}".format(url))
 
         try:
-            with requests.get(url, stream=True) as r, open(fname, 'wb') as f:
-                RealtimeLogger.info("Donwlaod step 1")
-                r.raw.read = partial(r.raw.read, decode_content=True)
-                copyfileobj(r.raw, f)
-                RealtimeLogger.info("Donwlaod step 2")
+            if url.startswith("http"):
+                with requests.get(url, stream=True) as r, open(fname, 'wb') as f:
+                    RealtimeLogger.info("Donwlaod step 1")
+                    r.raw.read = partial(r.raw.read, decode_content=True)
+                    copyfileobj(r.raw, f)
+                    RealtimeLogger.info("Donwlaod step 2")
+            elif url.startswith("ftp"):
+                with closing(urllib.request.urlopen(url)) as r, open(fname, 'wb') as f:
+                    copyfileobj(r, f)
+            else:
+                raise RuntimeError(f"Invalid protocol for {url}")
+
         except Exception as e:
             RealtimeLogger.info("API Download Error {}: {}".format(type(e), e))
             return False

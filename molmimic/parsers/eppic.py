@@ -14,6 +14,9 @@ try:
 except ImportError:
     from pandas.api.types import infer_dtype
 
+from Bio import AlignIO
+from Bio.Emboss.Applications import NeedleCommandline
+
 from molmimic.util.iostore import IOStore
 from molmimic.util import natural_keys, reset_ip
 from molmimic.parsers.json import JSONApi
@@ -101,9 +104,9 @@ class EPPICApi(JSONApi):
                 pass
 
         try:
-            RealtimeLogger.info("Start line {}".format(line))
+            RealtimeLogger.info("Start {} line {}".format(key, line))
             result = json.loads(line)
-            RealtimeLogger.info("Result {}".format(result))
+            RealtimeLogger.info("Result {} {}".format(key, result))
             if len(result) == 1 and isinstance(result[0], dict) and "uid" in result[0]:
                 rerun = True
         except (SystemExit, KeyboardInterrupt):
@@ -111,7 +114,9 @@ class EPPICApi(JSONApi):
         except:
             import traceback
             tb = traceback.format_exc()
-            RealtimeLogger.info("Failed {}".format(tb))
+            if "JSON" in tb:
+                RealtimeLogger.info("Failed {} Not found JSON error".format(key))
+            RealtimeLogger.info("Failed {} {}".format(key, tb))
             rerun = True
 
         return rerun
@@ -241,6 +246,54 @@ class EPPICApi(JSONApi):
         entropy_scores = defaultdict(lambda: maxEntropy, zip(
             residueInfo.pdbResidueNumber, residueInfo.entropyScore))
         return entropy_scores
+
+    # def process_obsolete(self):
+    #     parser = PDB.PDBParser()
+    #     pdbl = PDBList()
+    #
+    #     old_pdb_file = pdbl.retrieve_pdb_file(self.pdb.upper(), file_format="pdb", obsolete=True)
+    #     old_structure = parser.get_structure(old_pdb_file, "")
+    #     old_seq = {chain.id:"".join(PDB.Polypeptide.three_to_one(r.resname) for r in \
+    #         chain.get_residues() if r.get_id()[0] == " ") for chain in old_structure.get_chains()}
+    #
+    #     if not hasattr(self, "obsolete"):
+    #         self.obsolete = pd.read_csv("https://ftp.wwpdb.org/pub/pdb/data/status/obsolete.dat",
+    #             skiprows=2, header=None, delim_whitespace=True, names=
+    #                 ["0", "date", "old", "new1", "new2", "new3"], engine="python")
+    #
+    #     scores = {k:None for k in old_seq.keys()}
+    #
+    #     superceded_pdbs = self.obsolete[self.obsolete["old"]==self.pdb.upper()]
+    #     if len(superceded_pdbs) == 0:
+    #         return None
+    #
+    #     superceded_pdbs = superceded_pdbs.iloc[0][["new1", "new2", "new3"]]
+    #     for new_pdb in superceded_pdbs:
+    #         if new_pdb is None or new_pdb == float("nan"): continue
+    #
+    #         new_pdb_file = pdbl.retrieve_pdb_file(new_pdb, file_format="pdb", obsolete=True)
+    #         new_structure = parser.get_structure(new_pdb_file, "")
+    #         new_seq = {chain.id:"".join(PDB.Polypeptide.three_to_one(r.resname) for r in \
+    #             chain.get_residues() if r.get_id()[0] == " ") for chain in new_structure.get_chains()}
+    #
+    #         for chain1, seq1 in old_seq.items():
+    #             for chain2, seq2 in new_seq.items():
+    #                 alignments = pairwise2.align.globalms(seq1, seq2, 5, -4, -10, -1,
+    #                                   penalize_end_gaps=False, one_alignment_only=True)
+    #
+    #                 if scores[chain1] is None or alignments[0].score > scores[chain1][0].score:
+    #                     scores[chain1] = (alignments[0], new_pdb, chain2)
+    #
+    #     eppic_for_pdb = {}
+    #     for _, new_pdb, _ in scores:
+    #         if new_pdb not in eppic_for_pdb:
+    #             eppic_for_pdb[new_pdb] = EPPICApi(new_pdb, self.eppic_store, self.pdbe_store,
+    #                 use_representative_chains=self.use_representative_chains,
+    #                 work_dir=self.work_dir, download=self.download, clean=self.clean,
+    #                 max_attempts=self.max_attempts):
+    #
+    #
+
 
 class EPPICLocal(Container):
     IMAGE = "docker://edraizen/eppic"

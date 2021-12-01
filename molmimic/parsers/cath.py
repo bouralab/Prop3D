@@ -4,7 +4,7 @@ import yaml
 import pandas as pd
 
 from molmimic.generate_data import data_stores
-from molmimic.parsers.json import JSONApi
+from molmimic.parsers.json import JSONApi, WebService
 from molmimic.parsers.container import Container
 
 class CATHApi(JSONApi):
@@ -115,7 +115,7 @@ class CATHApi(JSONApi):
 
     def get_superfamily_sequences(self, superfamily):
         superfamily = self.fix_superfamily(superfamily)
-        return self.ftp.get("api/rest/sequence-data/sequence-by-superfamily/" + \
+        return self.ftp.get("sequence-data/sequence-by-superfamily/" + \
             "cath-superfamily-seqs-{}.fa".format(superfamily))
 
     def get_superfamily_clusters(self, superfamily):
@@ -149,7 +149,7 @@ class CATHApi(JSONApi):
         superfamily = self.fix_superfamily(superfamily)
         return self.get("api/rest/superfamily/{}/ec".format(superfamily))
 
-class CATHFTP(JSONApi):
+class CATHFTP(WebService):
     def __init__(self, cath_store=None, work_dir=None, download=True, max_attempts=2):
         if cath_store is None:
             cath_store = data_stores.cath_api_service

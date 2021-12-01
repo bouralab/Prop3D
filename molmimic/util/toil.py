@@ -115,6 +115,53 @@ def map_job(job, func, inputs, *args, **kwds):
     #     for sample in inputs:
     #         job.addChildJobFn(func, sample, *args, **kwds)
 
+def map_job_rv(job, func, inputs, *args, **kwds):
+    """
+    Spawns a tree of jobs to avoid overloading the number of jobs spawned by a single parent.
+    This function is appropriate to use when batching samples greater than 1,000.
+
+    :param JobFunctionWrappingJob job: passed automatically by Toil
+    :param function func: Function to spawn dynamically, passes one sample as first argument
+    :param list inputs: Array of samples to be batched
+    :param list args: any arguments to be passed to the function
+    """
+    # num_partitions isn't exposed as an argument in order to be transparent to the user.
+    # The value for num_partitions is a tested value
+    RealtimeLogger.info("start map job")
+    print("MAP ?>??")
+    num_partitions = 100
+    partition_size = int(ceil(len(inputs)/num_partitions))
+    final_loop = kwds.get("final_loop", False)
+    RealtimeLogger.info("start map job {} {}".format(partition_size, type(final_loop), "True" if final_loop else "False"))
+
+    promises = []
+
+    if (final_loop and partition_size>num_partitions) or partition_size > 1:
+        RealtimeLogger.info("Loop over {} partitions with {}".format(num_partitions, len(inputs)))
+        for partition in partitions(inputs, partition_size):
+            rv = job.addChildJobFn(map_job, func, partition, *args, **kwds).rv()
+            promises.append(rv)
+
+    elif final_loop:
+        RealtimeLogger.info("Loop over {} final samples in this job".format(len(inputs)))
+        if "final_loop" in kwds:
+            del kwds["final_loop"]
+        for sample in inputs:
+            RealtimeLogger.info("Adding job for: {}".format(sample))
+            rv = safe_call(job, func, sample, *args, **kwds)
+            promises.append(rv)
+
+    else:
+        RealtimeLogger.info("Loop over {} samples in child job".format(len(inputs)))
+        if "final_loop" in kwds:
+            del kwds["final_loop"]
+        for sample in inputs:
+            RealtimeLogger.info("Adding job for: {}".format(sample))
+            rv = job.addChildJobFn(func, sample, *args, **kwds).rv()
+            promises.append(rv)
+
+    return promises
+
 def map_job_follow_ons(job, func, inputs, *args, **kwds):
     # num_partitions isn't exposed as an argument in order to be transparent to the user.
     # The value for num_partitions is a tested value
@@ -151,27 +198,27 @@ def loop_job(job, func, inputs, *args, cores=1, mem="2G", **kwds):
     [None for _ in loop_job_rv(job, func, inputs, *args, cores=cores, mem=mem, **kwds)]
     return
 
-def map_job_rv(job, func, inputs, *args, **kwds):
-    """
-    Spawns a tree of jobs to avoid overloading the number of jobs spawned by a single parent.
-    This function is appropriate to use when batching samples greater than 1,000.
-
-    :param JobFunctionWrappingJob job: passed automatically by Toil
-    :param function func: Function to spawn dynamically, passes one sample as first argument
-    :param list inputs: Array of samples to be batched
-    :param list args: any arguments to be passed to the function
-    """
-    # num_partitions isn't exposed as an argument in order to be transparent to the user.
-    # The value for num_partitions is a tested value
-    num_partitions = 100
-    partition_size = int(ceil(len(inputs)/num_partitions))
-    if partition_size > 1:
-        promises = [job.addChildJobFn(map_job, func, partition, *args, **kwds).rv() \
-            for partition in partitions(inputs, partition_size)]
-    else:
-        promises = [job.addChildJobFn(func, sample, *args, **kwds).rv() for sample in inputs]
-
-    return promises
+# def map_job_rv(job, func, inputs, *args, **kwds):
+#     """
+#     Spawns a tree of jobs to avoid overloading the number of jobs spawned by a single parent.
+#     This function is appropriate to use when batching samples greater than 1,000.
+#
+#     :param JobFunctionWrappingJob job: passed automatically by Toil
+#     :param function func: Function to spawn dynamically, passes one sample as first argument
+#     :param list inputs: Array of samples to be batched
+#     :param list args: any arguments to be passed to the function
+#     """
+#     # num_partitions isn't exposed as an argument in order to be transparent to the user.
+#     # The value for num_partitions is a tested value
+#     num_partitions = 100
+#     partition_size = int(ceil(len(inputs)/num_partitions))
+#     if partition_size > 1:
+#         promises = [job.addChildJobFn(map_job, func, partition, *args, **kwds).rv() \
+#             for partition in partitions(inputs, partition_size)]
+#     else:
+#         promises = [job.addChildJobFn(func, sample, *args, **kwds).rv() for sample in inputs]
+#
+#     return promises
 
 def map_job_to_pandas(job, func, inputs, *args, **kwds):
     # num_partitions isn't exposed as an argument in order to be transparent to the user.
@@ -192,17 +239,16 @@ def pandas_concat(job, df_promises):
     return pd.concat(df_promises, axis=0)
 
 def map_job_rv_list(promises, *path):
-    for p in promises:
-        if p is None:
+    for rv in promises:
+        if rv is None:
             continue
-        rv = p.rv()
+        #rv = p.rv()
         if isinstance(rv, list) and len(rv) > 0:
-            for p1 in map_job_rv_list(rv):
-                if p1 is not None:
-                    yield p1
-        else:
-            if p is not None:
-                yield p
+            for rv1 in map_job_rv_list(rv):
+                if rv1 is not None:
+                    yield rv1
+        elif rv is not None:
+            yield rv
 
 def finish_group(job, key, store):
     work_dir = job.fileStore.getLocalTempDir()

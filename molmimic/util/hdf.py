@@ -119,3 +119,34 @@ def make_h5_tables(files, iostore):
             df.to_hdf(str(f+".new"), "table", format="table",
                 table=True, complevel=9, complib="bzip2", min_itemsize=1024)
         iostore.write_output_file(f+".new", f)
+
+def split_df(df, cluster_key, split_size=0.8):
+    clusters = df.groupby(cluster_key)
+    sorted_cluster_indices = list(sorted(clusters.indices.keys()))
+
+    ideal_set1_size = int(clusters.ngroups*split_size)
+
+    last_size = [None, None]
+    while True:
+        set1_clusters = sorted_cluster_indices[:ideal_set1_size]
+        set1 = [idx for cluster in set1_clusters for idx in clusters.get_group(cluster).index] #.indices[cluster]]
+        size_pct = len(set1)/(len(df))
+        print("size", len(set1), len(df), size_pct, ideal_set1_size)
+        if size_pct in last_size:
+            break
+        if size_pct > split_size+.01:
+            ideal_set1_size -= 1
+        elif size_pct < split_size-.01:
+            ideal_set1_size += 1
+        else:
+            break
+
+        last_size[0] = last_size[1]
+        last_size[1] = size_pct
+
+    set1 = list(sorted(set1))
+    set1 = df.index.isin(set1)
+    set2 = ~set1
+
+    df1, df2 = df.loc[set1], df.loc[set2]
+    return df1, df2

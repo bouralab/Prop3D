@@ -156,6 +156,116 @@ def run_cath_hierarchy(job, cathcode, func, cathFileStoreID, *args, **kwds):
 
     del cathcodes
 
+def run_cath_hierarchy_h5(job, cathcode, func, path, *args, **kwds):
+    RealtimeLogger.info("Run Hierachy: {}".format(cathcode))
+    work_dir = job.fileStore.getLocalTempDir()
+
+    skip_cathcode = kwds.get("skip_cathcode", None)
+    further_parallelize = kwds.get("further_parallelize", True)
+    level = kwds.get("level", 4)
+
+    if isinstance(cathcode, (int, float, str)):
+        #Start with Class if given int, float, or string
+        try:
+            cathcode = [int(cathcode)]
+        except ValueError:
+            if isinstance(cathcode, str):
+                if cathcode in ["None", "all"]:
+                    #Start from the top
+                    cathcode = []
+                elif "." in cathcode:
+                    parts = cathcode.split(".")
+                    _cathcode = []
+                    for p in parts:
+                        try:
+                            _cathcode.append(int(p))
+                        except ValueError:
+                            raise ValueError("Invaid cathcode: {}".format(cathcode))
+                    cathcode = _cathcode
+                else:
+                    raise ValueError("Invaid cathcode: {}".format(cathcode))
+            else:
+                raise ValueError("Invaid cathcode: {}".format(cathcode))
+    elif isinstance(cathcode, (list, tuple)):
+        if len(cathcode)>1 and isinstance(cathcode[0], (list, tuple)):
+            #Multiple CATH codes
+            RealtimeLogger.info("Run Mult Hierachy")
+            map_job(job, run_cath_hierarchy, cathcode, func, path, *args, **kwds)
+            return
+        if len(cathcode)==1 and isinstance(cathcode[0], (list, tuple)):
+            run_cath_hierarchy(job, cathcode[0], func, path, *args, **kwds)
+            return
+        elif len(cathcode)==1 and cathcode[0] in [None, "None", "all"]:
+            cathcode = []
+        else:
+            #This is correct, e.g.
+            #    Full cath code: [2., 40., 60., 10.]
+            #    Jast class: [2.]
+            #    or all superfamilies: []
+            RealtimeLogger.info("Run correct Hierachy: {}".format(cathcode))
+            try:
+                cathcode = list(map(int, cathcode))
+                RealtimeLogger.info("Run correct fixed Hierachy: {}".format(cathcode))
+            except ValueError:
+                raise ValueError("Invaid cathcode: {}".format(cathcode))
+
+    elif cathcode is None:
+        #Start from the top
+        cathcode = []
+    else:
+        raise ValueError("Invaid cathcode: {}".format(cathcode))
+
+    RealtimeLogger.info("Running cathcodexx: {}".format(cathcode))
+
+    cath_names = ["class", "architechture", "topology", "homology"]
+    if len(cathcode) < level:
+        cath_file = h5pyd.File(path, 'r', cache=False)
+
+        RealtimeLogger.info("Loading cathcide {}".format(cathcode))
+        cathcode = dict(zip(cath_names, cathcode))
+        RealtimeLogger.info("Loading cathcide 2 {}".format(cathcode))
+        RealtimeLogger.info("Using logger {}".format(RealtimeLogger.getLogger()))
+
+        cathcodes = pd.DataFrame(
+            [c[1:].split("/") for c in cath_file["/"+"/".join(cathcode)].keys()],
+            columns=cath_names[:len(cathcode)+1])
+
+    else:
+        cathcodes = pd.DataFrame([cathcode], columns=cath_names)
+
+    if cathcodes.shape[1] < level:
+        map_job(job, run_cath_hierarchy, cathcodes.values.tolist(), func,
+            path, *args, **kwds)
+    else:
+        RealtimeLogger.info("Running sfam {}".format(cathcodes))
+        RealtimeLogger.info("Running sfam {}".format(cathcode))
+
+        sfams = (cathcodes.astype(int).astype(str)+"/").sum(axis=1).str[:-1]
+
+        if skip_cathcode is not None and len(skip_cathcode)==0:
+            skip_cathcode = sfams[~sfams.isin(skip_cathcode)]
+
+        try:
+            del kwds["skip_cathcode"]
+        except KeyError:
+            pass
+
+        sfams = sfams.tolist()
+        RealtimeLogger.info("Running sfam {}".format(sfams))
+        RealtimeLogger.info("Running func {}".format(func))
+        kwds.pop("further_parallelize", None)
+        kwds.pop("level", None)
+        if "cathCodeStoreID" in kwds:
+            del kwds["cathCodeStoreID"]
+        RealtimeLogger.info("Running map job {}".format(map_job))
+        RealtimeLogger.info("Using logger {}".format(id(RealtimeLogger.getLogger())))
+
+        RealtimeLogger.info("Successors0: {}".format(list(job.description.allSuccessors())))
+        map_job(job, func, sfams, cathFileStoreID, *args, **kwds)
+        RealtimeLogger.info("Successors1: {}".format(list(job.description.allSuccessors())))
+
+    del cathcodes
+
 def download_cath_domain(cath_domain, sfam_id=None, work_dir=None):
     """Download CATH domain from CATh API. Raises KeyError is cath_domain doesn't
     exist"""
