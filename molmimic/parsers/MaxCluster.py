@@ -1,25 +1,26 @@
 import os
+import re
 import shutil
 import tempfile
-import shutil
-import re
 from math import ceil
+import multiprocessing
 from io import StringIO
 
 from joblib import Parallel, delayed
 import pandas as pd
 
 from molmimic.parsers.container import Container
+from molmimic.parsers.superpose import TMAlign
 from molmimic.util import safe_remove
 from molmimic.util.toil import partitions, map_job, map_job_rv, map_job_rv_list, loop_job_rv
 from molmimic.util.iostore import IOStore
 from molmimic.util.hdf import get_file
 
-from toil.realtimeLogger import RealtimeLogger
 from toil.fileStores import FileID
+from toil.realtimeLogger import RealtimeLogger
 
 def start_one_vs_all_jobs(job, file_list, C=1, P=10, intermediate_file_store=None, further_parallelize=True, cores=1, mem="72G", memory="72G", **kwds):
-    work_dir = job.fileStore.getLocalTempDir()
+    work_dir = kwds["work_dir"] = kwds.get("work_dir", job.fileStore.getLocalTempDir())
     if not isinstance(file_list, (list, tuple)):
         file_list_file = get_file(job, "file_list", file_list, work_dir=work_dir, cache=True)
         with open(file_list_file) as fh:
@@ -27,28 +28,31 @@ def start_one_vs_all_jobs(job, file_list, C=1, P=10, intermediate_file_store=Non
     else:
         pdbs = file_list
 
-    pdbs = list(enumerate(pdbs))[:-1]
+    pdbs_to_run = [(i, pdb) for i, pdb in enumerate(pdbs) if not os.path.isfile(os.path.join(work_dir,
+        f"{os.path.splitext(os.path.basename(pdb))[0]}.dist"))]
+    #pdbs = list(enumerate(pdbs))
+
+
+
+    assert cores == 1, "Cores why"
 
     if not further_parallelize or cores > 1:
         #Run sequentially or parallelize via joblib if multiple cores
         RealtimeLogger.info("Starting distributed start_one_vs_all_jobs 222 loop")
-        dist_files = list(loop_job_rv(job, one_vs_all, pdbs, file_list,
+        distance_promises = list(loop_job(job, one_vs_all, pdbs_to_run, pdbs,
             intermediate_file_store=intermediate_file_store,
             cores=cores, memory=memory, **kwds))
     else:
         #Parallelize with toil
         RealtimeLogger.info("Starting distributed start_one_vs_all_jobs 222 parallel")
-        map_job(job, one_vs_all, pdbs, file_list,
+        distance_promises = map_job(job, one_vs_all, pdbs_to_run, pdbs,
             intermediate_file_store=intermediate_file_store,
             cores=cores, memory=mem, **kwds) #list(enumerate(file_list))
-    return #job.addFollowOnJobFn(cluster_from_distances, file_list, dist_files,
-        #C=C, P=P, intermediate_file_store=intermediate_file_store, cores=cores,
-        #mem=mem, **kwds).rv()
+    return job.addFollowOnJobFn(cluster_from_distances, file_list,
+        C=C, P=P, intermediate_file_store=intermediate_file_store, cores=cores,
+        mem=mem, **kwds).rv()
 
-def one_vs_all(job, exp_pdb, file_list, *args, distance="auto", work_dir=None, intermediate_file_store=None, cores=20, memory="72G", **kwds):
-    if cores == 1:
-        return _one_vs_all(job, exp_pdb, file_list, *args, distance=distance, work_dir=work_dir,
-            intermediate_file_store=intermediate_file_store, memory=memory, **kwds)
+def one_vs_all(job, exp_pdb, file_list, *args, distance="auto", work_dir=None, intermediate_file_store=None, cores=1, memory="72G", **kwds):
 
     if not isinstance(file_list, (list, tuple)):
         file_list_file = get_file(job, "file_list", file_list, work_dir=work_dir, cache=True)
@@ -64,34 +68,46 @@ def one_vs_all(job, exp_pdb, file_list, *args, distance="auto", work_dir=None, i
         if len(exp_pdb) == 2:
             in_all_vs_all = True
             exp_index, curr_pdb = exp_pdb
+            exp_index = int(exp_index)
+            RealtimeLogger.info(f"Exp index saves {exp_index}; len pdbs {len(all_pdbs)} {all_pdbs[exp_index]} {curr_pdb}")
+
         else:
             raise RuntimeError("Must be path to pdb or (experent number, path)")
     else:
+        assert 0, "WHY THH"
         try:
             exp_index = all_pdbs.index(exp_pdb)
         except IndexError:
             exp_index = None
 
-    if exp_index is not None and file_list[exp_index] == exp_pdb:
+    RealtimeLogger.info(f"Exp index is {exp_index}; len all_pdbs {len(all_pdbs)}")
+    if exp_index is not None and all_pdbs[exp_index] == curr_pdb:
         #Only perform comparisons for indexes exp_index+1 or higher
         pdbs = all_pdbs[exp_index+1:]
     else:
+        assert 0, "Why here"
         pdbs = all_pdbs
+
+    RealtimeLogger.info(f"Testong PDBS {len(pdbs)}")
+
+    if cores == 1:
+        return _one_vs_all(job, exp_pdb, pdbs, *args, distance=distance, work_dir=work_dir,
+            intermediate_file_store=intermediate_file_store, memory=memory, **kwds)
 
     # num_partitions = 100 #cores-1
     # partition_size = int(ceil(len(pdbs)/num_partitions))
-    partition_size = 1000
-    num_partitions = int(ceil(len(pdbs)/partition_size))
-    pdb_partitions = list(partitions(pdbs, partition_size))
-
-    RealtimeLogger.info("Npartitions {}/{}; {}".format(len(pdbs), len(all_pdbs), len(pdb_partitions)))
-
-    return Parallel(n_jobs=cores-2)(
-        delayed(_one_vs_all)(None, exp_pdb, part, *args, distance=distance,
-        full_file_list=all_pdbs, work_dir=work_dir,
-        intermediate_file_store=intermediate_file_store, num_partition=i,
-        total_partitions=num_partitions, **kwds) \
-            for i, part in enumerate(pdb_partitions))
+    # partition_size = 1000
+    # num_partitions = int(ceil(len(pdbs)/partition_size))
+    # pdb_partitions = list(partitions(pdbs, partition_size))
+    #
+    # RealtimeLogger.info("Npartitions {}/{}; {}".format(len(pdbs), len(all_pdbs), len(pdb_partitions)))
+    #
+    # return Parallel(n_jobs=cores-2)(
+    #     delayed(_one_vs_all)(None, exp_pdb, part, *args, distance=distance,
+    #     full_file_list=all_pdbs, work_dir=work_dir,
+    #     intermediate_file_store=intermediate_file_store, num_partition=i,
+    #     total_partitions=num_partitions, **kwds) \
+    #         for i, part in enumerate(pdb_partitions))
 
 def _one_vs_all(job, exp_pdb, file_list, *args, distance="auto", num_partition=None, total_partitions=None, work_dir=None, intermediate_file_store=None, memory="72G", **kwds):
     if work_dir is None:
@@ -104,53 +120,98 @@ def _one_vs_all(job, exp_pdb, file_list, *args, distance="auto", num_partition=N
     kwds.pop("cores", None)
 
     RealtimeLogger.info("Start partition {} with {} pdbs".format(num_partition, len(file_list)))
-    mc = MaxCluster(job=job, work_dir=work_dir, intermediate_file_store=intermediate_file_store, **kwds.get("container_kwds", {}))
+
+    tmalign = TMAlign(job=job, work_dir=work_dir, intermediate_file_store=intermediate_file_store, cleanup_when_done=False, **kwds.get("container_kwds", {}))
+    results = []
+    for i, fixed_pdb in enumerate(file_list):
+        RealtimeLogger.info(f"Running {i}/{len(file_list)} in {exp_pdb}")
+        try:
+            output = tmalign(moving_pdb_file=exp_pdb[1], fixed_pdb_file=fixed_pdb)
+        except RuntimeError as e:
+            if "'return_code': -8" in str(e):
+                try:
+                    output = tmalign(moving_pdb_file=exp_pdb[1], fixed_pdb_file=fixed_pdb)
+                except RuntimeError:
+                    continue
+        rmsd, moving_tm_score, fixed_tm_score = tmalign.get_rmsd_tm(include_fixed=True, stdout=output)
+        results.append([
+            os.path.basename(exp_pdb[1])[:7],
+            os.path.basename(fixed_pdb)[:7],
+            rmsd,
+            moving_tm_score,
+            fixed_tm_score])
+
+    results = pd.DataFrame(results, columns=["PDB1", "PDB2", "rmsd", "TM-Score1", "TM-Score2"])
+
+    results_file = os.path.join(work_dir, "{}.dist".format(
+        os.path.splitext(os.path.basename(exp_pdb[1]))[0]))
+    RealtimeLogger.info(f"Saving to {results_file}")
+    results.to_csv(results_file)
+
+    return
+
+    #mc = MaxCluster(job=job, work_dir=work_dir, intermediate_file_store=intermediate_file_store, **kwds.get("container_kwds", {}))
 
 
-    try:
-        return mc.one_vs_all(exp_pdb, file_list, *args, distance=distance, num_partition=num_partition, total_partitions=total_partitions, cores=1, **kwds)
-    except (SystemExit, KeyboardInterrupt):
-        raise
-    except:
-        store = IOStore.get(intermediate_file_store)
-        import traceback as tb
-        message = tb.format_exc()
-        errfile = mc.tempfile()
-        with open(errfile, "w") as f:
-            print(message, file=f)
-            print("", file=f)
-            print(exp_pdb, file=f)
-            print("", file=f)
-            print("vs", file=f)
-            print(len(file_list), file=f)
-            for pdb in file_list:
-                print(pdb, file=f)
+    # try:
+    #     return mc.one_vs_all(exp_pdb, file_list, *args, distance=distance, num_partition=num_partition, total_partitions=total_partitions, cores=1, **kwds)
+    # except (SystemExit, KeyboardInterrupt):
+    #     raise
+    # except:
+    #     raise
+    #     store = IOStore.get(intermediate_file_store)
+    #     import traceback as tb
+    #     message = tb.format_exc()
+    #     errfile = mc.tempfile()
+    #     with open(errfile, "w") as f:
+    #         print(message, file=f)
+    #         print("", file=f)
+    #         print(exp_pdb, file=f)
+    #         print("", file=f)
+    #         print("vs", file=f)
+    #         print(len(file_list), file=f)
+    #         for pdb in file_list:
+    #             print(pdb, file=f)
+    #
+    #     exp_pdb =  exp_pdb[1] if isinstance(exp_pdb, (list, tuple)) else exp_pdb
+    #     key = "maxcluster_intermediates/dist/FAILED_{}_part{}of{}.dist".format(
+    #         os.path.splitext(os.path.basename(exp_pdb))[0],
+    #         num_partition, total_partitions)
+    #     store.write_output_file(errfile, key)
+    #
+    #     safe_remove(errfile)
+    #
+    #     RealtimeLogger.info("MaxCluster FAILED {}".format(key))
+    #
+    #     del store, key, errfile
 
-        exp_pdb =  exp_pdb[1] if isinstance(exp_pdb, (list, tuple)) else exp_pdb
-        key = "maxcluster_intermediates/dist/FAILED_{}_part{}of{}.dist".format(
-            os.path.splitext(os.path.basename(exp_pdb))[0],
-            num_partition, total_partitions)
-        store.write_output_file(errfile, key)
-
-        safe_remove(errfile)
-
-        RealtimeLogger.info("MaxCluster FAILED {}".format(key))
-
-        del store, key, errfile
-
-
-
-
-def cluster_from_distances(job, file_list, distance_file, C=1, P=10, work_dir=None, intermediate_file_store=None, cores=20, memory="72G", **kwds):
+def cluster_from_distances(job, pdbs, C=1, P=10, work_dir=None, intermediate_file_store=None, cores=20, memory="72G", **kwds):
     if work_dir is None:
         work_dir = job.fileStore.getLocalTempDir()
+
+    distances = None
+    for pdb in pdbs[:-1]:
+        distance_file = os.path.join(work_dir, f"{os.path.splitext(os.path.basename(pdb))[0]}.dist")
+        df = pd.read_csv(distance_file)
+        if distances is None:
+            distances = df
+        else:
+            distances = pd.concat((distances,df), axis=0)
+
+    all_dist = os.path.join(work_dir, "all_distances.csv")
+    distances.to_csv(all_dist)
+
+    if C==0:
+        return all_dist
+
     mc = MaxCluster(job=job, work_dir=work_dir, intermediate_file_store=intermediate_file_store)
-    return mc.cluster_from_distances(file_list, distance_file, C=C, P=P, **kwds)
+    return mc.cluster_from_distances(file_list, distances, C=C, P=P, **kwds)
 
 class MaxCluster(Container):
     IMAGE = 'docker://edraizen/maxcluster:latest'
     RULES = {"make_file_list": "make_file_list"}
     ARG_START = "-"
+    ENTRYPOINT = "/opt/maxcluster/maxcluster"
     PARAMETERS = [
         #Structure Comparison
         (":l", "make_file_list"),
@@ -211,7 +272,13 @@ class MaxCluster(Container):
         (":i", "str"),
     ]
 
-    def create_output_name(self, kwds, prefix="MaxCluster", suffix=".log"):
+    @classmethod
+    def create_output_name(cls, kwds, prefix="MaxCluster", suffix=".log", work_dir=None):
+        if work_dir is None and isinstance(cls, MaxCluster):
+            work_dir = cls.work_dir
+        elif work_dir is None:
+            work_dir = ""
+
         fname = prefix
         for k, v in kwds.items():
             if k in ["e", "p", "F", "M"] or (k=="l" and isinstance(v, str) and os.path.isfile(v)):
@@ -225,7 +292,7 @@ class MaxCluster(Container):
             else:
                 fname += "_{}={}".format(k, v)
         fname += suffix
-        return os.path.join(self.work_dir, fname)
+        return os.path.join(work_dir, fname)
 
     def __call__(self, *args, **kwds):
         log_file = self.create_output_name(kwds, suffix="")
@@ -250,9 +317,11 @@ class MaxCluster(Container):
             try:
                 output = super().__call__(*args, **kwds)
             except (RuntimeError, AssertionError) as e:
-                with open(self.log_file) as f:
-                    msg = f.read()
-                raise RuntimeError("MaxCluster Failed {}: {}".format(str(e), msg))
+                if "chown: changing ownership" not in str(e):
+                    with open(self.log_file) as f:
+                        msg = f.read()
+                    raise RuntimeError("MaxCluster Failed {}: {}".format(str(e), msg))
+
 
         else:
             #Container handles exception
@@ -274,11 +343,13 @@ class MaxCluster(Container):
             raise RuntimeError("file_list must be list, tuple, or path to file")
 
         self.n_structures = len(file_list)
+        self.file_list = updated_file_list
 
         with open(updated_file_list, "w") as new:
             for pdb in file_list:
-                print(self.format_in_path(None, pdb.rstrip(),
-                    move_files_to_work_dir=False), file=new)
+                RealtimeLogger.info(f"Adding {pdb}")
+                #print(self.format_in_path(None, pdb.rstrip(),
+                #    move_files_to_work_dir=False), file=new)
 
         if format_in_path:
             return self.format_in_path(None, updated_file_list)
@@ -298,21 +369,22 @@ class MaxCluster(Container):
         RealtimeLogger.info("Start all vs all: distributed={}".format(distributed))
 
         if distributed:
-            RealtimeLogger.info("MAKING FILE LIST")
-            file_list_key = "maxcluster_intermediates/dist/file_list"
-
-            save_file_list = True
-            if self.intermediate_file_store.exists(file_list_key):
-                file_list = self.tempfile()
-                self.intermediate_file_store.read_input_file(file_list_key, file_list)
-                save_file_list = False
-            else:
-                file_list = self.make_file_list(None, file_list, format_in_path=False)
-
-            if save_file_list:
-                self.intermediate_file_store.write_output_file(file_list, file_list_key)
-
-            RealtimeLogger.info("DONE MAKING FILE LIST {}".format(file_list))
+            # RealtimeLogger.info("MAKING FILE LIST")
+            # file_list_key = "maxcluster_intermediates/dist/file_list"
+            #
+            # if self.intermediate_file_store is not None:
+            #     save_file_list = True
+            #     if self.intermediate_file_store.exists(file_list_key):
+            #         file_list = self.tempfile()
+            #         self.intermediate_file_store.read_input_file(file_list_key, file_list)
+            #         save_file_list = False
+            #     else:
+            #         file_list = self.make_file_list(None, file_list, format_in_path=False)
+            #
+            #     if save_file_list:
+            #         self.intermediate_file_store.write_output_file(file_list, file_list_key)
+            #
+            # RealtimeLogger.info("DONE MAKING FILE LIST {}".format(file_list))
 
             if False: #cores > 1:
                 #Parallelize with joblib
@@ -335,18 +407,46 @@ class MaxCluster(Container):
 
             else:
                 #Parallelize through toil
-                file_list = self.job.fileStore.writeGlobalFile(file_list)
-                RealtimeLogger.info("Starting distributed toil start_one_vs_all_jobs")
+                kwds["C"] = C
+                kwds["P"] = P
+                kwds["distance"] = distance
+                kwds["log"] = kwds.get("log", True)
+                kwds["work_dir"] = self.work_dir
+                kwds["intermediate_file_store"] = self.intermediate_file_store
+                kwds["cores"] = cores
+
                 if kwds.get("further_parallize", True):
-                    return self.job.addChildJobFn(start_one_vs_all_jobs, file_list, C=C,
-                        P=P, distance=distance,
-                        intermediate_file_store=self.intermediate_file_store.store_string,
-                        cores=cores, mem=memory, memory="1G", **kwds).rv()
+                    kwds["mem"] = memory
+                    kwds["memory"] = "1G"
                 else:
-                    return self.job.addChildJobFn(start_one_vs_all_jobs, file_list, C=C,
-                        P=P, distance=distance,
-                        intermediate_file_store=self.intermediate_file_store.store_string,
-                        cores=cores, memory=memory, **kwds).rv()
+                    kwds["memory"] = memory
+
+                RealtimeLogger.info("Starting distributed toil start_one_vs_all_jobs")
+
+                if not hasattr(self.job, "fileStore"):
+                    from toil.common import Toil
+                    from toil.job import Job
+                    options = Job.Runner.getDefaultOptions("./toilWorkflowRun")
+                    options.logLevel = "INFO"
+                    options.clean = "always"
+                    #options.targetTime = 1
+                    options.retryCount = 0
+                    options.logFile = "out.txt"
+                    if options.provisioner == None:
+                        options.realTimeLogging = True
+                        options.maxLocalJobs = "96" #str(cores) if cores > 1 else str(multiprocessing.cpu_count())
+                        options.maxNodes = "96" #str(cores) if cores > 1 else str(multiprocessing.cpu_count())
+                    kwds["cores"] = 1
+
+                    with Toil(options) as workflow:
+                        job = Job.wrapJobFn(start_one_vs_all_jobs, file_list, **kwds)
+                        distance_file = workflow.start(job)
+
+                    return distance_file
+                else:
+                    assert 0, "Start here??"
+                    file_list = self.job.fileStore.writeGlobalFile(file_list)
+                    return self.job.addChildJobFn(start_one_vs_all_jobs, file_list, **kwds).rv()
         else:
             kwds["C"] = C
             kwds["P"] = P
@@ -367,30 +467,33 @@ class MaxCluster(Container):
             output = self(**kwds)
 
             if isinstance(output, dict):
-                for arg, path in output.items():
-                    RealtimeLogger.info("OUTFILE: {}={}".format(arg, path))
-                    try:
-                        self.intermediate_file_store.write_output_file(path,
-                            "maxcluster_intermediates/{}/{}".format(arg, os.path.basename(path)))
-                    except:
-                        output[arg] = self.job.fileStore.writeGlobalFile(path)
+                if self.intermediate_file_store is not None or hasattr(self.job, "fileStore"):
+                    for arg, path in output.items():
+                        RealtimeLogger.info("OUTFILE: {}={}".format(arg, path))
+                        try:
+                            self.intermediate_file_store.write_output_file(path,
+                                "maxcluster_intermediates/{}/{}".format(arg, os.path.basename(path)))
+                        except:
+                            output[arg] = self.job.fileStore.writeGlobalFile(path)
             elif isinstance(output, (list, tuple)):
-                for i, path in enumerate(output[:]):
-                    try:
-                        self.intermediate_file_store.write_output_file(path,
-                            "maxcluster_intermediates/{}/{}".format(arg, ps.path.basename(path)))
-                    except:
-                        output[i] = self.job.fileStore.writeGlobalFile(path)
+                if self.intermediate_file_store is not None or hasattr(self.job, "fileStore"):
+                    for i, path in enumerate(output[:]):
+                        try:
+                            self.intermediate_file_store.write_output_file(path,
+                                "maxcluster_intermediates/{}/{}".format(arg, ps.path.basename(path)))
+                        except:
+                            output[i] = self.job.fileStore.writeGlobalFile(path)
 
 
             return output
 
     def one_vs_all(self, exp_pdb, file_list, distance="auto", save_distance_file=False, num_partition=None, total_partitions=None, full_file_list=None, cores=1, **kwds):
-        if cores > 1:
-            RealtimeLogger.info("Will start multprocess")
-            #Run with multiple processes
-            return one_vs_all(self.job, exp_pdb, file_list, distance=distance, work_dir=self.work_dir,
-                intermediate_file_store=self.intermediate_file_store.store_string, cores=cores, **kwds)
+        # if cores > 1:
+        #     RealtimeLogger.info("Will start multprocess")
+        #     #Run with multiple processes
+        #     return one_vs_all(self.job, exp_pdb, file_list, distance=distance, work_dir=self.work_dir,
+        #         intermediate_file_store=self.intermediate_file_store.store_string if self.intermediate_file_store is not None else None,
+        #         cores=cores, **kwds)
 
         in_all_vs_all = False
         if isinstance(exp_pdb, (list, tuple)):
@@ -405,29 +508,33 @@ class MaxCluster(Container):
         if not os.path.isfile(exp_pdb):
             return
 
-        if not isinstance(file_list, (list, tuple)):
-            fname = "file_list"+"_{}".format(num_partition) if num_parition is not None else ""
-            file_list = get_file(self.job, fname, file_list, work_dir=self.work_dir, cache=True)
-            with open(file_list) as fh:
-                file_list = [pdb.rstrip() for pdb in fh]
-
-        if full_file_list is not None and not isinstance(full_file_list, (list, tuple)):
-            full_fname = "full_file_list"+"_{}".format(num_partition) if num_parition is not None else ""
-            file_list = get_file(self.job, full_fname, file_list, work_dir=self.work_dir, cache=True)
-            with open(full_file_list) as fh:
-                full_file_list = [pdb.rstrip() for pdb in fh]
+        # if not isinstance(file_list, (list, tuple)):
+        #     fname = "file_list"+"_{}".format(num_partition) if num_partition is not None else ""
+        #     file_list = get_file(self.job, fname, file_list, work_dir=self.work_dir, cache=True)
+        #     with open(file_list) as fh:
+        #         file_list = [pdb.rstrip() for pdb in fh]
+        #
+        # if full_file_list is not None and not isinstance(full_file_list, (list, tuple)):
+        #     full_fname = "full_file_list"+"_{}".format(num_partition) if num_partition is not None else ""
+        #     file_list = get_file(self.job, full_fname, file_list, work_dir=self.work_dir, cache=True)
+        #     with open(full_file_list) as fh:
+        #         full_file_list = [pdb.rstrip() for pdb in fh]
 
         if exp_index is None:
             try:
                 exp_index = file_list.index(exp_pdb)
             except (IndexError, ValueError):
-                exp_index = -1
+                pass
 
         kwds["e"] = exp_pdb
         if num_partition is None and in_all_vs_all and file_list[exp_index] == exp_pdb:
             #Only perform comparisons for indexes exp_index+1 or higher
             RealtimeLogger.info("MaxCLuster {}: {} {}".format(exp_index, len(file_list[exp_index+1:]), len(file_list)))
+            if len(file_list[exp_index+1:]) == 0:
+                #It is the last one, no need to compare against itself
+                return
             kwds["l"] = file_list[exp_index+1:]
+            file_list[exp_index+1:]
         else:
             kwds["l"] = file_list
 
@@ -435,8 +542,25 @@ class MaxCluster(Container):
             if num_partition is not None:
                 #Make sure log files have different names
                 kwds["log"] = self.create_output_name(kwds, suffix=".log{}".format(num_partition))
+                RealtimeLogger.info(f"LOGFILE {kwds['log']}")
+                if os.path.isfile(kwds["log"]):
+                    return
             else:
-                kwds["log"] = True
+                kwds["log"] = self.create_output_name(kwds, suffix=".log") #True
+                RealtimeLogger.info(f"LOGFILE {kwds['log']}")
+                if os.path.isfile(kwds["log"]):
+                    return
+
+            if num_partition is not None:
+                dist_file_name = os.path.join(self.work_dir, "{}_part{}of{}.dist".format(
+                    os.path.splitext(os.path.basename(exp_pdb))[0],
+                    num_partition, total_partitions))
+            else:
+                dist_file_name = os.path.join(self.work_dir, "{}.dist".format(
+                    os.path.splitext(os.path.basename(exp_pdb))[0]))
+
+            if os.path.isfile(dist_file_name):
+                return dist_file_name
 
         if "R" in kwds:
             del kwds["R"]
@@ -477,27 +601,26 @@ class MaxCluster(Container):
                     distances = self.get_distances(log_file_name, file_list,
                         use_rmsd=use_rmsd)
 
-                dist_file_name = self.tempfile()
-                if num_partition is not None:
-                    dist_key = "maxcluster_intermediates/dist/{}_part{}of{}.dist".format(
-                        os.path.splitext(os.path.basename(exp_pdb))[0],
-                        num_partition, total_partitions)
-                else:
-                    dist_key = "maxcluster_intermediates/dist/{}.dist".format(exp_index)
 
-                distances.to_csv(dist_file_name, header=False, index=False)
-                self.intermediate_file_store.write_output_file(dist_file_name, dist_key)
 
-                safe_remove(dist_key)
-                safe_remove(log_file_name)
+                distances.to_csv(dist_file_name, index=False)
+                RealtimeLogger.info(f"distances are {distances}")
+                RealtimeLogger.info(f"Saved to {dist_file_name}")
+                if self.intermediate_file_store is not None:
+                    dist_key = f"maxcluster_intermediates/dist/{os.path.basename(dist_file_name)}"
+                    self.intermediate_file_store.write_output_file(dist_file_name, dist_key)
 
-                return None
+                #safe_remove(dist_key)
+                #safe_remove(log_file_name)
+
+                return dist_file_name
 
             except (SystemExit, KeyboardInterrupt):
                 if not hasattr(self.log_file, 'read'):
                     save_remove(self.log_file)
                 raise
             except:
+                raise
                 import traceback as tb
                 msg = tb.format_exc()
                 RealtimeLogger.info("FAILED MAXCLUSTER All VS ALL: {}".format(msg))
@@ -509,43 +632,43 @@ class MaxCluster(Container):
         pass
 
     def cluster_from_distances(self, file_list, distance_file, C=1, P=10, distributed=False, **kwds):
-        if isinstance(distance_file, (list, tuple)):
-            #Flatten promised return values
-            from toil.fileStores import FileID
-            distance_fileIDs = list(map_job_rv_list(distance_file))
-            if len(distance_fileIDs) == 0:
-                #Using intermediate_file_store
-                use_intermediate_file_store = True
-                distance_fileIDs = self.intermediate_file_store.list_input_directory("maxcluster_intermediates/dist")
-
-            distance_file = os.path.join(self.work_dir, "MaxCluster-all_vs_all.dist")
-            with open(distance_file, "w") as fh:
-                if isinstance(distance_file[0], FileID):
-                    for fileID in distance_fileIDs:
-                        shutil.copyfileobj(
-                            self.job.fileStore.readGlobalFileStream(fileID), fh)
-                        self.job.fileStore.deleteGlobalFile(fileID)
-                elif use_intermediate_file_store:
-                    download_file_store = not hasattr(self.intermediate_file_store, "path_prefix")
-
-                    for distance_fname in distance_fileIDs:
-                        if download_file_store:
-                            distance_fname_local = os.path.join(self.work_dir, os.path.basename(distance_fname))
-                            self.intermediate_file_store.read_input_file(distance_fname, distance_fname_local)
-                        else:
-                            distance_fname_local = distance_fname_local
-                        with open(distance_fname_local) as dist_file:
-                            for distance_fname in distance_fileIDs:
-                                with open(distance_fname) as dist_file:
-                                    shutil.copyfileobj(dist_file, fh)
-                        if download_file_store:
-                            safe_remove(distance_fname_local)
-                            self.intermediate_file_store.remove_file(distance_fname)
-                else:
-                    with open(distance_file) as fh:
-                        for distance_fname in distance_fileIDs:
-                            with open(distance_fname) as dist_file:
-                                shutil.copyfileobj(dist_file, fh)
+        # if isinstance(distance_file, (list, tuple)):
+        #     #Flatten promised return values
+        #     from toil.fileStores import FileID
+        #     distance_fileIDs = list(map_job_rv_list(distance_file))
+        #     if len(distance_fileIDs) == 0:
+        #         #Using intermediate_file_store
+        #         use_intermediate_file_store = True
+        #         distance_fileIDs = self.intermediate_file_store.list_input_directory("maxcluster_intermediates/dist")
+        #
+        #     distance_file = os.path.join(self.work_dir, "MaxCluster-all_vs_all.dist")
+        #     with open(distance_file, "w") as fh:
+        #         if isinstance(distance_file[0], FileID):
+        #             for fileID in distance_fileIDs:
+        #                 shutil.copyfileobj(
+        #                     self.job.fileStore.readGlobalFileStream(fileID), fh)
+        #                 self.job.fileStore.deleteGlobalFile(fileID)
+        #         elif use_intermediate_file_store:
+        #             download_file_store = not hasattr(self.intermediate_file_store, "path_prefix")
+        #
+        #             for distance_fname in distance_fileIDs:
+        #                 if download_file_store:
+        #                     distance_fname_local = os.path.join(self.work_dir, os.path.basename(distance_fname))
+        #                     self.intermediate_file_store.read_input_file(distance_fname, distance_fname_local)
+        #                 else:
+        #                     distance_fname_local = distance_fname_local
+        #                 with open(distance_fname_local) as dist_file:
+        #                     for distance_fname in distance_fileIDs:
+        #                         with open(distance_fname) as dist_file:
+        #                             shutil.copyfileobj(dist_file, fh)
+        #                 if download_file_store:
+        #                     safe_remove(distance_fname_local)
+        #                     self.intermediate_file_store.remove_file(distance_fname)
+        #         else:
+        #             with open(distance_file) as fh:
+        #                 for distance_fname in distance_fileIDs:
+        #                     with open(distance_fname) as dist_file:
+        #                         shutil.copyfileobj(dist_file, fh)
 
         kwds["C"] = C
         kwds["P"] = P
@@ -572,8 +695,8 @@ class MaxCluster(Container):
                 m = pdbs_file_and_dist_re.match(line)
                 if m:
                     groups = m.groupdict()
-                    groups["PDB1"] = file_list.index(groups["PDB1"].rstrip())
-                    groups["PDB2"] = file_list.index(groups["PDB2"].rstrip())
+                    groups["PDB1"] = os.path.splitext(os.path.basename(groups["PDB1"].rstrip()))[0]
+                    groups["PDB2"] = os.path.splitext(os.path.basename(groups["PDB2"].rstrip()))[0]
                     results.append([groups[k].strip() if isinstance(groups[k], str) \
                         else groups[k] for k in dist_cols])
 
@@ -614,13 +737,15 @@ class MaxCluster(Container):
 
     @classmethod
     def get_clusters(cls, log_file=None):
-        if hasattr(cls.log_file):
+        if hasattr(cls, "log_file"):
             log_file = cls.log_file
         if log_file is None:
             raise RuntimeError("Invalid log file")
 
         clusters = []
+        centroids = []
         parse_clusters = False
+        parse_centroids = False
         with open(log_file) as log:
             for line in log:
                 if not parse_clusters and "Clusters @ Threshold" in line:
@@ -628,18 +753,61 @@ class MaxCluster(Container):
                     next(log)
                     next(log)
                 elif parse_clusters and line.startswith("INFO  : ="):
+                    parse_clusters = False
+                elif not parse_centroids and "Centroids" in line:
+                    parse_centroids = True
+                    next(log)
+                    next(log)
+                elif parse_centroids and line.startswith("INFO  : ="):
+                    parse_centroids = False
                     break
                 elif parse_clusters:
                     fields = line.rstrip().split()
-                    cluster, pdb_file = fields[-2], fields[-1]
-                    clusters.append((pdb_file, int(cluster)))
-        clusters = pd.DataFrame(clusters, columns=["pdb_file", "structure_clusters"])
+                    pdb_num, cluster, pdb_file = fields[-4], fields[-2], fields[-1]
+                    clusters.append((int(pdb_num), pdb_file, int(cluster)))
+                elif parse_centroids:
+                    fields = line.rstrip().split()
+                    cluster, pdb_num, spread, pdb_file = fields[-6], fields[-4], fields[-2], fields[-1]
+                    centroids.append((int(cluster), spread, int(pdb_num), pdb_file))
+
+        clusters = pd.DataFrame(clusters, columns=["item", "pdb_file", "structure_clusters"])
+        centroids = pd.DataFrame(centroids, columns=["structure_clusters", "spread", "centroid_item", "centroid_pdb_file"])
+        clusters = pd.merge(clusters, centroids, on="structure_clusters")
+
         return clusters
+
+    @classmethod
+    def get_distances_from_dist_file(cls, distance_file=None):
+        if hasattr(cls, "return_files") and isinstance(cls.return_files, dict) and cls.return_files.get("R"):
+            distance_file = cls.return_files["R"]
+        if distance_file is None:
+            raise RuntimeError("Invalid log file")
+
+        distances = []
+        parse_distances = False
+        with open(distance_file) as dist:
+            for line in dist:
+                if not parse_distances and "# Distance records" in line:
+                    parse_distances = True
+                    next(dist)
+                    next(dist)
+                elif parse_distances:
+                    #DIST :     79     82  1000.0000
+                    fields = line.rstrip().split()
+                    item1, item2, distance = fields[-3:]
+                    distances.append((int(item1), int(item2), float(distance)))
+                    distances.append((int(item2), int(item1), float(distance)))
+
+            distances = pd.DataFrame(distances, columns=["item1", "item2", "distances"])
+            distances = distances.set_index(["item1", "item2"])
+
+            return distances
+
 
     @classmethod
     def get_hierarchical_tree(cls, log_file=None):
         #https://stackoverflow.com/questions/31033835/newick-tree-representation-to-scipy-cluster-hierarchy-linkage-matrix-format
-        if hasattr(cls.log_file):
+        if hasattr(cls, "log_file"):
             log_file = cls.log_file
         if log_file is None:
             raise RuntimeError("Invalid log file")
@@ -673,7 +841,7 @@ class MaxCluster(Container):
                 elif parse_tree and line.startswith("INFO  : ="):
                     break
                 elif parse_tree:
-                    print(line)
+                    #print(line)
                     _, node, info = line.rstrip().split(":")
                     node = int(node.strip())
                     nx_tree.add_node(node)
@@ -723,11 +891,11 @@ class MaxCluster(Container):
                 count += Z[Z["Node"]==row["Item2"]].iloc[0]["count"] if row["Item2"]<=0 else 1
                 Z.loc[Z["Node"]==row["Node"], "count"] = count
 
-            print(Z)
+            #print(Z)
 
             Z2 = Z.copy()
             top = Z[["Item1", "Item2"]].max().max()+1
-            print("TOP", top)
+            #print("TOP", top)
             update_nodes = -1*Z[Z[["Item1", "Item2"]]<=0]+top
             new_item1 = update_nodes.dropna(subset=["Item1"])["Item1"]
             new_item2 = update_nodes.dropna(subset=["Item2"])["Item2"]

@@ -12,6 +12,26 @@ class USEARCH(Container):
     LOCAL = ["usearch"]
     RETURN_FILES = True
 
+    @staticmethod
+    def parse_uc_file(uclust_file):
+        #Convert uclust to h5
+        uclust = pd.read_table(str(uclust_file), comment="#", header=None, names=[
+            "record_type",
+            "cluster",
+            "length",
+            "pctId",
+            "strand",
+            "unk1",
+            "unk2",
+            "alignment",
+            "label_query",
+            "label_target"
+        ])
+        del uclust["unk1"]
+        del uclust["unk2"]
+
+        return uclust
+
 class ClusterFast(USEARCH):
     ARG_START = "-"
     PARAMETERS = [#"-cluster_fast",
@@ -66,22 +86,30 @@ class ClusterFast(USEARCH):
 
         return cluster_output
 
-    @staticmethod
-    def parse_uc_file(uclust_file):
-        #Convert uclust to h5
-        uclust = pd.read_table(str(uclust_file), comment="#", header=None, names=[
-            "record_type",
-            "cluster",
-            "length",
-            "pctId",
-            "strand",
-            "unk1",
-            "unk2",
-            "alignment",
-            "label_query",
-            "label_target"
-        ])
-        del uclust["unk1"]
-        del uclust["unk2"]
+class AllPairsLocal(USEARCH):
+    ARG_START = "-"
+    PARAMETERS = [#"-cluster_fast",
+        ("fasta_file", "path:in", ["-allpairs_local", "{}"]),
+        (":id", "str"),
+        (":centroids", "path:out"),
+        (":uc", "path:out"),
+        (":consout", "path:out"),
+        (":alnout", "path:out:ignore"),
+        (":sort", "str"),
+        (":threads", "str"),
+        (":acceptall", "store_true")
+    ]
 
-        return uclust
+class AllPairsGlobal(USEARCH):
+    ARG_START = "-"
+    PARAMETERS = [#"-cluster_fast",
+        ("fasta_file", "path:in", ["-allpairs_global", "{}"]),
+        (":id", "str"),
+        (":centroids", "path:out"),
+        (":uc", "path:out"),
+        (":consout", "path:out"),
+        (":alnout", "path:out:ignore"),
+        (":sort", "str"),
+        (":threads", "str"),
+        (":acceptall", "store_true")
+    ]

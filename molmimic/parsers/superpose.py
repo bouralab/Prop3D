@@ -63,49 +63,52 @@ class Superpose(object):
                 pass
 
 class TMAlign(Container, Superpose):
-    IMAGE = "edraizen/mmalign:latest"
+    IMAGE = "docker://edraizen/tmalign:latest"
     PARAMETERS = [
         ("moving_pdb_file", "path:in", ""),
         ("fixed_pdb_file", "path:in", ""),
-        ("out_file", "path:out", "o"),
+        (":out_file", "path:out", "o"),
         (":input_alignment", "path:in", "I"),
         (":matrix_file", "path:out", "m")]
     ARG_START="-"
+    ENTRYPOINT="/opt/TMalign/TMalign"
 
     def get_alignment_stats(self, stdout=None):
         if stdout is None:
             stdout = self.stdout
         return self.get_rmsd_tm(stdout)
 
-    def get_rmsd_tm(self, stdout=None):
+    def get_rmsd_tm(self, include_fixed=False, stdout=None):
         if stdout is None:
             stdout = self.stdout
 
         rmsd_re = re.compile("^Aligned length=.+, RMSD=(.+), Seq_ID=")
-        tmscore_re = re.compile("^TM-score=(.+) \(if normalized by length of Chain_2\)")
+        moving_tmscore_re = re.compile("^TM-score=(.+) \(if normalized by length of Chain_2\)")
+        fixed_tmscore_re = re.compile("^TM-score=(.+) \(if normalized by length of Chain_2\)")
         rmsd_tm_re = re.compile("^Aligned length=.+, RMSD=(.+), TM-score=(.+), ID=")
 
         rmsd = tm_score = -1.
         lines = iter(stdout.splitlines())
         for line in lines:
-            job.log(line.rstrip())
             m = rmsd_re.match(line)
             if m:
                 rmsd = float(m.group(1).strip())
-                job.log("RMSD is {}".format(rmsd))
                 continue
             m = rmsd_tm_re.match(line)
             if m:
                 rmsd = float(m.group(1).strip())
                 tm_score = float(m.group(2).strip())
-                job.log("RMSD is {}".format(rmsd))
-                job.log("TM-score is {}".format(tm_score))
-            m = tmscore_re.match(line)
+            m = moving_tmscore_re.match(line)
             if m:
-                tm_score = float(m.group(1).strip())
-                job.log("TM-score is {}".format(tm_score))
+                moving_tm_score = float(m.group(1).strip())
+            m = fixed_tmscore_re.match(line)
+            if m:
+                fixed_tm_score = float(m.group(1).strip())
 
-        return rmsd, tm_score
+        if include_fixed:
+            return rmsd, moving_tm_score, fixed_tm_score
+
+        return rmsd, moving_tm_score
 
     def get_aligned_positions(self, stdout=None):
         if stdout is None:
@@ -160,7 +163,7 @@ class CEAlign(Container, Superpose):
         ("moving_pdb_file", "path:in", "file2"),
         "-outputPDB",
         ("out_file", "path:out", ["-outFile", "{}"])]
-        ARG_START="--"
+    ARG_START="--"
 
     def align(self, *args, **kwds):
         output = super(self, CEAlign).align(*args, **kwds)
