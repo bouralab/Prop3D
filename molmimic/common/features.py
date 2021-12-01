@@ -57,6 +57,16 @@ def default_atom_feature_df(natoms):
 def default_residue_feature_df(nres):
     return pd.concat([default_residue_features] * nres, axis=1).T
 
+def default_atom_feature_np(natoms):
+    df = default_atom_feature_df(natoms)
+    ds_dt = np.dtype({'names':df.columns,'formats':df.dtypes.values()})
+    return np.rec.fromarrays(df.values , dtype=ds_dt)
+
+def default_residue_feature_np(nres):
+    df = default_residue_feature_df(natoms)
+    ds_dt = np.dtype({'names':df.columns,'formats':df.dtypes.values()})
+    return np.rec.fromarrays(df.values , dtype=ds_dt)
+
 non_geom_features_names = ["get_atom_type", "get_charge_and_electrostatics",
     "get_charge_and_electrostatics", "get_hydrophobicity", "get_residue",
     "get_deepsite_features", "get_evolutionary_conservation_score"]

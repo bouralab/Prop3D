@@ -4,8 +4,12 @@ import os
 import argparse
 import time
 import traceback
+from functools import partial
 from itertools import groupby
 import glob
+
+import h5pyd
+import numpy as np
 
 from molmimic.common.featurizer import ProteinFeaturizer
 
@@ -28,20 +32,13 @@ class CalculateFeaturesError(RuntimeError):
         self.stage = stage
         self.message = message
         self.errors = errors if isinstance(errors, list) else []
-        try:
-            self.jobStoreName = os.path.basename(job.fileStore.jobStore.config.jobStore.split(":")[-1])
-        except AttributeError:
-            self.jobStoreName = None
+        self.jobStoreName = os.path.basename(job.fileStore.jobStore.config.jobStore.split(":")[-1])
 
     def __str__(self):
         return "Error during {}: {}\nErrors:\n".format(self.stage, self.message,
             "\n".join(map(str, self.errors)))
 
     def save(self, store=None):
-        if self.jobStoreName is None:
-            RealtimeLogger.info(str(self))
-            return
-
         if store is None:
             store = data_stores.cath_features
         fail_file = "{}.{}".format(self.cath_domain, self.stage)
@@ -53,49 +50,65 @@ class CalculateFeaturesError(RuntimeError):
             f"errors/{self.jobStoreName}/{os.path.basename(fail_file)}")
         safe_remove(fail_file)
 
-def calculate_features(job, cathFileStoreID, cath_domain, cathcode, update_features=None, work_dir=None):
+def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features=None, work_dir=None):
     if work_dir is None:
         if job is not None and hasattr(job, "fileStore"):
             work_dir = job.fileStore.getLocalTempDir()
         else:
             work_dir = os.getcwd()
 
-    cath_key = "{}/{}".format(cathcode, cath_domain)
+    to_remove = []
 
-    if cathcode is not None and update_features is not None:
-        #Download existing features
-        fail = False
-        for ext in ("atom.h5", "residue.h5", "edges.txt.gz"):
+    cath_key = f"/{cathcode}/domains/{cath_domain}"
+    s3_cath_key = "{}/{}".format(cathcode, cath_domain)
+
+
+
+    if update_features is not None:
+        if False:
+            #Download existing features from older method
+            fail = False
+            for ext in ("atom.h5", "residue.h5", "edges.txt.gz"):
+                try:
+                    data_stores.cath_features.read_input_file(
+                        "{}_{}".format(s3_cath_key, ext),
+                        os.path.join(work_dir, "{}_{}".format(cath_domain, ext)))
+                except ClientError:
+                    #Ignore, just recalculate
+                    update_features = None
+                    fail = True
+                    break
+            if fail:
+                RealtimeLogger.info("Failed to download old features")
+        else:
+            #Save features for cath domain in new seperate h5 files to be red in by the Featurizer
+            store = h5pyd.File(cath_full_h5, mode="r", use_cache=False)
             try:
-                data_stores.cath_features.read_input_file(
-                    "{}_{}".format(cath_key, ext),
-                    os.path.join(work_dir, "{}_{}".format(cath_domain, ext)))
-            except ClientError:
-                #Ignore, just recalculate
-                update_features = None
-                fail = True
-                break
-        if fail:
-            RealtimeLogger.info("Failed to download old features")
+                feat_files = list(store[cath_key].keys())
+                if len(feat_files) == 3 and "atom" in feat_files and \
+                  "residue" in feat_files and feat_files and "edges":
+                    for feature_type, index_col in (("atoms", "serial_number"), ("residues", "residue_id")):
+                        df = pd.DataFrame(store[f"{cath_key}/{feature_type}"]).set_index(index_col)
+                        feature_file = os.path.join(work_dir, f"{cath_domain}_{feature_type:-1]}.h5")
+                        df.to_hdf(feature_file, "table")
+                        del df
+                        to_remove.append(feature_file)
+                else:
+                    update_features = None
+            except KeyError:
+                feats_exist = False
+            finally:
+                store.close()
 
-    if os.path.isfile(cath_domain):
-        local_file = True
-        domain_file = cath_domain
-        cath_domain = os.path.splitext(os.path.basename(cath_domain))[0]
-        output_files = []
-    elif cathcode is None:
-        raise RuntimeError("If using cathID;s, you must specify a cathcode")
-    else:
-        local_file = False
-        domain_file = os.path.join(work_dir, "{}.pdb".format(cath_domain))
+    domain_file = os.path.join(work_dir, "{}.pdb".format(cath_domain))
 
-        try:
-            data_stores.prepared_cath_structures.read_input_file(
-                cath_key+".pdb", domain_file)
-        except ClientError:
-            RealtimeLogger.info("Failed to download prapred cath file {}".format(
-                cath_key+".pdb"))
-            raise
+    try:
+        data_stores.prepared_cath_structures.read_input_file(
+            s3_cath_key+".pdb", domain_file)
+    except ClientError:
+        RealtimeLogger.info("Failed to download prapred cath file {}".format(
+            cath_key+".pdb"))
+        raise
 
     try:
         structure = ProteinFeaturizer(
@@ -107,31 +120,59 @@ def calculate_features(job, cathFileStoreID, cath_domain, cathcode, update_featu
         RealtimeLogger.info(f"{tb.format_exc()}")
         raise
 
-    for ext, calculate in (("atom.h5", structure.calculate_flat_features),
-                           ("residue.h5", structure.calculate_flat_residue_features),
-                           ("edges.txt.gz", structure.calculate_graph)):
+    for ext, calculate in (("atom", structure.calculate_flat_features),
+                           ("residue", structure.calculate_flat_residue_features),
+                           ("edges", partial(structure.calculate_graph, edgelist=True))):
         try:
-            _, feature_file = calculate()
+            out, _ = calculate(write=False)
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:
             tb = traceback.format_exc()
+            raise
             CalculateFeaturesError(job, cath_domain, ext.split(".",1)[0], tb).save()
             return
 
-        if not local_file:
-            data_stores.cath_features.write_output_file(
-                feature_file, "{}_{}".format(cath_key, ext))
-            safe_remove(feature_file)
+        if ext=="edges":
+            df = out
+            special_col_types = {"src":"<S8", "dst":"<S8"}
+            df["src"] = df["src"].apply(lambda s: "".join(map(str,s[1:])).strip())
+            df["dst"] = df["dst"].apply(lambda s: "".join(map(str,s[1:])).strip())
         else:
-            output_files.append(feature_file)
+            del out
+            df = structure.get_pdb_dataframe(include_features=True)
+            special_col_types = {"serial_number":"<i8", "atom_name":"<S5", "residue_id":"<S8", "chain":"<S2"}
 
-        RealtimeLogger.info("Finished features for: {}".format(feature_file))
+        RealtimeLogger.info(df)
+        RealtimeLogger.info(df.columns)
 
-    if not local_file:
-        safe_remove(domain_file)
-    else:
-        return output_files
+        column_dtypes = {col:special_col_types.get(col, '<f8') for col in df.columns}
+        rec_arr = df.to_records(index=False, column_dtypes=column_dtypes)
+
+        with h5pyd.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
+            if f"{cath_key}/{ext}" in store.keys():
+                try:
+                    del store[f"{cath_key}/{ext}"]
+                except OSError:
+                    pass
+
+            if f"{cath_key}/{ext}" not in store.keys():
+                ds1 = store.create_dataset(f"{cath_key}/{ext}", data=rec_arr,
+                    chunks=True, compression="gzip", compression_opts=9)
+            else:
+                ds1 = store[f"{cath_key}/{ext}"]       # load the data
+                RealtimeLogger.info(f"OLD DS is: {ds1}")
+                ds1[...] = rec_arr                     # assign new values to data
+
+        RealtimeLogger.info("Finished {} features for: {} {}".format(ext, cathcode, cath_domain))
+
+    RealtimeLogger.info("Finished features for: {} {}".format(cathcode, cath_domain))
+
+    safe_remove(domain_file)
+
+    if update_features:
+        for f in to_remove:
+            safe_remove(f)
 
 def calculate_features_for_sfam(job, sfam_id, update_features, further_parallelize=True, use_cath=True):
     work_dir = job.fileStore.getLocalTempDir()

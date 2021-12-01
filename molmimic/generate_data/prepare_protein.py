@@ -115,8 +115,15 @@ def extract_domain(pdb_file, cath_domain, sfam_id, chain=None, rename_chain=None
         if f.read() == "":
             raise RuntimeError("Error processing PDB: {}".format(input))
 
-    chain = cath_domain[4] if chain is None else chain
     all_chains = list(get_all_chains(input))
+    if chain is None:
+        if sfam_id is not None:
+            chain = cath_domain[4]
+        elif len(all_chains)>0:
+            chain = all_chains[0]
+        else:
+            raise RuntimeError("Error processing chains in PDB: {}".format(input))
+
 
     commands = [
         #Pick first model
@@ -218,10 +225,13 @@ def prepare_domain(pdb_file, chain, cath_domain, sfam_id=None,
     if work_dir is None:
         work_dir = os.getcwd()
 
-    num_chains = len(get_all_chains(pdb_file))
+    all_chains = list(get_all_chains(pdb_file))
+    num_chains = len(all_chains)
     if not len(get_all_chains(pdb_file)) == 1:
         raise RuntimeError("Must contain only one chain. There are {} chains in {}".format(
             num_chains, pdb_file))
+    if chain is None:
+        chain = all_chains[0]
 
     prefix = pdb_file.split(".", 1)[0]
 
@@ -314,53 +324,63 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
 
     files_to_remove = []
 
-    #Get cath domain file
-    cath_key = "{}/{}.pdb".format(cathcode.replace(".", "/"), cath_domain)
-    if data_stores.prepared_cath_structures.exists(cath_key):
-        return
+    if os.path.isfile(cath_domain):
+        domain_file = cath_domain
+        local_file = True
+    else:
+        local_file = False
+        if cathcode is None:
+            raise RuntimeError("cathcode cannot be None if using cath domain names")
 
-    try:
-        #Download cath domain from s3 bucket or cath api
-        domain_file = download_cath_domain(cath_domain, cathcode, work_dir=work_dir)
-        files_to_remove.append(domain_file)
-        assert os.path.isfile(domain_file), "Domain file not found: {}".format(domain_file)
-    except (SystemExit, KeyboardInterrupt):
-        raise
-    except KeyError as e:
-        if get_from_pdb:
-            #raise NotImplementedError("Download from PDB is not finishied")
-            cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
-            all_domains = filter_hdf(cath_file, "table", pdb=cath_domain[:4], chain=cath_domain[4])
-            curr_domain_segments = all_domains[all_domains["cath_domain"]==cath_domain]
-            curr_domain_segments = curr_domain_segments.sort_values("nseg")[["srange_start", "srange_stop"]]
-            all_domains = all_sdoms[all_sdoms.cath_domain.str.startswith(sdi[:5])].cath_domain.drop_duplicates()
-            if len(all_domains) == 1 and force_rslices is None:
-                #Use full chain
-                rslices = None
-            elif force_rslices is not None:
-                rslices = force_rslices
+        #Get cath domain file
+        cath_key = "{}/{}.pdb".format(cathcode.replace(".", "/"), cath_domain)
+        if data_stores.prepared_cath_structures.exists(cath_key) and \
+          data_stores.prepared_cath_structures.get_size(cath_key)>0:
+            return
+
+        try:
+            #Download cath domain from s3 bucket or cath api
+            domain_file = download_cath_domain(cath_domain, cathcode, work_dir=work_dir)
+            files_to_remove.append(domain_file)
+            assert os.path.isfile(domain_file), "Domain file not found: {}".format(domain_file)
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except KeyError as e:
+            if get_from_pdb:
+                #raise NotImplementedError("Download from PDB is not finishied")
+                cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
+                all_domains = filter_hdf(cath_file, "table", pdb=cath_domain[:4], chain=cath_domain[4])
+                curr_domain_segments = all_domains[all_domains["cath_domain"]==cath_domain]
+                curr_domain_segments = curr_domain_segments.sort_values("nseg")[["srange_start", "srange_stop"]]
+                all_domains = all_sdoms[all_sdoms.cath_domain.str.startswith(sdi[:5])].cath_domain.drop_duplicates()
+                if len(all_domains) == 1 and force_rslices is None:
+                    #Use full chain
+                    rslices = None
+                elif force_rslices is not None:
+                    rslices = force_rslices
+                else:
+                    rslices = ["{}:{}".format(st, en) for st, en in \
+                        curr_domain_segments.drop_duplicates().itertuples(index=False)]
+
+                try:
+                    domain_file = s3_download_pdb(cath_domain[:4], work_dir=work_dir)
+                except (SystemExit, KeyboardInterrupt):
+                    raise
+                except:
+                    #Cannot download
+                    tb = traceback.format_exc()
+                    raise PrepareProteinError(cath_domain, "s3download", tb)
+
             else:
-                rslices = ["{}:{}".format(st, en) for st, en in \
-                    curr_domain_segments.drop_duplicates().itertuples(index=False)]
-
-            try:
-                domain_file = s3_download_pdb(cath_domain[:4], work_dir=work_dir)
-            except (SystemExit, KeyboardInterrupt):
-                raise
-            except:
                 #Cannot download
                 tb = traceback.format_exc()
-                raise PrepareProteinError(cath_domain, "s3download", tb)
-
-        else:
-            #Cannot download
+                raise PrepareProteinError(cath_domain, "download", tb)
+        except Exception as e:
             tb = traceback.format_exc()
-            raise PrepareProteinError(cath_domain, "download", tb)
-    except Exception as e:
-        tb = traceback.format_exc()
-        raise PrepareProteinError(cath_domain, "unk_download", tb)
+            raise PrepareProteinError(cath_domain, "unk_download", tb)
 
-    if not data_stores.prepared_cath_structures.exists(cath_key+".raw"):
+    if local_file or not data_stores.prepared_cath_structures.exists(cath_key+".raw") or \
+      data_stores.prepared_cath_structures.get_size(cath_key+".raw")==0:
         #Extract domain; cleaned but atomic coordinates not added or changed
         try:
             domain_file, prep_steps = extract_domain(domain_file, cath_domain, cathcode,
@@ -371,22 +391,26 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
             tb = traceback.format_exc()
             raise PrepareProteinError(cath_domain, "extract", tb)
 
-        #Write raw domain file to store
-        data_stores.prepared_cath_structures.write_output_file(domain_file, cath_key+".raw")
+        if not local_file:
+            #Write raw domain file to store
+            data_stores.prepared_cath_structures.write_output_file(domain_file, cath_key+".raw")
 
         #Write preperation steps
         prep_steps_file = os.path.join(work_dir, "{}.raw.prep".format(cath_domain))
         with open(prep_steps_file, "w") as fh:
             for step in prep_steps:
                 print(step, file=fh)
-        data_stores.prepared_cath_structures.write_output_file(prep_steps_file,
-            cath_key+".raw.prep")
 
-        files_to_remove.append(domain_file)
-        files_to_remove.append(prep_steps_file)
+        if not local_file:
+            data_stores.prepared_cath_structures.write_output_file(prep_steps_file,
+                cath_key+".raw.prep")
+
+            files_to_remove.append(domain_file)
+            files_to_remove.append(prep_steps_file)
+
         RealtimeLogger.info("Finished extracting domain: {}".format(domain_file))
 
-    chain = cath_domain[4]
+    chain = cath_domain[4] if not local_file else None
 
     #Protonate and minimize, raises PrepareProteinError on error
     prepared_file, prep_steps = prepare_domain(domain_file, chain, cath_domain,
@@ -395,9 +419,10 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
     if os.path.getsize(prepared_file) == 0:
         raise PrepareProteinError(cath_domain, "empty_file", "")
 
-    #Write prepared domain file to store
-    data_stores.prepared_cath_structures.write_output_file(prepared_file, cath_key)
-    files_to_remove.append(prepared_file)
+    if not local_file:
+        #Write prepared domain file to store
+        data_stores.prepared_cath_structures.write_output_file(prepared_file, cath_key)
+        files_to_remove.append(prepared_file)
     RealtimeLogger.info("Finished preparing domain: {}".format(domain_file))
 
     #Write preperation steps
@@ -405,33 +430,45 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
     with open(prep_steps_file, "w") as fh:
         for step in prep_steps:
             print(step, file=fh)
-    data_stores.prepared_cath_structures.write_output_file(prep_steps_file,
-        cath_key+".prep")
-    files_to_remove.append(prep_steps_file)
+
+    if not local_file:
+        data_stores.prepared_cath_structures.write_output_file(prep_steps_file,
+            cath_key+".prep")
+        files_to_remove.append(prep_steps_file)
 
     if cleanup:
         safe_remove(files_to_remove)
+
+    print("RETURN?", local_file)
+
+    if local_file:
+        return prepared_file, prep_steps, domain_file
 
 def process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chain=None,
   force_rslices=None, force=False, work_dir=None, get_from_pdb=False, cleanup=True,
   memory="12G", preemptable=True):
     try:
         try:
-            _process_domain(job, cath_domain, cathcode, cathFileStoreID=cathFileStoreID,
+            return _process_domain(job, cath_domain, cathcode, cathFileStoreID=cathFileStoreID,
                 force_chain=force_chain, force_rslices=force_rslices, force=force,
                 work_dir=work_dir, get_from_pdb=get_from_pdb, cleanup=cleanup,
                 memory=memory, preemptable=preemptable)
-        except (SystemExit, KeyboardInterrupt):
-            raise
-        except PrepareProteinError as e:
-            e.save()
         except:
-            tb = traceback.format_exc()
-            raise PrepareProteinError(cath_domain, "unk_error", tb)
+            raise
+        # except (SystemExit, KeyboardInterrupt):
+        #     raise
+        # except PrepareProteinError as e:
+        #     e.save()
+        # except:
+        #     tb = traceback.format_exc()
+        #     raise PrepareProteinError(cath_domain, "unk_error", tb)
     except (SystemExit, KeyboardInterrupt):
         raise
     except PrepareProteinError as e:
+        raise
         e.save()
+
+    print("HERE")
 
 def convert_pdb_to_mmtf(job, sfam_id, jobStoreIDs=None, clustered=True, preemptable=True):
     raise NotImplementedError()

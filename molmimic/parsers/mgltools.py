@@ -3,6 +3,7 @@ import os
 import tempfile
 
 from molmimic.parsers.container import Container
+from molmimic.parsers.SCWRL import SCWRL
 from molmimic.util import safe_remove
 
 from toil.realtimeLogger import RealtimeLogger
@@ -72,7 +73,15 @@ class PrepareReceptor(MGLTools):
             #Do not cleanup -- we want to keep extra hydrogens
             kwds["U"] = "None"
 
-        return self(receptor=receptor, out_file=out_file, **kwds)
+        try:
+            return self(receptor=receptor, out_file=out_file, **kwds)
+        except RuntimeError as e:
+            if "ZeroDivisionError" in str(e):
+                scwrl = SCWRL(job=self.job, work_dir=self.work_dir)
+                scwrlFile = scwrl.fix_rotamers(receptor)
+                return self(receptor=scwrlFile, out_file=out_file, **kwds)
+            else:
+                assert 0
 
     def get_autodock_atom_types(self, receptor, verify=False, **kwds):
         pdbqt_file = self.convert_to_pdbqt(receptor, **kwds)

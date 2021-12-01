@@ -65,11 +65,11 @@ class ProteinFeaturizer(Structure):
             return features, self.atom_features_file
 
     def calculate_flat_residue_features(self, only_aa=False, only_atom=False,
-      non_geom_features=False, use_deepsite_features=False):
+      non_geom_features=False, use_deepsite_features=False, write=True):
         return self.calculate_flat_features(coarse_grained=True,
             only_aa=only_aa, only_atom=only_atom,
             non_geom_features=non_geom_features,
-            use_deepsite_features=use_deepsite_features)
+            use_deepsite_features=use_deepsite_features, write=write)
 
     def get_features_per_atom(self, residue_list):
         """Get features for eah atom, but not organized in grid"""
@@ -257,9 +257,8 @@ class ProteinFeaturizer(Structure):
                 only_charge=only_charge, only_bool=only_bool, calculate=calculate)
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
             residue = atom_or_residue
-            self.get_charge_and_electrostatics_for_residue(residue,
+            return self.get_charge_and_electrostatics_for_residue(residue,
                 only_charge=only_charge, only_bool=only_bool, calculate=calculate)
-            return self.residue_features.loc[idx, cols]
         else:
             raise RuntimeError("Input must be Atom or Residue: {}".format(type(atom_or_residue)))
 
@@ -323,8 +322,9 @@ class ProteinFeaturizer(Structure):
             if "get_charge_and_electrostatics" not in self.update_features:
                 calculate = False
 
-        self._pqr = {}
-        if calculate and not hasattr(self, "_pqr") or (not only_charge and len(list(self._pqr.values())[0])==1):
+        if not hasattr(self, "_pqr"):
+            self._pqr = {}
+        if calculate and (len(self._pqr)==0 or (not only_charge and len(list(self._pqr.values())[0])==1)): #not hasattr(self, "_pqr")
             try:
                 if only_charge:
                     pdb2pqr = Pdb2pqr(work_dir=self.work_dir, job=self.job)
@@ -617,9 +617,6 @@ class ProteinFeaturizer(Structure):
         if not hasattr(self, "_dssp"):
             dssp = DSSP(work_dir=self.work_dir, job=self.job)
             self._dssp = dssp.get_dssp(self.structure, self.path)
-            print(self._dssp.keys())
-
-        print(residue.get_full_id()[2:], residue.get_full_id()[2:] in self._dssp)
 
         try:
             atom_ss = self._dssp[residue.get_full_id()[2:]][2]
@@ -759,15 +756,23 @@ class ProteinFeaturizer(Structure):
 
         return result
 
-    def calculate_graph(self, d_cutoff=100.):
+    def calculate_graph(self, d_cutoff=100., edgelist=False, write=True):
         import networkx as nx
         structure_graph = nx.Graph()
         for r1, r2 in self.calculate_neighbors(d_cutoff=d_cutoff):
             structure_graph.add_edge(r1.get_id(), r2.get_id(),
                 attr_dict=self.get_edge_features(r1, r2))
 
+        if edgelist:
+            edges = [{"src":u, "dst":v, **dict(d)["attr_dict"]} for u, v, d in \
+                structure_graph.edges(data=True)]
+            structure_graph = pd.DataFrame(edges)
+
         edge_file = os.path.join(self.work_dir, "{}.edges.gz".format(self.id))
-        nx.write_edgelist(structure_graph, edge_file)
+
+        if write:
+            nx.write_edgelist(structure_graph, edge_file)
+
         return structure_graph, edge_file
 
     def get_edge_features(self, r1, r2):

@@ -15,6 +15,8 @@ import logging
 import os
 import sys
 
+from toil.realtimeLogger import RealtimeLogger
+
 logger = logging.getLogger(__name__)
 
 def apiSingularityCall(job,
@@ -143,7 +145,7 @@ def apiSingularityCall(job,
 
     if working_dir is None:
         working_dir = os.getcwd()
-        options += ["--workdir", working_dir]
+    options += ["--workdir", working_dir]
 
     if bind is None and volumes is None:
         bind = ["{}:/data".format(working_dir)]
@@ -227,17 +229,32 @@ def apiSingularityCall(job,
 
     try:
         if runscript is None:
+            RealtimeLogger.debug(f"""client.run(image={image},
+                       args={parameters},
+                       stream={stream},
+                       bind={bind},
+                       options={options},
+                       **{kwargs})""")
             out = client.run(image=image,
                        args=parameters,
                        stream=stream,
                        bind=bind,
+                       options=options,
                        **kwargs)
 
         else:
+            RealtimeLogger.debug(f"""client.execute(image={image},
+                       command={command},
+                       stream={stream},
+                       bind={bind},
+                       options={options},
+                       **{kwargs})""")
+
             out = client.execute(image=image,
                                  command=command,
                                  stream=stream,
                                  bind=bind,
+                                 options=options,
                                  **kwargs)
     except Exception as e:
         logger.error("Singularity had non-zero exit. Error: {} \n " +
@@ -248,6 +265,7 @@ def apiSingularityCall(job,
         return out
 
     if stdout or stderr:
+        assert 0
         if streamfile is None:
             streamfile = 'output.log'
         for line in out:

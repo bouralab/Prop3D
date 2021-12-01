@@ -10,6 +10,7 @@ from sklearn import preprocessing
 from Bio import PDB
 from Bio.PDB.NeighborSearch import NeighborSearch
 from Bio.PDB import Selection
+from toil.realtimeLogger import RealtimeLogger
 
 import warnings
 warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
@@ -229,8 +230,8 @@ class Structure(object):
 
         return result
 
-    def get_atoms(self, include_hetatms=False, exclude_atoms=None):
-        for a in self.filter_atoms(self.structure.get_atoms(), include_hetatms=include_hetatms, exclude_atoms=exclude_atoms):
+    def get_atoms(self, include_hetatms=False, exclude_atoms=None, include_atoms=None):
+        for a in self.filter_atoms(self.structure.get_atoms(), include_hetatms=include_hetatms, exclude_atoms=exclude_atoms, include_atoms=include_atoms):
             yield a
 
     def get_surface(self, level="R"):
@@ -246,12 +247,14 @@ class Structure(object):
 
         return Selection.unfold_entities(surface_atoms, level)
 
-    def filter_atoms(self, atoms, include_hetatms=False, exclude_atoms=None):
+    def filter_atoms(self, atoms, include_hetatms=False, exclude_atoms=None, include_atoms=None):
         for a in atoms:
             hetflag, resseq, icode = a.get_parent().get_id()
             if not include_hetatms and hetflag is not ' ':
                 continue
             if exclude_atoms is not None and a.get_name().strip() in exclude_atoms:
+                continue
+            if include_atoms is not None and a.serial_number not in include_atoms:
                 continue
             yield a
 
@@ -305,7 +308,7 @@ class Structure(object):
         else:
             features = self.residue_feature_names if coarse_grained else self.atom_feature_names
 
-        print("Feats to save", features)
+        print("Feats to save", features, atom_features_file)
 
         if coarse_grained:
             self.residue_features = self.residue_features.astype(np.float64)
@@ -360,15 +363,26 @@ class Structure(object):
             self.atom_feature_names += list(features.keys())
 
     def get_pdb_dataframe(self, coarse_grained=False, include_features=False):
-        if course_grained:
+        if coarse_grained:
             df = pd.DataFrame([
                 [
-                    "".join(map(str, residue.id[1:])),
+                    "".join(map(str, residue.id[1:])).strip(),
                     residue.get_parent().id,
                     np.mean([a.get_bfactor() for a in residue]),  # isotropic B factor
                     *np.mean([a.get_coord() for a in residue], axis=0)
                 ] for residue in self.structure.get_residues()],
-                columns=["residue_id", "chain", "bfactor", "occupancy", "X", "Y", "Z"])
+                columns=["residue_id", "chain", "bfactor", "X", "Y", "Z"])
+
+            na = {float:np.nan, str:""}
+            for col, dtype in [
+              ("residue_id", str),
+              ("chain", str),
+              ("bfactor", float),
+              ("X", float),
+              ("Y", float),
+              ("Z", float)]:
+                df[col] = df[col].fillna(na[dtype]).astype(dtype)
+
             if include_features:
                 df = pd.concat((df, self.residue_features), axis=1)
         else:
@@ -376,13 +390,28 @@ class Structure(object):
                 [
                     atom.serial_number,
                     atom.get_fullname(),
-                    "".join(map(str, atom.get_parent().id[1:])),
+                    "".join(map(str, atom.get_parent().id[1:])).strip(),
                     atom.get_parent().get_parent().id,
                     atom.get_bfactor(),  # isotropic B factor
                     *atom.coord
                 ] for atom in self.structure.get_atoms()],
                 columns=["serial_number", "atom_name", "residue_id", "chain", "bfactor",
                 "X", "Y", "Z"])
+
+
+
+            na = {float:np.nan, str:"", int:9999999}
+            for col, dtype in [
+              ("serial_number", int),
+              ("atom_name", str),
+              ("residue_id", str),
+              ("chain", str),
+              ("bfactor", float),
+              ("X", float),
+              ("Y", float),
+              ("Z", float)]:
+                df[col] = df[col].fillna(na[dtype]).astype(dtype)
+
             if include_features:
                 df = pd.concat((df, self.atom_features), axis=1)
         return df

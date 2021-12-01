@@ -100,6 +100,10 @@ def get_pdb_residues(pdb_file, include_resn=False, use_raw_resi=False):
     except IOError:
         pass
 
+def get_b(pdb_file):
+    for line in get_atom_lines(pdb_file):
+        yield float(line[60:66].strip())
+
 def read_pdb(file):
     return np.array([(float(line[30:38]), float(line[38:46]), float(line[46:54])) \
         for line in get_atom_lines(file)])

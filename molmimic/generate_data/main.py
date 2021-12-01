@@ -1,18 +1,25 @@
 import os
 from datetime import datetime
+from collections import defaultdict
+
+import h5pyd
+import pandas as pd
+from toil.realtimeLogger import RealtimeLogger
 
 from molmimic.util import safe_remove
 from molmimic.util.iostore import IOStore
-from molmimic.util.cath import run_cath_hierarchy
+from molmimic.util.cath import run_cath_hierarchy, run_cath_hierarchy_h5
 from molmimic.util.hdf import get_file, filter_hdf_chunks
 from molmimic.util.toil import map_job, map_job_follow_ons
 
 from molmimic.generate_data.prepare_protein import process_domain
 from molmimic.generate_data.calculate_features import calculate_features
+from molmimic.generate_data.calculate_features_hsds import calculate_features as calculate_features_hsds
+from molmimic.generate_data.set_cath_h5_toil import create_h5_hierarchy
 
 from molmimic.generate_data import data_stores
 
-from toil.realtimeLogger import RealtimeLogger
+
 
 import logging
 logging.getLogger('boto3').setLevel(logging.WARNING)
@@ -21,13 +28,21 @@ logging.getLogger('s3transfer').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 def get_domain_structure_and_features(job, cath_domain, superfamily,
-  cathFileStoreID, update_features=None, further_parallelize=False, force=False):
-    """1) Run Feagtures depends on prepared strucutre Structure"""
+  cathFileStoreID, update_features=None, further_parallelize=False, force=False, use_hsds=True):
+    """1) Run Features depends on prepared strucutre Structure"""
     RealtimeLogger.info("get_domain_structure_and_features Process domain "+cath_domain)
 
-    if force or not data_stores.prepared_cath_structures.exists(
-      "{}/{}.pdb".format(superfamily, cath_domain)):
+    if use_hsds:
+        calc_features_func = calculate_features_hsds
+    else:
+        calc_features_func = calculate_features
+
+    key = "{}/{}.pdb".format(superfamily, cath_domain)
+    if force or (isinstance(force, int) and force==2) or \
+      not data_stores.prepared_cath_structures.exists(key) or \
+      data_stores.prepared_cath_structures.get_size(key)==0:
         #Get Processed domain file first
+        RealtimeLogger.info(f"Processing domain {cath_domain}")
         if further_parallelize:
             job.addChildJobFn(process_domain, cath_domain, superfamily,
                 cathFileStoreID=cathFileStoreID)
@@ -38,32 +53,44 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
                 raise
             except:
                 #Failed, do not proceed in calculating features
-                return
+                raise
 
-    if not force:
+    if not force and not use_hsds:
         #Check if any feature files exist
         feat_files = ["{}/{}_{}".format(superfamily, cath_domain, ext) for ext in \
             ('atom.h5', 'residue.h5', 'edges.h5')]
-        feats_exist = [data_stores.cath_features.exists(f) for f in feat_files]
+        feats_exist = all([data_stores.cath_features.exists(f) for f in feat_files])
+    elif not force and use_hsds:
+        with h5pyd.File(cathFileStoreID, mode="r", use_cache=False, retries=100) as store:
+            try:
+                feat_files = list(store[f"/{superfamily}/domains/{cath_domain}"].keys())
+                if len(feat_files) == 3 and "atom" in feat_files and \
+                  "residue" in feat_files and feat_files and "edges":
+                    feats_exist = True
+                else:
+                    feats_exist = False
+            except KeyError:
+                feats_exist = False
     else:
-        feats_exist = [False]
+        feats_exist = False
 
-    RealtimeLogger.info(f"get_domain_structure_and_features FEATURES {force} {update_features}, {all(feats_exist)}")
+    RealtimeLogger.info(f"get_domain_structure_and_features FEATURES {force} {update_features}, {feats_exist}")
 
-    if force or update_features is not None or not all(feats_exist):
+    if force or update_features is not None or not feats_exist:
         #Calculate features Processed domain file
         if further_parallelize:
-            job.addFollowOnJobFn(calculate_features, cath_domain, superfamily,
-                update_features=update_features)
+            job.addFollowOnJobFn(calc_features_func, cathFileStoreID, cath_domain,
+                superfamily, update_features=update_features)
         else:
             RealtimeLogger.info("get_domain_structure_and_features calculate_features")
             try:
-                calculate_features(job, cath_domain, superfamily, update_features=update_features)
+                calc_features_func(job, cathFileStoreID, cath_domain, superfamily,
+                    update_features=update_features)
             except (SystemExit, KeyboardInterrupt):
                 raise
             except:
                 #Failed
-                return
+                raise
 
     if update_features is not None:
         jobStoreName = os.path.basename(job.fileStore.jobStore.config.jobStore.split(":")[-1])
@@ -73,20 +100,43 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
         safe_remove(done_file)
 
 def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
-  force=False, further_parallize=True):
-    cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
+  force=False, use_hsds=True, further_parallize=True):
+
     cathcode = superfamily.replace("/", ".")
-
-    cath_domains = filter_hdf_chunks(
-        cath_file,
-        "table",
-        columns=["cath_domain"],
-        drop_duplicates=True,
-        cathcode=cathcode)["cath_domain"].tolist()
-
-
+    if not use_hsds:
+        cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
+        cath_domains = filter_hdf_chunks(
+            cath_file,
+            "table",
+            columns=["cath_domain"],
+            drop_duplicates=True,
+            cathcode=cathcode)["cath_domain"].tolist()
+    else:
+        with h5pyd.File(cathFileStoreID, mode="a", use_cache=False) as store:
+            cath_domains = list(store[f"{superfamily}/domains"].keys())
+        cath_domains = cath_domains
 
     if not force and update_features is None:
+        if use_hsds:
+            try:
+                RealtimeLogger.info("Finding completed domains...")
+                # with h5pyd.File(cathFileStoreID, mode="a", use_cache=False, retries=100) as store:
+                #     processed_domains = defaultdict(int)
+                #     def count_feature_types(name):
+                #         if name.count("/") == 6:
+                #             #Name looks like 1/2/3/4/domains/xx/atom
+                #             domain = name.split("/")[-2]
+                #             processed_domains[domain] += 1
+                #     store[superfamily].visit(count_feature_types)
+                #     done_domains = [domain for domain, count in processed_domains.items() if count==3]
+                done_domains = []
+            except KeyError as e:
+                raise RuntimeError(f"Must create hsds file first. Key not found {e}")
+        else:
+            assert 0
+        cath_domains = list(set(cath_domains)-set(done_domains))
+
+    if False and not force and update_features is None:
         #Get domians that have edge features uploaded (last feature file to be uploaded so we know its done)
         done_domains = [os.path.basename(domain).split("_")[0] for domain in \
             data_stores.cath_features.list_input_directory(superfamily) \
@@ -94,7 +144,7 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
         n_domains = len(cath_domains)
         cath_domains = list(set(cath_domains)-set(done_domains))
         RealtimeLogger.info("Running {}/{} domains from {}".format(len(cath_domains), n_domains, cathcode))
-    elif update_features is not None:
+    elif False and update_features is not None:
         #oldest = datetime.date(2021, 2, 9)
         jobStoreName = os.path.basename(job.fileStore.jobStore.config.jobStore.split(":")[-1])
         updated_domains = [cath_domain for cath_domain, last_modified in \
@@ -109,7 +159,7 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
     if further_parallize:
         map_job(job, get_domain_structure_and_features, cath_domains,
             superfamily, cathFileStoreID, update_features=update_features,
-            further_parallelize=False, force=force)
+            further_parallelize=False, use_hsds=use_hsds, force=False)
     else:
         RealtimeLogger.info("Looping over domain")
         for domain in cath_domains:
@@ -117,55 +167,98 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
                 RealtimeLogger.info("Processing domain "+domain)
                 get_domain_structure_and_features(job, domain, superfamily,
                     cathFileStoreID, update_features=update_features,
-                    further_parallelize=False, force=force)
+                    further_parallelize=False, use_hsds=use_hsds, force=force)
             except (SystemExit, KeyboardInterrupt):
                 raise
             except:
                 pass
 
-def start_toil(job, cathFileStoreID, cathcode=None, skip_cathcode=None, update_features=None, force=False):
-    RealtimeLogger.info("started")
-
-    cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
-
-    cath_domains = filter_hdf_chunks(
-        cath_file,
-        "table",
-        columns=["cath_domain", "cathcode"],
-        drop_duplicates=True)
+def start_domain_and_features(job, cathFileStoreID, cathcode=None, skip_cathcode=None, update_features=None, use_hsds=True, work_dir=None, force=False):
+    if not use_hsds:
+        cath_hierarchy_runner = run_cath_hierarchy
+    else:
+        cath_hierarchy_runner = run_cath_hierarchy_h5
 
     if cathcode is not None:
         if not isinstance(cathcode, (list, tuple)):
             cathcode = [cathcode]
         RealtimeLogger.info("Running sfams: {}".format(cathcode))
 
+        fixed_sfams = ["/".join(sfam) if isinstance(sfam, (list,tuple)) else sfam.replace(".", "/") \
+            for sfam in cathcode]
+        num_sfams_to_run = len(fixed_sfams)
+
+        done_domains = None
         if update_features is None and not force:
-            done_domains = [os.path.basename(domain).split("_")[0] for sfam in cathcode \
-                for domain in data_stores.cath_features.list_input_directory("/".join(sfam) if isinstance(sfam, (list,tuple)) else sfam.replace(".", "/")) \
-                if domain.endswith("edges.txt.gz")]
+            if not use_hsds:
+                cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
+
+                cath_domains = filter_hdf_chunks(
+                    cath_file,
+                    "table",
+                    columns=["cath_domain", "cathcode"],
+                    drop_duplicates=True)
+
+                done_domains = [os.path.basename(domain).split("_")[0] for sfam in cathcode \
+                    for domain in data_stores.cath_features.list_input_directory("/".join(sfam) if \
+                        isinstance(sfam, (list,tuple)) else sfam.replace(".", "/")) \
+                        if domain.endswith("edges.txt.gz")]
+
+            else:
+                with h5pyd.File(cathFileStoreID, mode="r", use_cache=False) as store:
+                    try:
+                        cath_domains = pd.DataFrame([(cath_domain, sfam) for sfam in fixed_sfams \
+                            for cath_domain in store[f"{sfam}/domains"].keys()], columns=["cath_domain", "cathcode"])
+                    except KeyError:
+                        raise RuntimeError(f"Must create hsds file first. Key not found {sfam}/domains")
+
+                    # try:
+                    #     check = [f"{sfam}/domains" for sfam in fixed_sfams]
+                    #     RealtimeLogger.info(f"Checking {check}")
+                    #     done_domains = [domain for sfam in fixed_sfams for domain in \
+                    #         store[f"{sfam}/domains"].keys() if \
+                    #         len(store[f"{sfam}/domains/{domain}"].keys())==3]
+                    # except KeyError as e:
+                    #     raise RuntimeError(f"Must create hsds file first. Key not found {e}")
+
+            num_domains_to_run = 500000
+            #domains_to_run = cath_domains[~cath_domains["cath_domain"].isin(done_domains)]
+            #num_domains_to_run = len(domains_to_run)
+            num_sfams_to_run = 7000 #len(cath_domains["cathcode"].drop_duplicates())
         else:
-            done_domains = None
+            #No update and forced
+            RealtimeLogger.info(f"Counting # of domains from {fixed_sfams}")
+            with h5pyd.File(cathFileStoreID, mode="a", use_cache=False) as store:
+                try:
+                    cath_domains = sum(1 for sfam in fixed_sfams for cath_domain in \
+                        store[f"{sfam}/domains"].keys())
+                except KeyError:
+                    raise RuntiemError("Must create hsds file first")
     else:
+        #No cath code proved, use all
         if update_features is None and not force:
-            done_domains = [os.path.basename(domain).split("_")[0] for domain in \
-                data_stores.cath_features.list_input_directory() \
-                if domain.endswith("edges.txt.gz")]
+            num_sfams_to_run = "all"
+            num_domains_to_run = 500000
         else:
-            done_domains = None
+            #FIX: find all completed domains?
+            num_sfams_to_run = "all"
+            num_domains_to_run = 500000
 
     if update_features is None and done_domains is not None:
         domains_to_run = cath_domains[~cath_domains["cath_domain"].isin(done_domains)]
+        num_domains_to_run = len(domains_to_run)
+        num_sfams_to_run = len(cath_domains["cathcode"].drop_duplicates())
     else:
-        domains_to_run = cath_domains
+        num_domains_to_run = 500000
 
     RealtimeLogger.info("Domains to from {} superfamilies to run: {}".format(
-        len(cathcode) if cathcode is not None else "all", len(domains_to_run)))
+        num_sfams_to_run, num_domains_to_run))
 
-    if len(domains_to_run) > 500:
+    if num_domains_to_run > 500:
         #Start CATH hiearchy
         RealtimeLogger.info("Starting CATH Hierachy")
-        run_cath_hierarchy(job, cathcode, process_superfamily, cathFileStoreID,
-            skip_cathcode=skip_cathcode, update_features=update_features, force=force)
+        cath_hierarchy_runner(job, cathcode, process_superfamily, cathFileStoreID,
+            skip_cathcode=skip_cathcode, update_features=update_features, use_hsds=use_hsds, force=force)
     else:
         superfamilies = domains_to_run["cathcode"].drop_duplicates().str.replace(".", "/")
         if skip_cathcode is not None and len(skip_cathcode) > 0:
@@ -177,11 +270,49 @@ def start_toil(job, cathFileStoreID, cathcode=None, skip_cathcode=None, update_f
     #Build Interactome
     #job.addChildJobFn()
 
+def start_toil(job, cathFileStoreID, cathcode=None, skip_cathcode=None, pdbs=None, update_features=None, use_hsds=True, work_dir=None, force=False):
+    if work_dir is None:
+        if job is not None and hasattr(job, "fileStore"):
+            work_dir = job.fileStore.getLocalTempDir()
+        else:
+            work_dir = os.getcwd()
+
+    if pdbs is not None and (cathcode is not None or skip_cathcode is not None):
+        raise RuntimeError("Cannot use --pdbs with --cathcode or --skip_cathcode")
+
+    if use_hsds:
+        job.addChildJobFn(create_h5_hierarchy, cathFileStoreID, cathcode=cathcode,
+            skip_cathcode=skip_cathcode, work_dir=work_dir, force=force)
+
+    job.addFollowOnJobFn(start_domain_and_features, cathFileStoreID, cathcode=cathcode,
+        skip_cathcode=skip_cathcode, update_features=update_features, use_hsds=use_hsds,
+        force=force)
+
+def str2boolorval(v):
+    def is_num(a):
+        try:
+            int(a)
+            return True
+        except ValueError:
+            return False
+
+    if isinstance(v, bool):
+       return v
+    elif is_num(v):
+        return int(v)
+    elif v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        return False
+
 if __name__ == "__main__":
     from toil.common import Toil
     from toil.job import Job
 
     parser = Job.Runner.getDefaultArgumentParser()
+
     parser.add_argument(
         "-c", "--cathcode",
         nargs='+',
@@ -190,6 +321,7 @@ if __name__ == "__main__":
         "-s", "--skip_cathcode",
         nargs='+',
         default=None)
+    parser.add_argument("--pdb", default=None, nargs="+")
     parser.add_argument(
         "--features",
         nargs="+",
@@ -197,12 +329,30 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--force",
+        type=str2boolorval,
+        nargs='?',
+        const=True,
+        default=False,
+        help="Which files should be overwrriten. (0, False)=No files overwritten; (1, True)=Only Features, 2=Structure and Features, 3=Entire database. Default is False.")
+    parser.add_argument(
+        "--hsds_file",
+        default=None)
+    parser.add_argument(
+        "--no_hsds",
         action="store_true",
         default=False)
+    parser.add_argument(
+        "--work_dir",
+        default=os.getcwd())
+
     options = parser.parse_args()
+
     options.logLevel = "DEBUG"
     #options.clean = "always"
     options.targetTime = 1
+
+    if options.pdb is not None and (options.cathcode is not None or options.skip_cathcode is not None):
+        raise RuntimeError("Cannot use --pdbs with --cathcode or --skip_cathcode")
 
     if options.cathcode is not None:
         options.cathcode = [c.split(".") for c in options.cathcode]
@@ -210,16 +360,43 @@ if __name__ == "__main__":
     if options.skip_cathcode is not None:
         options.skip_cathcode = [c.replace(".", "/") for c in options.skip_cathcode if c.count(".")==3]
 
-    sfam_file = os.path.abspath("cath.h5")
-    if not os.path.isfile(sfam_file):
-        store = IOStore.get("aws:us-east-1:molmimic-cath")
-        store.read_input_file("cath-domain-description-file-small.h5", sfam_file)
+    if options.pdb is not None:
+        if len(options.pdb) == 1:
+            if os.path.isfile(options.pdb[0]):
+                #Check if file with pdb paths
+                with open(options.pdb[0]) as f:
+                    pdb_file = next(f)
+                    if os.path.isfile(pdb_file):
+                        f.seek(0)
+                        options.pdb = [pdb.rstrip() for pdb in f]
+            elif os.path.isdir(options.pdb[0]):
+                options.pdb = [pdb for pdb in next(os.walk(options.pdb[0]))[2] if pdb.endswith(".pdb")]
+            else:
+                raise RuntimeError("Invalid option for --pdb. Must be paths to pdbs files as arguments, a single file with path on each line, or a directory with pdb files")
+
+    if options.no_hsds:
+        sfam_file = os.path.abspath("cath.h5")
+        if not os.path.isfile(sfam_file):
+            store = IOStore.get("aws:us-east-1:molmimic-cath")
+            store.read_input_file("cath-domain-description-file-small.h5", sfam_file)
+    elif options.hsds_file is None:
+        raise RuntimeError("Must specify hsds file")
+    elif "HS_USERNAME" not in os.environ:
+        raise RuntimeError("Must specify HSDS username env variable: HS_USERNAME")
+    elif "HS_PASSWORD" not in os.environ:
+        raise RuntimeError("Must specify HSDS username env variable: HS_PASSWORD")
+    elif "HS_ENDPOINT" not in os.environ or not os.environ["HS_ENDPOINT"].startswith("http"):
+        raise RuntimeError("Must specify HSDS endpoint env variable: HS_ENDPOINT and it must begin with http")
 
     with Toil(options) as workflow:
         if not workflow.options.restart:
-            cathFileStoreID = workflow.importFile("file://" + os.path.abspath(sfam_file))
+            if options.no_hsds:
+                cathFileStoreID = workflow.importFile("file://" + os.path.abspath(sfam_file))
+            else:
+                cathFileStoreID = options.hsds_file
             job = Job.wrapJobFn(start_toil, cathFileStoreID, cathcode=options.cathcode,
-                skip_cathcode=options.skip_cathcode, update_features=options.features, force=options.force)
+                skip_cathcode=options.skip_cathcode, pdbs=options.pdb, update_features=options.features,
+                use_hsds=not options.no_hsds, work_dir=options.work_dir, force=options.force)
             workflow.start(job)
         else:
             workflow.restart()

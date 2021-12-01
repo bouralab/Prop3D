@@ -8,6 +8,7 @@ from molmimic.parsers.container import Container
 
 class SCWRL(Container):
     IMAGE = 'docker://edraizen/scwrl4:latest'
+    ENTRYPOINT = "/opt/scwrl4/Scwrl4"
     LOCAL = ["scwrl4"]
     PARAMETERS = [
         ("in_file", "path:in", "i"),
