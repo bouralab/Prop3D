@@ -1,0 +1,125 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # It is good practice to include your username in your job name.
+  # Also specify it in TOIL_KUBERNETES_OWNER
+  name: molimic-data-generation-toil
+# Do not try and rerun the leader job if it fails
+
+spec:
+ backoffLimit: 0
+ template:
+   spec:
+     # Do not restart the pod when the job fails, but keep it around so the
+     # log can be retrieved
+     restartPolicy: Never
+     volumes:
+     - name: aws-credentials-vol
+       secret:
+         # Make sure the AWS credentials are available as a volume.
+         # This should match TOIL_AWS_SECRET_NAME
+         secretName: aws-credentials
+     # You may need to replace this with a different service account name as
+     # appropriate for your cluster.
+     serviceAccountName: default
+     containers:
+     - name: main
+       image: quay.io/ucsc_cgl/toil:5.5.0
+       env:
+       # Specify your username for inclusion in job names
+       - name: TOIL_KUBERNETES_OWNER
+         value: demo-user
+       # Specify where to find the AWS credentials to access the job store with
+       - name: TOIL_AWS_SECRET_NAME
+         value: aws-credentials
+       # Specify where per-host caches should be stored, on the Kubernetes hosts.
+       # Needs to be set for Toil's caching to be efficient.
+       - name: TOIL_KUBERNETES_HOST_PATH
+         value: /data/scratch
+       - name: TOIL_JOB_NAME
+         value: cath-paper-test
+       - name: TOIL_S3_HOST
+         value: http://minio.minio-tenant-1.svc.cluster.local:80
+       - name: TOIL_S3_PORT
+         value: 80
+       - name: TOIL_S3_USE_SSL
+         value: False
+       - name: S3_ENDPOINT
+         value: http://minio.minio-tenant-1.svc.cluster.local:80
+       - name: USE_SINGULARITY
+         value: True
+       - name: SFAMS
+         value: "1.10.10.10 1.10.238.10 1.10.490.10 1.10.510.10 1.20.1260.10 2.30.30.100 2.40.50.140 2.60.40.10 3.10.20.30 3.30.230.10 3.30.300.20 3.30.310.60 3.30.1360.40 3.30.1370.10 3.30.1380.10 3.40.50.300 3.40.50.720 3.80.10.10 3.90.79.10 3.90.420.10"
+       volumeMounts:
+       # Mount the AWS credentials volume
+       - mountPath: /root/.aws
+         name: aws-credentials-vol
+       resources:
+         # Make sure to set these resource limits to values large enough
+         # to accommodate the work your workflow does in the leader
+         # process, but small enough to fit on your cluster.
+         #
+         # Since no request values are specified, the limits are also used
+         # for the requests.
+         limits:
+           cpu: 2
+           memory: "4Gi"
+           ephemeral-storage: "10Gi"
+       command:
+       - /bin/bash
+       - -c
+       - |
+         # This Bash script will set up Toil and the workflow to run, and run them.
+         set -e
+         # We make sure to create a work directory; Toil can't hot-deploy a
+         # script from the root of the filesystem, which is where we start.
+         mkdir /tmp/work
+         cd /tmp/work
+         # We make a virtual environment to allow workflow dependencies to be
+         # hot-deployed.
+         #
+         # We don't really make use of it in this example, but for workflows
+         # that depend on PyPI packages we will need this.
+         #
+         # We use --system-site-packages so that the Toil installed in the
+         # appliance image is still available.
+         virtualenv --python python3 --system-site-packages venv
+         . venv/bin/activate
+         #
+         #Now we will install molimic into the virtualenv
+         git clone https://github.com/edraizen/molmimic.git
+         cd molmimic
+         python setup.py install
+         cd /tmp/work
+         rm -rf molmimic
+         #
+         # Make sure job name is set
+         if [[ -z "${TOIL_JOB_NAME}" ]]; then
+             echo "Error! Must set TOIL_JOB_NAME" 1>&2
+             exit 1
+         fi
+         #
+         #Now we increment the job name if there were previous jobs
+         if [[ -z "${TOIL_S3_HOST}" ]]; then
+             if [[ ${TOIL_S3_USE_SSL:-True} == "True"]]; then
+                 export TOIL_JOB_FULL_NAME=`aws --endpoint-url $TOIL_S3_HOST:$TOIL_S3_PORT s3 ls s3://$TOIL_JOB_NAME | wc -l`
+             else
+                 export TOIL_JOB_FULL_NAME=`aws --no-verify-ssl --endpoint-url $TOIL_S3_HOST:$TOIL_S3_PORT s3 ls s3://$TOIL_JOB_NAME | wc -l`
+         else
+             export TOIL_JOB_FULL_NAME=`aws s3 ls s3://$TOIL_JOB_NAME | wc -l`
+         fi
+         #
+         # Now we run the workflow. We make sure to use the Kubernetes batch
+         # system and an AWS job store, and we set some generally useful
+         # logging options. We also make sure to enable caching.
+         python -m molmimic.generate_data.main \
+             aws:us-east-1:$TOIL_JOB_FULL_NAME \
+             --batchSystem kubernetes \
+             --logInfo \
+             -c $SFAMS \
+             --hsds_file "/home/ed4bu/$TOIL_JOB_NAME.h5" \
+             --force 0 \
+             --realTimeLogging \
+             --retryCount 4 \
+             --clean never \
+             --maxNodes 21

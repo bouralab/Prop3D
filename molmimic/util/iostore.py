@@ -722,11 +722,16 @@ class S3IOStore(IOStore):
             print("Connecting to bucket {} in region {}".format(
                 self.bucket_name, self.region))
 
+            kwds = {}
+            kwds["config"] = botocore.client.Config(signature_version='s3v4',
+                retries={"max_attempts":20})
+
+            if "S3_ENDPOINT" in os.environ:
+                kwds["endpoint_url"] = os.environ["S3_ENDPOINT"]
+
             # Connect to the s3 bucket service where we keep everything
-            self.s3 = boto3.client('s3', self.region, config=
-                botocore.client.Config(signature_version='s3v4', retries={"max_attempts":20}))
-            self.s3r = boto3.resource('s3', self.region, config=
-                botocore.client.Config(signature_version='s3v4', retries={"max_attempts":20}))
+            self.s3 = boto3.client('s3', self.region, **kwds)
+            self.s3r = boto3.resource('s3', self.region, **kwds)
             try:
                 self.s3.head_bucket(Bucket=self.bucket_name)
             except:
