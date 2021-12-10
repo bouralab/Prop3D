@@ -112,7 +112,7 @@ def build_sym_transforms(moving_mol, mol_pdb, mol_chain, moving_int, int_pdb, in
         if sym_op is not None and sym_op_rot==transform["M_au"]:
             for j in range(3):
                 for pm in (1, -1):
-                    t = np.array([t+pm if j=jj else t for r in transform["M_au"]])
+                    t = np.array([t+pm if j==jj else t for r in transform["M_au"]])
                     if sym_op_trans == t:
                         if return_matrices:
                             return transform

@@ -56,8 +56,8 @@ def feature_selection(ibis_data):
         X[i] = np.nan_to_num(features["data"])
 
     for name, (model, should_create) in list(models.items()):
-    	try:
-        	model.fit(X)
+        try:
+            model.fit(X)
         except ValueError as e:
             print(name)
             print(e)
@@ -65,7 +65,7 @@ def feature_selection(ibis_data):
             print()
             continue
         if should_create:
-        	model = SelectFromModel(model, prefit=True)
+            model = SelectFromModel(model, prefit=True)
         if name != "pca":
             print(name, "=", [feature_names[i] for i, s in enumerate(model.get_support()) if s])
 

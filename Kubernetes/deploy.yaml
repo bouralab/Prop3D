@@ -42,7 +42,7 @@ spec:
        - name: JOB_NAME
          value: cath-paper-test
        - name: TOIL_S3_HOST
-         value: http://minio.minio-tenant-1.svc.cluster.local:80
+         value: minio.minio-tenant-1.svc.cluster.local
        - name: TOIL_S3_PORT
          value: "80"
        - name: TOIL_S3_USE_SSL
@@ -77,8 +77,9 @@ spec:
        - |
          # Test env
          ls -la ~/.aws/
+         env | grep TOIL
          # This Bash script will set up Toil and the workflow to run, and run them.
-         set -e
+         #set -e
          # We make sure to create a work directory; Toil can't hot-deploy a
          # script from the root of the filesystem, which is where we start.
          mkdir /tmp/work
@@ -138,3 +139,4 @@ spec:
              --clean never \
              --maxNodes 21 \
              --stats
+         sleep 3600
