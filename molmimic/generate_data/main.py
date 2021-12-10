@@ -381,12 +381,12 @@ if __name__ == "__main__":
             store.read_input_file("cath-domain-description-file-small.h5", sfam_file)
     elif options.hsds_file is None:
         raise RuntimeError("Must specify hsds file")
-    elif "HS_USERNAME" not in os.environ:
-        raise RuntimeError("Must specify HSDS username env variable: HS_USERNAME")
-    elif "HS_PASSWORD" not in os.environ:
-        raise RuntimeError("Must specify HSDS username env variable: HS_PASSWORD")
-    elif "HS_ENDPOINT" not in os.environ or not os.environ["HS_ENDPOINT"].startswith("http"):
-        raise RuntimeError("Must specify HSDS endpoint env variable: HS_ENDPOINT and it must begin with http")
+    # elif "HS_USERNAME" not in os.environ:
+    #     raise RuntimeError("Must specify HSDS username env variable: HS_USERNAME")
+    # elif "HS_PASSWORD" not in os.environ:
+    #     raise RuntimeError("Must specify HSDS username env variable: HS_PASSWORD")
+    # elif "HS_ENDPOINT" not in os.environ or not os.environ["HS_ENDPOINT"].startswith("http"):
+    #     raise RuntimeError("Must specify HSDS endpoint env variable: HS_ENDPOINT and it must begin with http")
 
     with Toil(options) as workflow:
         if not workflow.options.restart:

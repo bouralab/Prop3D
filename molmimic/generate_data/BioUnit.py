@@ -90,7 +90,7 @@ def build_sym_transforms(moving_mol, mol_pdb, mol_chain, moving_int, int_pdb, in
     if sym_op == "X,Y,Z":
         return moving_int
     elif sym_op is not None:
-        _sym_op = [dim.split("+") dim in sym_op.split(",")]
+        _sym_op = [dim.split("+") for dim in sym_op.split(",")]
         _sym_op_rot, sym_op_trans = zip(*_sym_op)
         sym_op_trans = np.array(sym_op_trans, dtype=float)
 

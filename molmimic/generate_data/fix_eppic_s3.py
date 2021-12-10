@@ -14,3 +14,4 @@ def fix_s3():
         elif len(similar_files) == 2:
             for k in similar_files:
                 if k.endswith(".json"):
+                    pass

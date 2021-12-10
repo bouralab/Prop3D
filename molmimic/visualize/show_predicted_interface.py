@@ -16,7 +16,7 @@ def show_predicted_interface(sfam_id, prediction_file):
         raise
 
     interfaces = pd.read_hdf(interface_file, "table")
-    print interfaces[["mol_pdb", "mol_chain", "mol_sdi_id", "mol_domNo"]].head()
+    print(interfaces[["mol_pdb", "mol_chain", "mol_sdi_id", "mol_domNo"]].head())
 
     scores = {}
 
@@ -57,7 +57,7 @@ def show_predicted_interface(sfam_id, prediction_file):
 
             if len(tp_resi) == 0:
                 print "    Failed"
-                
+
             else:
                 print id, "f1:", f1
 

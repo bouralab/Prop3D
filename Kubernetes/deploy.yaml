@@ -19,6 +19,9 @@ spec:
          # Make sure the AWS credentials are available as a volume.
          # This should match TOIL_AWS_SECRET_NAME
          secretName: aws-credentials
+     - name: hsds-credentials-vol
+       secret:
+         secretName: hsds-credentials
      # You may need to replace this with a different service account name as
      # appropriate for your cluster.
      serviceAccountName: default
@@ -41,19 +44,22 @@ spec:
        - name: TOIL_S3_HOST
          value: http://minio.minio-tenant-1.svc.cluster.local:80
        - name: TOIL_S3_PORT
-         value: 80
+         value: "80"
        - name: TOIL_S3_USE_SSL
-         value: False
+         value: "False"
        - name: S3_ENDPOINT
          value: http://minio.minio-tenant-1.svc.cluster.local:80
        - name: USE_SINGULARITY
-         value: True
+         value: "True"
        - name: SFAMS
          value: "1.10.10.10 1.10.238.10 1.10.490.10 1.10.510.10 1.20.1260.10 2.30.30.100 2.40.50.140 2.60.40.10 3.10.20.30 3.30.230.10 3.30.300.20 3.30.310.60 3.30.1360.40 3.30.1370.10 3.30.1380.10 3.40.50.300 3.40.50.720 3.80.10.10 3.90.79.10 3.90.420.10"
        volumeMounts:
        # Mount the AWS credentials volume
        - mountPath: /root/.aws
          name: aws-credentials-vol
+       - mountPath: /root/.hscfg
+         name: hsds-credentials-vol
+         subPath: ".hscfg"
        resources:
          # Make sure to set these resource limits to values large enough
          # to accommodate the work your workflow does in the leader
@@ -69,6 +75,8 @@ spec:
        - /bin/bash
        - -c
        - |
+         # Test env
+         ls -la ~/.aws/
          # This Bash script will set up Toil and the workflow to run, and run them.
          set -e
          # We make sure to create a work directory; Toil can't hot-deploy a
@@ -92,6 +100,9 @@ spec:
          python setup.py install
          cd /tmp/work
          rm -rf molmimic
+         python -m pip install h5py h5pyd
+         python -m pip install -U urllib3
+         python -m pip install -U requests
          #
          # Make sure job name is set
          if [[ -z "${TOIL_JOB_NAME}" ]]; then
@@ -101,10 +112,11 @@ spec:
          #
          #Now we increment the job name if there were previous jobs
          if [[ -z "${TOIL_S3_HOST}" ]]; then
-             if [[ ${TOIL_S3_USE_SSL:-True} == "True"]]; then
+             if [[ ${TOIL_S3_USE_SSL:-True} == "True" ]]; then
                  export TOIL_JOB_FULL_NAME=`aws --endpoint-url $TOIL_S3_HOST:$TOIL_S3_PORT s3 ls s3://$TOIL_JOB_NAME | wc -l`
              else
                  export TOIL_JOB_FULL_NAME=`aws --no-verify-ssl --endpoint-url $TOIL_S3_HOST:$TOIL_S3_PORT s3 ls s3://$TOIL_JOB_NAME | wc -l`
+             fi
          else
              export TOIL_JOB_FULL_NAME=`aws s3 ls s3://$TOIL_JOB_NAME | wc -l`
          fi
@@ -122,4 +134,5 @@ spec:
              --realTimeLogging \
              --retryCount 4 \
              --clean never \
-             --maxNodes 21
+             --maxNodes 21 \
+             --stats
