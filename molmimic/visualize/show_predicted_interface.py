@@ -24,7 +24,7 @@ def show_predicted_interface(sfam_id, prediction_file):
         for line in f:
             fields = line.rstrip().split(",")
             id, pred_resi = fields[0], fields[1:]
-            print id, pred_resi
+            print(id, pred_resi)
             pdb, chain, sdi, domNo = id.split("_")
             sdi, domNo = sdi[3:], domNo[1:]
 
@@ -37,7 +37,7 @@ def show_predicted_interface(sfam_id, prediction_file):
                 ]
 
             if interface.shape[0] == 0:
-                print "Skipped", id
+                print("Skipped", id)
                 continue
 
             true_resi = []
@@ -46,8 +46,8 @@ def show_predicted_interface(sfam_id, prediction_file):
             true_resi = set(true_resi)
             pred_resi = set(pred_resi)
 
-            print "   ", true_resi
-            print "   ", pred_resi
+            print("   ", true_resi)
+            print("   ", pred_resi)
 
             tp_resi = true_resi.intersection(pred_resi)
             fp_resi = pred_resi-true_resi
@@ -56,10 +56,10 @@ def show_predicted_interface(sfam_id, prediction_file):
             f1 = (2*len(tp_resi))/float((2*len(tp_resi)+len(fn_resi)+len(fp_resi)))
 
             if len(tp_resi) == 0:
-                print "    Failed"
+                print("    Failed")
 
             else:
-                print id, "f1:", f1
+                print(id, "f1:", f1)
 
             if not os.path.isfile(pdb_file):
                 try:

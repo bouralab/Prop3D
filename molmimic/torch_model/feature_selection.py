@@ -59,11 +59,11 @@ def feature_selection(ibis_data):
     	try:
         	model.fit(X)
         except ValueError as e:
-        	print(name)
-        	print(e)
-        	print(X)
-        	print()
-        	continue
+            print(name)
+            print(e)
+            print(X)
+            print()
+            continue
         if should_create:
         	model = SelectFromModel(model, prefit=True)
         if name != "pca":

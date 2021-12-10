@@ -39,7 +39,7 @@ spec:
        # Needs to be set for Toil's caching to be efficient.
        - name: TOIL_KUBERNETES_HOST_PATH
          value: /data/scratch
-       - name: TOIL_JOB_NAME
+       - name: JOB_NAME
          value: cath-paper-test
        - name: TOIL_S3_HOST
          value: http://minio.minio-tenant-1.svc.cluster.local:80
@@ -105,27 +105,29 @@ spec:
          python -m pip install -U requests
          #
          # Make sure job name is set
-         if [[ -z "${TOIL_JOB_NAME}" ]]; then
-             echo "Error! Must set TOIL_JOB_NAME" 1>&2
+         if [[ -z "${JOB_NAME}" ]]; then
+             echo "Error! Must set JOB_NAME" 1>&2
              exit 1
          fi
          #
          #Now we increment the job name if there were previous jobs
          if [[ -z "${TOIL_S3_HOST}" ]]; then
              if [[ ${TOIL_S3_USE_SSL:-True} == "True" ]]; then
-                 export TOIL_JOB_FULL_NAME=`aws --endpoint-url $TOIL_S3_HOST:$TOIL_S3_PORT s3 ls s3://$TOIL_JOB_NAME | wc -l`
+                 export JOB_INDEX=`aws --endpoint-url $TOIL_S3_HOST:$TOIL_S3_PORT s3 ls s3://$JOB_NAME | wc -l`
              else
-                 export TOIL_JOB_FULL_NAME=`aws --no-verify-ssl --endpoint-url $TOIL_S3_HOST:$TOIL_S3_PORT s3 ls s3://$TOIL_JOB_NAME | wc -l`
+                 export JOB_INDEX=`aws --no-verify-ssl --endpoint-url $TOIL_S3_HOST:$TOIL_S3_PORT s3 ls s3://$JOB_NAME | wc -l`
              fi
          else
-             export TOIL_JOB_FULL_NAME=`aws s3 ls s3://$TOIL_JOB_NAME | wc -l`
+             export JOB_INDEX=`aws s3 ls s3://$JOB_NAME | wc -l`
          fi
+         export JOB_FULL_NAME="$JOB_NAME-$JOB_INDEX"
+         echo "Running job with name: $JOB_FULL_NAME"
          #
          # Now we run the workflow. We make sure to use the Kubernetes batch
          # system and an AWS job store, and we set some generally useful
          # logging options. We also make sure to enable caching.
          python -m molmimic.generate_data.main \
-             aws:us-east-1:$TOIL_JOB_FULL_NAME \
+             aws:us-east-1:$JOB_FULL_NAME \
              --batchSystem kubernetes \
              --logInfo \
              -c $SFAMS \

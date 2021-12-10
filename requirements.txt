@@ -18,3 +18,5 @@ freesasa
 botocore==1.23.23
 awscli
 spython
+h5py
+h5pyd

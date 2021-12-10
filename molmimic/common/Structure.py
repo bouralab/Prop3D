@@ -250,7 +250,7 @@ class Structure(object):
     def filter_atoms(self, atoms, include_hetatms=False, exclude_atoms=None, include_atoms=None):
         for a in atoms:
             hetflag, resseq, icode = a.get_parent().get_id()
-            if not include_hetatms and hetflag is not ' ':
+            if not include_hetatms and hetflag != ' ':
                 continue
             if exclude_atoms is not None and a.get_name().strip() in exclude_atoms:
                 continue

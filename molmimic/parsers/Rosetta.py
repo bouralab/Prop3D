@@ -58,26 +58,26 @@ def run_minimize(pdb_file, min_type="lbfgs_armijo_nonmonotone", min_tolerance=0.
             "-out:path:pdb", work_dir,
             "-out:path:score", work_dir]
 
-        command = ["minimize.static.linuxgccrelease"]+parameters
-        command += [
-            "-out:file:scorefile", score_file,
-            "-out:path:pdb", work_dir,
-            "-out:path:score", work_dir
-        ]
+    command = ["minimize.static.linuxgccrelease"]+parameters
+    command += [
+        "-out:file:scorefile", score_file,
+        "-out:path:pdb", work_dir,
+        "-out:path:score", work_dir
+    ]
 
-        try:
-            subprocess.check_output(["minimize.static.linuxgccrelease",
-                "-s", pqr_file,
-                "-run:min_type", "lbfgs_armijo_nonmonotone",
-                "-run:min_tolerance", "0.001",
-                "-overwrite", "false", #Pandas apply calls first row twice so this is needed
-                "-ignore_zero_occupancy", "false",
-                "-out:file:scorefile", score_file,
-                "-out:path:pdb", pdb_path,
-                "-out:path:score", pdb_path],
-                stderr=subprocess.PIPE)
-        except subprocess.CalledProcessError:
-            raise RuntimeError("Unable to minimize file {}".format(pqr_file))
+    try:
+        subprocess.check_output(["minimize.static.linuxgccrelease",
+            "-s", pqr_file,
+            "-run:min_type", "lbfgs_armijo_nonmonotone",
+            "-run:min_tolerance", "0.001",
+            "-overwrite", "false", #Pandas apply calls first row twice so this is needed
+            "-ignore_zero_occupancy", "false",
+            "-out:file:scorefile", score_file,
+            "-out:path:pdb", pdb_path,
+            "-out:path:score", pdb_path],
+            stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError:
+        raise RuntimeError("Unable to minimize file {}".format(pqr_file))
 
     attempts = 0
     while not os.path.isfile(minimized_file) or number_of_lines(minimized_file) == 0:
