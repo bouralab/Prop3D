@@ -38,6 +38,7 @@ PDB_SECTIONS = [
 class Reduce(Container):
     IMAGE = 'docker://edraizen/reduce:latest'
     LOCAL = ["reduce"]
+    ENTRYPOINT = "/opt/reduce/reduce"
     PARAMETERS = [
         (":trim", "store_true", ["-Trim"]),
         (":his", "store_true", ["-HIS"]),
