@@ -73,6 +73,7 @@ class Electrostatics(object):
 
 class _APBS(Container):
     IMAGE = 'docker://edraizen/apbs:latest'
+    ENTRYPOINT = "/opt/apbs/apbs-pdb2pqr/apbs/bin/apbs"
     LOCAL = ["apbs"]
     PARAMETERS = [("in_file", "path:in")]#, (":out_file", "path:out")]
     RETURN_FILES = True
@@ -207,6 +208,7 @@ class _MissingAtomsError(ValueError):
 
 class _Pdb2pqr(Container):
     IMAGE = 'docker://edraizen/pdb2pqr:latest'
+    ENTRYPOINT = "/usr/share/pdb2pqr/pdb2pqr.py"
     LOCAL = ["/usr/share/pdb2pqr/pdb2pqr.py"]
     PARAMETERS = [
         (":force_field:amber", None, "ff"),
