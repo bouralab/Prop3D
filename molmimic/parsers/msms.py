@@ -24,6 +24,7 @@ _polarHydrogens = {
 
 class MSMS(Container):
     IMAGE = 'docker://edraizen/msms:latest'
+    ENTRYPOINT = "/usr/local/bin/msms"
     LOCAL = ["msms"]
     PARAMETERS = [
         ("in_file", "path:in", ["-if", "{}"]),
