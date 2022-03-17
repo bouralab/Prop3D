@@ -24,7 +24,8 @@ from molmimic.parsers.eppic import EPPICApi, EPPICLocal
 from molmimic.common.Structure import Structure, angle_between, get_dihedral
 from molmimic.common.ProteinTables import hydrophobicity_scales
 from molmimic.common.features import atom_features, residue_features, \
-    atom_features_by_category, residue_features_by_category, default_atom_features
+    atom_features_by_category, residue_features_by_category, default_atom_features, \
+    check_threshold
 
 class ProteinFeaturizer(Structure):
     def __init__(self, path, cath_domain, job, work_dir,
@@ -289,13 +290,15 @@ class ProteinFeaturizer(Structure):
 
         charge = [
             charge_value,
-            float(charge_value < 0),
-            float(charge_value > 0)]
+            check_threshold("neg_charge", charge_value, residue=True), #float(charge_value < 0)
+            check_threshold("pos_charge", charge_value, residue=True) #float(charge_value > 0)
+            ]
         cols = residue_features_by_category["get_charge_and_electrostatics"][:3]
         if not only_charge:
             charge += [
                 electrostatic_pot_value,
-                float(electrostatic_pot_value < 0)]
+                check_threshold("is_electronegative", electrostatic_pot_value, residue=True) #float(electrostatic_pot_value < 0)
+                ]
             cols += residue_features_by_category["get_charge_and_electrostatics"][3:]
 
         if only_bool:
@@ -358,15 +361,17 @@ class ProteinFeaturizer(Structure):
 
             charge = [
                 charge_value,
-                float(charge_value < 0),
-                float(charge_value > 0)]
+                check_threshold("neg_charge", charge_value), #float(charge_value < 0)
+                check_threshold("pos_charge", charge_value) #float(charge_value > 0)
+                ]
 
         cols = atom_features_by_category["get_charge_and_electrostatics"][:3]
         if not only_charge:
             if calculate:
                 charge += [
                     electrostatic_pot_value,
-                    float(electrostatic_pot_value < 0)]
+                    check_threshold("is_electronegative", electrostatic_pot_value) #float(electrostatic_pot_value < 0)
+                ]
             cols += atom_features_by_category["get_charge_and_electrostatics"][3:]
 
         if only_bool:
@@ -395,7 +400,8 @@ class ProteinFeaturizer(Structure):
 
             concavity = np.array([
                 concavity_value,
-                float(concavity_value <= 2)])
+                check_threshold("is_concave", concavity_value, residue=True) #float(concavity_value <= 2)
+                ])
 
             idx = residue.get_id()
             cols = residue_features_by_category["get_concavity"]
@@ -414,7 +420,7 @@ class ProteinFeaturizer(Structure):
 
         concavity = np.array([
             concavity_value,
-            float(concavity_value <= 2) #is concave
+            check_threshold("is_concave", concavity_value) #float(concavity_value <= 2)
             ])
 
         idx = atom.serial_number
@@ -445,7 +451,7 @@ class ProteinFeaturizer(Structure):
 
         result = np.array([
             hydrophobicity,
-            float(hydrophobicity > 0),
+            check_threshold("is_hydrophobic", hydrophobicity, residue=not use_atom), #float(concavity_value <= 2)
             biological,
             octanal
             ])
@@ -547,7 +553,8 @@ class ProteinFeaturizer(Structure):
 
         asa = np.array([
             residue_rasa,
-            float(residue_rasa < acc_threshold)])
+            check_threshold("residue_buried", residue_rasa, residue=True)
+        ])
 
         if is_atom:
             idx = atom.serial_number
@@ -728,7 +735,7 @@ class ProteinFeaturizer(Structure):
             eppic_store = IOStore.get("aws:us-east-1:molmimic-eppic-service")
 
             try:
-                eppic_api = EPPICApi(self.pdb, eppic_store, pdbe_store,
+                eppic_api = EPPICApi(self.pdb[:4], eppic_store, pdbe_store,
                     use_representative_chains=False, work_dir=self.work_dir)
                 self._eppic = eppic_api.get_entropy_scores(self.chain)
             except (SystemExit, KeyboardInterrupt):
@@ -742,7 +749,7 @@ class ProteinFeaturizer(Structure):
 
         result = pd.Series(np.empty(len(cols)), index=cols, dtype=np.float64)
         result["eppic_entropy"] = self._eppic.get(residue.get_id(), np.nan)
-        result["is_conserved"] = float(result["eppic_entropy"]<.5)
+        result["is_conserved"] = check_threshold("is_conserved", result["eppic_entropy"], residue=not use_atom)
 
         if only_bool:
             return result["is_conserved"]

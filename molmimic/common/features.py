@@ -25,6 +25,14 @@ default_residue_features = pd.Series(
     index=residue_features,
     dtype=np.float64)
 
+atom_feature_thresholds = {feature["name"]:(feature["threshold"], feature["equality"]) \
+    for category in features for feature in list(category.values())[0]\
+    if "threshold" in feature}
+
+residue_feature_thresholds = {feature["name"]:(feature["threshold"], feature["equality"]) \
+    for category in features for feature in list(category.values())[0] \
+    if feature["residue"] and "threshold" in feature}
+
 atom_bool_features = [feature["name"] for category in features for feature in \
     list(category.values())[0] if feature["bool"]]
 
@@ -66,6 +74,30 @@ def default_residue_feature_np(nres):
     df = default_residue_feature_df(natoms)
     ds_dt = np.dtype({'names':df.columns,'formats':df.dtypes.values()})
     return np.rec.fromarrays(df.values , dtype=ds_dt)
+
+def check_threshold(feature_name, raw_value, residue=False):
+    if raw_value == np.nan:
+        return np.nan
+
+    if not residue:
+        threshold, equality = atom_feature_thresholds[feature_name]
+    else:
+        threshold, equality = residue_feature_thresholds[feature_name]
+
+    if equality == ">":
+        val = raw_value>threshold
+    elif equality == "<":
+        val = raw_value<threshold
+    elif equality == "<=":
+        val = raw_value<=threshold
+    elif equality == ">=":
+        val = raw_value>=threshold
+    elif equality == "!=":
+        val = raw_value!=threshold
+    else:
+        raise RuntimeError("Unknown equlaity")
+
+    return float(val)
 
 non_geom_features_names = ["get_atom_type", "get_charge_and_electrostatics",
     "get_charge_and_electrostatics", "get_hydrophobicity", "get_residue",
