@@ -12,12 +12,14 @@ from Bio.PDB.NeighborSearch import NeighborSearch
 
 from molmimic.common.Structure import Structure
 from molmimic.common.ProteinTables import vdw_radii, vdw_aa_radii
-from molmimic.common.features import atom_features_by_category, number_of_features
+from molmimic.common.features import atom_features_by_category, number_of_features, \
+    default_atom_features, default_residue_features
 
 class ProteinVoxelizer(Structure):
     def __init__(self, path, cath_domain, input_format="pdb",
       volume=264, voxel_size=1.0, rotate=True, features_path=None,
-      residue_feature_mode=None, use_features=None, predict_features=None, ligand=False):
+      residue_feature_mode=None, use_features=None, predict_features=None,
+      replace_na=False, ligand=False):
         super().__init__(path, cath_domain,
             input_format=input_format, feature_mode="r",
             features_path=features_path,
@@ -33,6 +35,7 @@ class ProteinVoxelizer(Structure):
 
         self.use_features = use_features
         self.predict_features = predict_features
+        self.replace_na = replace_na
         self.ligand = ligand
 
         if rotate is None or (isinstance(rotate, bool) and not rotate):
@@ -229,6 +232,9 @@ class ProteinVoxelizer(Structure):
                     non_geom_features=non_geom_features,
                     use_deepsite_features=use_deepsite_features)
 
+            if self.replace_na:
+                features = features.fillna(default_atom_features)
+
             features = features.astype(float)
 
             #Handle truth values if its not an autoencoder
@@ -338,6 +344,10 @@ class ProteinVoxelizer(Structure):
             except Exception as e:
                 print(e)
                 raise
+
+            if self.replace_na:
+                features = features.fillna(default_residue_features)
+
             for residue_grid in self.get_vdw_grid_coords_for_residue(residue):
                 residue_grid = tuple(residue_grid.tolist())
                 try:
