@@ -66,6 +66,7 @@ class MODELLER(Container):
     IMAGE = "docker://edraizen/modeller:latest"
     LOCAL = [sys.executable]
     PARAMETERS = [("modeller_file", "path:in", "")]
+    ENTRYPOINT = "python"
 
     def automodel(self, template_id, target_id, pir_file, num_models=5,
       extra_modeller_code=None, automodel_command="automodel", return_best=True,
@@ -332,6 +333,7 @@ class MODELLER(Container):
 
         pir_file = self.format_in_path(None, pir_file)
         template_pdb = self.format_in_path(None, "{}.pdb".format(template_id[0]))
+        work_dir = os.path.dirname(template_pdb)
 
         modeller_file = os.path.join(self.work_dir, "run_modeller_{}.py".format(
             target_id))
@@ -365,19 +367,20 @@ class MODELLER(Container):
         if self.ss_restraints is not None:
             for ss_type, start, stop in self.ss_restraints:
                 if ss_type == "E":
-                    beta_range.append("           self.residue_range"
-                                         "('%s:%s', '%s:%s')," % (*start, *stop))
+                    beta_range.append("            self.residue_range"
+                                "('%s:%s', '%s:%s')," % (*start, *stop))
                 else:
                     alpha_range.append("           self.residue_range"
-                                         "('%s:%s', '%s:%s')," % (*start, *stop))
+                                             "('%s:%s', '%s:%s')," % (*start, *stop))
         alpha_range = "\n".join(alpha_range)
         beta_range = "\n".join(beta_range)
 
-        template_pdb = self.template_pdb
+        template_pdb = self.format_in_path(None, self.template_pdb)
         target_id = self.target_id
         modeller_file = os.path.join(self.work_dir, "run_modloop_{}.py".format(
             self.prefix))
-        work_dir = self.work_dir
+        work_dir = os.path.dirname(template_pdb) #self.work_dir
+        template_pdb = os.path.splitext(os.path.basename(template_pdb))[0]
 
         if self.pir_file is not None:
             pir_file = self.format_in_path(None, self.pir_file)
@@ -413,24 +416,25 @@ class MyLoop(loopmodel):
 
     def select_loop_atoms(self):
         rngs = (
-{residue_range}
+            {residue_range}
         )
         for rng in rngs:
             if len(rng) > 30:
                 raise ModellerError("loop too long")
-        s = selection(rngs)
-        if len(s.only_no_topology()) > 0:
-            raise ModellerError("some selected residues have no topology")
-        return s
+            s = selection(rngs)
+            if len(s.only_no_topology()) > 0:
+                raise ModellerError("some selected residues have no topology")
+            return s
 
     def special_restraints(self, aln):
         rsr = self.restraints
+
         for a in (
-{alpha_range}
+            {alpha_range}
         ):
             rsr.add(secondary_structure.alpha(a))
         for b in (
-{beta_range}
+            {beta_range}
         ):
             rsr.add(secondary_structure.strand(b))
 """.format(**locals()))
@@ -454,7 +458,8 @@ m.starting_model= 1
 m.ending_model  = 1
 """.format(**locals()))
 
-            f.write("""m.loop.md_level = refine.slow
+            f.write("""
+m.loop.md_level = refine.slow
 m.loop.starting_model = 1
 m.loop.ending_model = taskid
 m.make()
@@ -475,3 +480,97 @@ with open("{target_id}.dope_scores", "w") as fh:
     json.dump(results, fh)
 """.format(**locals()))
         return modeller_file
+
+# # Run this script with something like
+# #    python loop.py N > N.log
+# # where N is an integer from 1 to the number of models.
+# #
+# # ModLoop does this for N from 1 to 300 (it runs the tasks in parallel on a
+# # compute cluster), then returns the single model with the best (lowest)
+# # value of the Modeller objective function.
+#
+# import sys, os, json
+#
+# # to get different starting models for each task
+# taskid = int(sys.argv[1]) if len(sys.argv) > 1 else 5
+#
+# os.chdir('{work_dir}')
+#
+# from modeller import *
+# from modeller.automodel import *
+#
+# env = environ()
+# env.io.hydrogen = env.io.hetatm = env.io.water = True
+# env.io.atom_files_directory = ['{work_dir}', os.getcwd()]
+#
+# class MyLoop(loopmodel):
+#     def special_patches(self, aln):
+#         # Rename both chains and renumber the residues in each
+#         self.rename_segments(segment_ids=[c.name for c in aln[self.sequence].chains])
+#
+#     def fake_select_atoms(self):
+#         rngs = [
+# {alpha_range}
+#         ] + [
+# {beta_range}
+#         ]
+#         s = selection(rngs)
+#         if len(s.only_no_topology()) > 0:
+#             raise ModellerError("some selected residues have no topology")
+#         return s
+#
+#     def special_restraints(self, aln):
+#         rsr = self.restraints
+#         for a in (
+# {alpha_range}
+#         ):
+#             rsr.add(secondary_structure.alpha(a))
+#         for b in (
+# {beta_range}
+#         ):
+#             rsr.add(secondary_structure.strand(b))
+# """.format(**locals()))
+#             if self.pir_file is None:
+#                 f.write("""
+# m = MyLoop(env, inimodel='{template_pdb}',
+#     sequence='{target_id}',
+#     assess_methods=(assess.DOPE),
+# #    loop_assess_methods=(assess.DOPE)
+# )
+# """.format(**locals()))
+#             else:
+#                 f.write("""
+# m = MyLoop(env, alnfile = '{pir_file}',
+#     knowns = '{template_pdb}',
+#     sequence = '{target_id}',
+#     assess_methods=(assess.DOPE),
+#     #loop_assess_methods=(assess.DOPE)
+# )
+# m.starting_model= 1
+# m.ending_model  = 1
+# """.format(**locals()))
+#
+#             f.write("""
+# m.loop.md_level = refine.slow
+# m.loop.starting_model = 1
+# m.loop.ending_model = taskid
+# m.very_fast = True
+# m.md_level = refine.very_fast
+# m.make(exit_stage=2)
+#
+# results = {{"scores":[], "errors":[]}}
+# results["scores"] = [{{
+#     "name": x["name"],
+#     "score":x["DOPE score"]}} for x in m.loop.outputs if x['failure'] is None]
+# results["errors"] = [{{
+#     "name": x["name"],
+#     "score":str(x["failure"])}} for x in m.loop.outputs if x['failure'] is not None]
+# if len(results["scores"]) == 0:
+#     del results["scores"]
+# if len(results["errors"]) == 0:
+#     del results["errors"]
+#
+# with open("{target_id}.dope_scores", "w") as fh:
+#     json.dump(results, fh)
+# """.format(**locals()))
+#         return modeller_file
