@@ -42,10 +42,16 @@ class Structure(object):
         else:
             raise RuntimeError("Invalid PDB parser (pdb, mmcif, mmtf)")
 
-        self.cath_domain = self.sdi = cath_domain
-        self.pdb = cath_domain[:4]
-        self.chain = cath_domain[4]
-        self.domNo = cath_domain[5:]
+        if cath_domain is not None:
+            self.cath_domain = self.sdi = cath_domain
+            self.pdb = cath_domain[:4]
+            self.chain = cath_domain[4]
+            self.domNo = cath_domain[5:]
+        else:
+            self.cath_domain = self.pdb = os.path.splitext(os.path.basename(path))[0]
+            self.domNo = "00"
+            reset_chain = True
+
         self.volume = volume
 
         try:
@@ -102,19 +108,19 @@ class Structure(object):
         else:
             self.residue_feature_mode = residue_feature_mode
 
-        atom_index = [self._remove_altloc(a).serial_number for a in self.structure.get_atoms()]
         if self.atom_feature_mode == "r":
             self.atom_features = pd.read_hdf(self.atom_features_file, "table", mode="r")
         else:
-            self.atom_features = default_atom_feature_df(len(atom_index)).reindex(atom_index, axis=0)
+            atom_index = [self._remove_altloc(a).serial_number for a in self.structure.get_atoms()]
+            self.atom_features = default_atom_feature_df(len(atom_index)).assign(serial_number=atom_index)
+            self.atom_features = self.atom_features.set_index("serial_number")
 
         if self.residue_feature_mode == "r" and os.path.isfile(self.residue_features_file):
             self.residue_features = pd.read_hdf(self.residue_features_file, "table", mode="r")
         else:
-            residue_index = pd.MultiIndex.from_tuples(
-                [self._remove_inscodes(r).get_id() for r in \
-                self.structure.get_residues()], names=('HET_FLAG', 'resi', 'ins'))
-            self.residue_features = default_residue_feature_df(len(residue_index)).reindex(residue_index, axis=0)
+            het, resi, ins = zip(*[self._remove_inscodes(r).get_id() for r in self.structure.get_residues()])
+            self.residue_features = default_residue_feature_df(len(het)).assign(HET_FLAG=het, resi=resi, ins=ins)
+            self.residue_features = self.residue_features.set_index(["HET_FLAG", "resi", "ins"])
 
         self.atom_feature_names = copy.copy(atom_features)
         self.residue_feature_names = copy.copy(residue_features)
@@ -180,23 +186,7 @@ class Structure(object):
     def copy(self, empty=False):
         new = copy.deepcopy(self)
         return new
-        # del new.atom_features
-        # setattr(new, "atom_features", pd.DataFrame(
-        #     np.nan if empty else np.array(copy.deepcopy(self.atom_features.values.tolist())),
-        #     index=pd.Index(copy.deepcopy(self.atom_features.index.tolist())),
-        #     columns=copy.deepcopy(self.atom_features.columns.tolist()))) #  self.atom_features.copy(deep="all") #Use deep=all to get a full eep copy, including the index
-        # # new.atom_features = new.atom_features.assign(fuck_it=np.nan)
-        # #new.atom_features.values = copy.deepcopy(new.atom_features.values)
-        # new.residue_features = self.residue_features.copy(deep="all")
-        #
-        # del new.residue_features
-        # setattr(new, "residue_features", pd.DataFrame(
-        #     np.nan if empty else np.array(copy.deepcopy(self.residue_features.values.tolist())),
-        #     index=pd.Index(copy.deepcopy(self.residue_features.index.tolist())),
-        #     columns=copy.deepcopy(self.residue_features.columns.tolist())))
-        #
-        # assert np.may_share_memory(new.atom_features, self.atom_features)
-        #new.residue_features.values = copy.deepcopy(new.residue_features.values)
+
         #Make sure original files do not get overwritten
         new.features_path = os.getcwd()
         unique_id = int.from_bytes(os.urandom(4), sys.byteorder)
@@ -220,8 +210,7 @@ class Structure(object):
                     np.nan if empty else np.array(copy.deepcopy(self.residue_features.values.tolist())),
                     index=pd.Index(copy.deepcopy(self.residue_features.index.tolist())),
                     columns=copy.deepcopy(self.residue_features.columns.tolist())))
-            else:
-                setattr(result, k, copy.deepcopy(v, memo))
+
 
         setattr(result, "features_path", os.getcwd())
         unique_id = int.from_bytes(os.urandom(4), sys.byteorder)
@@ -323,8 +312,7 @@ class Structure(object):
                 features]) #self.atom_feature_names])
             self.atom_features.to_hdf(atom_features_file, "table")
 
-    def write_features_to_pdb(self, features_to_use=None, name=None, coarse_grain=False,
-      work_dir=None, other=None):
+    def write_features_to_pdb(self, features_to_use=None, name=None, coarse_grain=False, work_dir=None, other=None):
         if work_dir is None:
             work_dir = os.getcwd()
 
@@ -363,49 +351,59 @@ class Structure(object):
             self.atom_feature_names += list(features.keys())
 
     def get_pdb_dataframe(self, coarse_grained=False, include_features=False):
+        str_type = np.dtype('O', metadata={'vlen': str})
+        na = {float:np.nan, str_type:"", int:9999999}
+
         if coarse_grained:
             df = pd.DataFrame([
                 [
+                    *residue.id,
                     "".join(map(str, residue.id[1:])).strip(),
+                    residue.get_resname(),
                     residue.get_parent().id,
                     np.mean([a.get_bfactor() for a in residue]),  # isotropic B factor
                     *np.mean([a.get_coord() for a in residue], axis=0)
                 ] for residue in self.structure.get_residues()],
-                columns=["residue_id", "chain", "bfactor", "X", "Y", "Z"])
+                columns=["HET_FLAG", "resi", "ins", "residue_id", "residue_name",
+                         "chain", "bfactor", "X", "Y", "Z"])
+            df = df.set_index(["HET_FLAG", "resi", "ins"])
 
-            na = {float:np.nan, str:""}
+            na = {float:np.nan, str_type:""}
             for col, dtype in [
-              ("residue_id", str),
-              ("chain", str),
-              ("bfactor", float),
+              ("residue_id", str_type),
+              ("residue_name", str_type),
+              ("chain", str_type),
+              ("bfactor", str_type),
               ("X", float),
               ("Y", float),
               ("Z", float)]:
                 df[col] = df[col].fillna(na[dtype]).astype(dtype)
 
             if include_features:
-                df = pd.concat((df, self.residue_features), axis=1)
+                df = pd.merge(df, self.residue_features, left_index=True, right_index=True)
+                df = df.reset_index(drop=True)
+                #pd.concat((df, self.residue_features), axis=1)
         else:
             df = pd.DataFrame([
                 [
                     atom.serial_number,
                     atom.get_fullname(),
                     "".join(map(str, atom.get_parent().id[1:])).strip(),
+                    atom.get_parent().get_resname(),
                     atom.get_parent().get_parent().id,
                     atom.get_bfactor(),  # isotropic B factor
                     *atom.coord
                 ] for atom in self.structure.get_atoms()],
-                columns=["serial_number", "atom_name", "residue_id", "chain", "bfactor",
-                "X", "Y", "Z"])
+                columns=["serial_number", "atom_name", "residue_id", "residue_name",
+                         "chain", "bfactor", "X", "Y", "Z"])
 
 
-
-            na = {float:np.nan, str:"", int:9999999}
             for col, dtype in [
-              ("serial_number", int),
-              ("atom_name", str),
-              ("residue_id", str),
-              ("chain", str),
+              ("serial_number", str_type),
+              ("atom_name", str_type),
+              ("residue_id", str_type),
+              ("residue_name", str_type)
+              ("chain", str_type),
               ("bfactor", float),
               ("X", float),
               ("Y", float),
@@ -413,7 +411,8 @@ class Structure(object):
                 df[col] = df[col].fillna(na[dtype]).astype(dtype)
 
             if include_features:
-                df = pd.concat((df, self.atom_features), axis=1)
+                df = pd.merge(df, self.atom_features.reset_index(), on="serial_number")
+                #df = pd.concat((df, self.atom_features), axis=1)
         return df
 
     def get_residue_from_resseq(self, resseq, model=0, chain=None):
@@ -687,5 +686,3 @@ def get_dihedral(p0, p1, p2, p3):
     x = np.dot(v, w)
     y = np.dot(np.cross(b1, v), w)
     return np.degrees(np.arctan2(y, x))
-
-    return M, theta, phi, z

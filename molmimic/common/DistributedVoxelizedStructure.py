@@ -6,11 +6,12 @@ import numpy.lib.recfunctions
 
 from molmimic.common.DistributedStructure import DistributedStructure
 from molmimic.common.ProteinTables import vdw_aa_radii
+from molmimic.common.features import default_atom_features, default_residue_features
 
 class DistributedVoxelizedStructure(DistributedStructure):
     def __init__(self, path, key, cath_domain_dataset, coarse_grained=False, file_mode="r",
       volume=264, voxel_size=1.0, rotate=None, use_features=None, predict_features=None,
-      ligand=False):
+      replace_na=False, ligand=False):
         super().__init__(path, key, cath_domain_dataset, coarse_grained=coarse_grained,
             file_mode=file_mode)
 
@@ -28,6 +29,8 @@ class DistributedVoxelizedStructure(DistributedStructure):
         if self.predict_features is not None and use_features is not None:
             assert len(set(self.predict_features).intersection(set(self.use_features)))==0, \
                 "Cannot train on and predict the same features"
+
+        self.replace_na = replace_na
 
         self.ligand = ligand
 
@@ -147,8 +150,15 @@ class DistributedVoxelizedStructure(DistributedStructure):
             true_value_ = np.array([1.])
             neg_value_ = np.array([0.])
 
+        data = self.data #[self.use_features]
+
+        if self.replace_na:
+            for feature in self.use_features:
+                ind = data[feature] == np.nan
+                data[feature][ind] = default_atom_features[feature]
+
         for atom_index in range(len(self.data)):
-            atom = self.data[atom_index]
+            atom = data[atom_index]
 
             if only_surface and atom["residue_buried"]==1:
                 continue
@@ -160,7 +170,9 @@ class DistributedVoxelizedStructure(DistributedStructure):
             else:
                 truth = atom["residue_id"] in truth_residues
 
-            features = numpy.lib.recfunctions.structured_to_unstructured(atom[self.use_features])
+            features = atom[self.use_features]
+
+            features = numpy.lib.recfunctions.structured_to_unstructured(features)
 
             if simple_fft is not None:
                 features = self.simple_fft_scoring_features(atom, mode=simple_fft)
