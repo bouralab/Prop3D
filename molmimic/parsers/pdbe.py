@@ -1,14 +1,16 @@
 import pandas as pd
 from molmimic.parsers.json import JSONApi
+from molmimic.generate_data.data_stores import pdbe_store
 
 class PDBEApi(JSONApi):
-    def __init__(self, store, work_dir=None, download=True, max_attempts=2):
-        url = "https://www.ebi.ac.uk/pdbe/api/pdb/entry/"
+    def __init__(self, store=None, work_dir=None, download=True, max_attempts=2):
+        url = "https://www.ebi.ac.uk/pdbe/api/"
+        store = pdbe_store if store is None else store
         super(PDBEApi, self).__init__(url, store, work_dir=work_dir,
             download=download, max_attempts=max_attempts)
 
     def get_pdb_residues(self, pdb, chain):
-        residues = self.get("residue_listing/{}/chain/{}".format(pdb.lower(), chain))
+        residues = self.get("pdb/entry/residue_listing/{}/chain/{}".format(pdb.lower(), chain))
 
         if isinstance(residues, dict) and pdb not in residues:
             print(residues)
@@ -23,3 +25,7 @@ class PDBEApi(JSONApi):
                     residue_map["pdbResidueNumber"].append(pdbResNum)
 
         return pd.DataFrame(residue_map)
+
+    def get_uniprot_mapping(self, accession):
+        mappings = self.get("mappings/all_isoforms/{}".format(accession))
+        return mappings

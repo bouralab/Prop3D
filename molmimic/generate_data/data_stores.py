@@ -9,6 +9,7 @@ eppic_interfaces = IOStore.get("aws:us-east-1:eppic-interfaces")
 eppic_store = IOStore.get("aws:us-east-1:molmimic-eppic-service")
 pdbe_store = IOStore.get("aws:us-east-1:molmimic-pdbe-service")
 eppic_local_store = IOStore.get("aws:us-east-1:molmimic-eppic-local")
+raw_pdb_store = IOStore.get("aws:us-east-1:molmimic-raw-pdb")
 
 def eppic_interfaces_sync(output_dir=None):
     if output_dir is not None:

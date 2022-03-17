@@ -324,46 +324,51 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
 
     files_to_remove = []
 
+
+
+    cath_key = ""
+
     if os.path.isfile(cath_domain):
         domain_file = cath_domain
         local_file = True
+        chain = None
+        seq_range = None
     else:
         local_file = False
-        if cathcode is None:
-            raise RuntimeError("cathcode cannot be None if using cath domain names")
 
-        #Get cath domain file
-        cath_key = "{}/{}.pdb".format(cathcode.replace(".", "/"), cath_domain)
-        if data_stores.prepared_cath_structures.exists(cath_key) and \
-          data_stores.prepared_cath_structures.get_size(cath_key)>0:
-            return
+        if cathcode is None and "/" in cath_domain:
+            cath_domain, seq_range = cath_domain.rsplit("/", 1)
+            seq_range = [r.replace("-", ":") for r in seq_range.split("_")]
+        else:
+            seq_range = None
+
+        if seq_range is not None:
+            seq_range = seq_range.split("_")
 
         try:
+            assert len(cath_domain)==7
+            #Get cath domain file
+            cath_key = "{}/{}.pdb".format(cathcode.replace(".", "/"), cath_domain)
+            if cathcode is not None and data_stores.prepared_cath_structures.exists(cath_key) and \
+              data_stores.prepared_cath_structures.get_size(cath_key)>0:
+                return None, None, None, False
+
             #Download cath domain from s3 bucket or cath api
             domain_file = download_cath_domain(cath_domain, cathcode, work_dir=work_dir)
-            files_to_remove.append(domain_file)
+            chain = cath_domain[4]
+            if cathcode is not None:
+                files_to_remove.append(domain_file)
             assert os.path.isfile(domain_file), "Domain file not found: {}".format(domain_file)
         except (SystemExit, KeyboardInterrupt):
             raise
-        except KeyError as e:
-            if get_from_pdb:
-                #raise NotImplementedError("Download from PDB is not finishied")
-                cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
-                all_domains = filter_hdf(cath_file, "table", pdb=cath_domain[:4], chain=cath_domain[4])
-                curr_domain_segments = all_domains[all_domains["cath_domain"]==cath_domain]
-                curr_domain_segments = curr_domain_segments.sort_values("nseg")[["srange_start", "srange_stop"]]
-                all_domains = all_sdoms[all_sdoms.cath_domain.str.startswith(sdi[:5])].cath_domain.drop_duplicates()
-                if len(all_domains) == 1 and force_rslices is None:
-                    #Use full chain
-                    rslices = None
-                elif force_rslices is not None:
-                    rslices = force_rslices
-                else:
-                    rslices = ["{}:{}".format(st, en) for st, en in \
-                        curr_domain_segments.drop_duplicates().itertuples(index=False)]
+        except (KeyError, AssertionError):
+            if cathcode is None:
+                #If not using CATH, process pdb files from pdb or alphafold
 
                 try:
-                    domain_file = s3_download_pdb(cath_domain[:4], work_dir=work_dir)
+                    domain_file, chain, file_type = s3_download_pdb(cath_domain,
+                        work_dir=work_dir)
+                    local_file = True
                 except (SystemExit, KeyboardInterrupt):
                     raise
                 except:
@@ -384,7 +389,7 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
         #Extract domain; cleaned but atomic coordinates not added or changed
         try:
             domain_file, prep_steps = extract_domain(domain_file, cath_domain, cathcode,
-                work_dir=work_dir)
+                chain=chain, rslices=seq_range, work_dir=work_dir)
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as e:
@@ -441,8 +446,7 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
 
     print("RETURN?", local_file)
 
-    if local_file:
-        return prepared_file, prep_steps, domain_file
+    return prepared_file, prep_steps, domain_file, local_file
 
 def process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chain=None,
   force_rslices=None, force=False, work_dir=None, get_from_pdb=False, cleanup=True,

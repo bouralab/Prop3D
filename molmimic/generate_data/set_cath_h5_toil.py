@@ -95,7 +95,6 @@ def split_superfamily_at_level(job, cath_full_h5, superfamily, sfam_df, level_ke
 
             for domain in subset:
                 RealtimeLogger.info(f'{superfamily}/domains/{domain}')
-                RealtimeLogger.info(store[f'{superfamily}/domains/{domain}'])
                 group[domain] = store[f'{superfamily}/domains/{domain}']
 
 
@@ -116,17 +115,29 @@ def create_representatives_for_superfamily(job, sfam, cath_full_h5):
     representatives = [child["example_domain_id"] for child in hierarchy["children"]]
 
     key = f"{sfam.replace('.', '/')}/representatives"
-    group = self.f.require_group(key)
 
-    for domain in representatives:
-        self.f[f"{key}/{domain}"] = h5py.HardLink(f'{key}/domains/{domain}')
+    missing_domains = []
+
+    with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
+        group = store.require_group(key)
+
+        for domain in representatives:
+            RealtimeLogger.info(f"Adding {domain} from {sfam.replace('.', '/')}/domains/{domain} to {key}/{domain}")
+            try:
+                group[domain] = store[f"{sfam.replace('.', '/')}/domains/{domain}'"]
+            except KeyError:
+                missing_domains.append(domain)
+
+        if len(missing_domains) > 0:
+            store[key].attrs["missing_domains"] = missing_domains
+        store[key].attrs["total_domains"] = len(representatives)
 
 def create_splits(job, cath_full_h5, all_superfamilies):
     RealtimeLogger.info(f"Start all splits {all_superfamilies}")
     sfams = [g for g in all_superfamilies.groupby("h5_key")]
     RealtimeLogger.info(f"sfam splits {sfams}")
     map_job(job, create_splits_for_superfamily_levels, sfams, cath_full_h5)
-    map_job(job, create_representatives_for_superfamily, sfams, cath_full_h5)
+    map_job(job, create_representatives_for_superfamily, [s.iloc[0].cath_code for _, s in sfams], cath_full_h5)
     job.addFollowOnJobFn(finish_section, cath_full_h5, "completed_domain_splits")
     job.addFollowOnJobFn(finish_section, cath_full_h5, "completed_representatives")
 
@@ -282,7 +293,7 @@ def process_cath_names(job, cath_full_h5, cathcode=None, skip_cathcode=None, for
 
         names_ = None
         for code in use_sfams:
-            subset = names.apply(lambda r: r if code.startswith(r["cath_code"]+".") else pd.Series(), axis=1).dropna()
+            subset = names.apply(lambda r: r if code.startswith(r["cath_code"]+".") else pd.Series(dtype=str), axis=1).dropna()
             if names_ is None:
                 names_ = subset
             else:
@@ -319,12 +330,43 @@ def process_cath_names(job, cath_full_h5, cathcode=None, skip_cathcode=None, for
 
     job.addFollowOnJobFn(finish_section, cath_full_h5, "completed_names")
 
-def create_h5_hierarchy(job, cath_full_h5, cathcode=None, skip_cathcode=None, work_dir=None, force=False):
+def setup_custom_file(cath_full_h5, pdbs, force=False):
+    RealtimeLogger.info(f"Creating file {cath_full_h5}")
+
+    if is_num(force) and int(force)==3:
+        RealtimeLogger.info(f"Removing all previous data from {cath_full_h5}")
+        try:
+            #Empty file if it has been created before
+            with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
+                delete_groups(store)
+                store.flush()
+                RealtimeLogger.info(f"Deleted {cath_full_h5}")
+
+            with h5py.Folder(os.path.dirname(cath_full_h5)+"/", mode="a") as hparent:
+                del hparent[os.path.basename(cath_full_h5)]
+        except IOError:
+            raise
+            #not created
+            pass
+        except OSError:
+            pass
+        RealtimeLogger.info(f"Removed all previous data from {cath_full_h5}")
+    else:
+        RealtimeLogger.info(f"Not deleting any previous data from {cath_full_h5}")
+
+    with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
+        pass
+
+
+def create_h5_hierarchy(job, cath_full_h5, cathcode=None, skip_cathcode=None, pdbs=None, work_dir=None, force=False):
     if work_dir is None:
         if job is not None and hasattr(job, "fileStore"):
             work_dir = job.fileStore.getLocalTempDir()
         else:
             work_dir = os.getcwd()
+
+    if pdbs is not None:
+        return setup_custom_file(cath_full_h5, pdbs, force=force)
 
     run_names = True
 

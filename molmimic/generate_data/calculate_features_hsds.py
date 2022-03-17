@@ -50,7 +50,7 @@ class CalculateFeaturesError(RuntimeError):
             f"errors/{self.jobStoreName}/{os.path.basename(fail_file)}")
         safe_remove(fail_file)
 
-def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features=None, work_dir=None):
+def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features=None, domain_file=None, work_dir=None):
     if work_dir is None:
         if job is not None and hasattr(job, "fileStore"):
             work_dir = job.fileStore.getLocalTempDir()
@@ -59,9 +59,15 @@ def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features
 
     to_remove = []
 
-    cath_key = f"/{cathcode}/domains/{cath_domain}"
-    s3_cath_key = "{}/{}".format(cathcode, cath_domain)
-
+    if cathcode is not None:
+        cath_key = f"/{cathcode}/domains/{cath_domain}"
+        s3_cath_key = "{}/{}".format(cathcode, cath_domain)
+    elif os.path.isfile(cath_domain):
+        cath_key = os.path.splitext(os.path.basename(cath_domain))[0]
+        s3_cath_key = None
+    else:
+        cath_key = cath_domain
+        s3_cath_key = None
 
 
     if update_features is not None:
@@ -100,15 +106,22 @@ def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features
             finally:
                 store.close()
 
-    domain_file = os.path.join(work_dir, "{}.pdb".format(cath_domain))
 
-    try:
-        data_stores.prepared_cath_structures.read_input_file(
-            s3_cath_key+".pdb", domain_file)
-    except ClientError:
-        RealtimeLogger.info("Failed to download prapred cath file {}".format(
-            cath_key+".pdb"))
-        raise
+
+    if s3_cath_key is not None:
+        domain_file = os.path.join(work_dir, "{}.pdb".format(cath_domain))
+        try:
+            data_stores.prepared_cath_structures.read_input_file(
+                s3_cath_key+".pdb", domain_file)
+        except ClientError:
+            RealtimeLogger.info("Failed to download prapred cath file {}".format(
+                cath_key+".pdb"))
+            raise
+        output_name = cath_domain
+    else:
+        domain_file = domain_file if domain_file is not None else cath_domain
+        cath_domain = None
+        output_name = cath_key
 
     try:
         structure = ProteinFeaturizer(
@@ -140,8 +153,9 @@ def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features
             df["dst"] = df["dst"].apply(lambda s: "".join(map(str,s[1:])).strip())
         else:
             del out
-            df = structure.get_pdb_dataframe(include_features=True)
-            special_col_types = {"serial_number":"<i8", "atom_name":"<S5", "residue_id":"<S8", "chain":"<S2"}
+            df = structure.get_pdb_dataframe(include_features=True, coarse_grained = ext=="residue")
+            special_col_types = {"serial_number":"<i8", "atom_name":"<S5",
+                "residue_id":"<S8", "residue_name":"<S8", "chain":"<S2"}
 
         RealtimeLogger.info(df)
         RealtimeLogger.info(df.columns)
@@ -157,16 +171,16 @@ def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features
                     pass
 
             if f"{cath_key}/{ext}" not in store.keys():
-                ds1 = store.create_dataset(f"{cath_key}/{ext}", data=rec_arr,
+                ds1 = store.create_table(f"{cath_key}/{ext}", data=rec_arr,
                     chunks=True, compression="gzip", compression_opts=9)
             else:
                 ds1 = store[f"{cath_key}/{ext}"]       # load the data
                 RealtimeLogger.info(f"OLD DS is: {ds1}")
                 ds1[...] = rec_arr                     # assign new values to data
 
-        RealtimeLogger.info("Finished {} features for: {} {}".format(ext, cathcode, cath_domain))
+        RealtimeLogger.info("Finished {} features for: {} {}".format(ext, cathcode, output_name))
 
-    RealtimeLogger.info("Finished features for: {} {}".format(cathcode, cath_domain))
+    RealtimeLogger.info("Finished features for: {} {}".format(cathcode, output_name))
 
     safe_remove(domain_file)
 

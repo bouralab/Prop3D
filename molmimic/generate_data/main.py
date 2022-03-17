@@ -11,6 +11,7 @@ from molmimic.util.iostore import IOStore
 from molmimic.util.cath import run_cath_hierarchy, run_cath_hierarchy_h5
 from molmimic.util.hdf import get_file, filter_hdf_chunks
 from molmimic.util.toil import map_job, map_job_follow_ons
+from molmimic.util.pdb import get_atom_lines
 
 from molmimic.generate_data.prepare_protein import process_domain
 from molmimic.generate_data.calculate_features import calculate_features
@@ -37,10 +38,18 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
     else:
         calc_features_func = calculate_features
 
-    key = "{}/{}.pdb".format(superfamily, cath_domain)
-    if force or (isinstance(force, int) and force==2) or \
-      not data_stores.prepared_cath_structures.exists(key) or \
-      data_stores.prepared_cath_structures.get_size(key)==0:
+    if superfamily is not None:
+        key = "{}/{}.pdb".format(superfamily, cath_domain)
+        should_prepare_structure = data_stores.prepared_cath_structures.exists(key) or \
+            data_stores.prepared_cath_structures.get_size(key)==0
+        h5_key = f"/{superfamily}/domains/{cath_domain}"
+    else:
+        should_prepare_structure = True
+        further_parallelize = False
+        force=True
+        h5_key = os.path.basename(os.path.basename(cath_domain))[0]
+
+    if force or (isinstance(force, int) and force==2) or should_prepare_structure:
         #Get Processed domain file first
         RealtimeLogger.info(f"Processing domain {cath_domain}")
         if further_parallelize:
@@ -48,7 +57,8 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
                 cathFileStoreID=cathFileStoreID)
         else:
             try:
-                process_domain(job, cath_domain, superfamily, cathFileStoreID=cathFileStoreID)
+                prepared_file, _, _, local_file = process_domain(job, cath_domain, superfamily, cathFileStoreID=cathFileStoreID)
+                local_domain_file = prepared_file if local_file else None
             except (SystemExit, KeyboardInterrupt):
                 raise
             except:
@@ -80,12 +90,12 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
         #Calculate features Processed domain file
         if further_parallelize:
             job.addFollowOnJobFn(calc_features_func, cathFileStoreID, cath_domain,
-                superfamily, update_features=update_features)
+                superfamily, update_features=update_features, domain_file=local_domain_file)
         else:
             RealtimeLogger.info("get_domain_structure_and_features calculate_features")
             try:
                 calc_features_func(job, cathFileStoreID, cath_domain, superfamily,
-                    update_features=update_features)
+                    update_features=update_features, domain_file=local_domain_file)
             except (SystemExit, KeyboardInterrupt):
                 raise
             except:
@@ -173,12 +183,14 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
             except:
                 pass
 
-def start_domain_and_features(job, cathFileStoreID, cathcode=None, skip_cathcode=None, update_features=None, use_hsds=True, work_dir=None, force=False):
+def start_domain_and_features(job, cathFileStoreID, cathcode=None, skip_cathcode=None,
+  update_features=None, use_hsds=True, work_dir=None, pdbs=None, force=False):
     if not use_hsds:
         cath_hierarchy_runner = run_cath_hierarchy
     else:
         cath_hierarchy_runner = run_cath_hierarchy_h5
 
+    done_domains = None
     if cathcode is not None:
         if not isinstance(cathcode, (list, tuple)):
             cathcode = [cathcode]
@@ -234,6 +246,20 @@ def start_domain_and_features(job, cathFileStoreID, cathcode=None, skip_cathcode
                         store[f"{sfam}/domains"].keys())
                 except KeyError:
                     raise RuntiemError("Must create hsds file first")
+    elif pdbs is not None:
+        assert use_hsds
+        with h5pyd.File(cathFileStoreID, mode="r", use_cache=False) as store:
+            try:
+                done_domains = [k for k in store.keys() if len(store[k].keys())==3]
+            except KeyError:
+                raise RuntimeError(f"Must create hsds file first.")
+
+        domains_to_run = [f for f in pdbs if os.path.splitext(os.path.basename(f))[0] \
+            not in done_domains]
+        RealtimeLogger.info(f"Running domains: {domains_to_run}")
+        map_job(job, get_domain_structure_and_features, domains_to_run, None, cathFileStoreID,
+            update_features=update_features, force=force, further_parallelize=True, use_hsds=use_hsds)
+        return
     else:
         #No cath code proved, use all
         if update_features is None and not force:
@@ -271,6 +297,7 @@ def start_domain_and_features(job, cathFileStoreID, cathcode=None, skip_cathcode
     #job.addChildJobFn()
 
 def start_toil(job, cathFileStoreID, cathcode=None, skip_cathcode=None, pdbs=None, update_features=None, use_hsds=True, work_dir=None, force=False):
+    RealtimeLogger.info("RUNN START")
     if work_dir is None:
         if job is not None and hasattr(job, "fileStore"):
             work_dir = job.fileStore.getLocalTempDir()
@@ -282,11 +309,11 @@ def start_toil(job, cathFileStoreID, cathcode=None, skip_cathcode=None, pdbs=Non
 
     if use_hsds:
         job.addChildJobFn(create_h5_hierarchy, cathFileStoreID, cathcode=cathcode,
-            skip_cathcode=skip_cathcode, work_dir=work_dir, force=force)
+            skip_cathcode=skip_cathcode, pdbs=pdbs, work_dir=work_dir, force=force)
 
     job.addFollowOnJobFn(start_domain_and_features, cathFileStoreID, cathcode=cathcode,
         skip_cathcode=skip_cathcode, update_features=update_features, use_hsds=use_hsds,
-        force=force)
+        pdbs=pdbs, force=force)
 
 def str2boolorval(v):
     def is_num(a):
@@ -344,6 +371,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--work_dir",
         default=os.getcwd())
+    parser.add_argument("--hs_username", default=None, help="HSDS username. If not provided it will use hsinfo")
+    parser.add_argument("--hs_password", default=None, help="HSDS username. If not provided it will use hsinfo")
+    parser.add_argument("--hs_endpoint", default=None, help="HSDS username. If not provided it will use hsinfo")
 
     options = parser.parse_args()
 
@@ -363,11 +393,11 @@ if __name__ == "__main__":
     if options.pdb is not None:
         if len(options.pdb) == 1:
             if os.path.isfile(options.pdb[0]):
-                #Check if file with pdb paths
-                with open(options.pdb[0]) as f:
-                    pdb_file = next(f)
-                    if os.path.isfile(pdb_file):
-                        f.seek(0)
+                for _ in get_atom_lines(options.pdb[0]):
+                    break
+                else:
+                    #Not a pdb, list of files or IDs
+                    with open(options.pdb[0]) as f:
                         options.pdb = [pdb.rstrip() for pdb in f]
             elif os.path.isdir(options.pdb[0]):
                 options.pdb = [pdb for pdb in next(os.walk(options.pdb[0]))[2] if pdb.endswith(".pdb")]
@@ -381,12 +411,26 @@ if __name__ == "__main__":
             store.read_input_file("cath-domain-description-file-small.h5", sfam_file)
     elif options.hsds_file is None:
         raise RuntimeError("Must specify hsds file")
+    else:
+        #Copy HSDS info so other workers can access it
+        from h5pyd import Config
+        config = Config()
+        if options.hs_username is None:
+            options.hs_username = config["hs_username"]
+        if options.hs_password is None:
+            options.hs_password = config["hs_password"]
+        if options.hs_endpoint is None:
+            options.hs_endpoint = config["hs_endpoint"]
+
+        #Set as
     # elif "HS_USERNAME" not in os.environ:
     #     raise RuntimeError("Must specify HSDS username env variable: HS_USERNAME")
     # elif "HS_PASSWORD" not in os.environ:
     #     raise RuntimeError("Must specify HSDS username env variable: HS_PASSWORD")
     # elif "HS_ENDPOINT" not in os.environ or not os.environ["HS_ENDPOINT"].startswith("http"):
     #     raise RuntimeError("Must specify HSDS endpoint env variable: HS_ENDPOINT and it must begin with http")
+
+
 
     with Toil(options) as workflow:
         if not workflow.options.restart:

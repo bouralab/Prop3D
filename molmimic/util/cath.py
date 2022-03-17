@@ -11,6 +11,8 @@ from molmimic.generate_data import data_stores
 
 from toil.realtimeLogger import RealtimeLogger
 
+import h5pyd
+
 def fix_cathcode(c):
     if isinstance(cathcode, (int, float, str)):
         try:

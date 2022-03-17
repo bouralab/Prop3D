@@ -4,9 +4,11 @@ import re
 import shutil
 import subprocess
 import glob
+import functools
 
 import numpy as np
 import pandas as pd
+import requests
 from botocore.exceptions import ClientError
 
 from molmimic.util import SubprocessChain, natural_keys
@@ -354,7 +356,46 @@ def s3_download_pdb(pdb, work_dir=None, remove=False):
     if work_dir is None:
         work_dir = os.getcwd()
 
-    store = IOStore.get("aws:us-east-1:molmimic-pdb")
+    from molmimic.generate_data.data_stores import raw_pdb_store as store
+    from molmimic.parsers.pdbe import PDBEApi
+
+    if len(pdb) == 6 and pdb[4] == ".":
+        pdb, chain = pdb.split(".")
+    if len(pdb) != 4:
+        #UniProt -> get alphafold or best pdb
+        uniprot_id = pdb.upper()
+        uniprot_file = os.path.join(work_dir, "{}.pdb".format(uniprot_id))
+        alphafold_url = f"https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_v2.pdb"
+        s3_file = "AlphaFold/"+uniprot_file
+        chain = "A" #Default chain for all AlphaFOld files
+
+        try:
+            store.read_input_file(s3_file, uniprot_file)
+            if not os.path.isfile(uniprot_file):
+                raise RuntimeError
+            return uniprot_file, chain, "pdb"
+        except (ClientError, RuntimeError):
+            try:
+                with requests.get(alphafold_url, stream=True) as r:
+                    r.raw.read = functools.partial(r.raw.read, decode_content=True)
+                    with open(uniprot_file, 'wb') as f:
+                        shutil.copyfileobj(r.raw, f)
+                store.write_output_file(uniprot_file, s3_file)
+                return uniprot_file, "pdb"
+            except requests.RequestException:
+                #Cannot download, check pdb
+                pdbe = PDBEApi(work_dir=work_dir)
+                try:
+                    mappings = pdbe.get_uniprot_mapping(uniprot_id)
+                    if uniprot_id not in mappings or "PDB" not in mappings[uniprot_id]:
+                        raise KeyError
+                    pdb = min(mappings[uniprot_id]["PDB"].keys())
+                    chain = mappings[uniprot_id]["PDB"][pdb]["chain_id"]
+                except KeyError:
+                    if len(pdb)==5:
+                        pdb, chain = pdb[:4], pdb[5]
+                    else:
+                        raise RuntimeError(f"Cannot find PDB file or AlphaFoldDB file for {pdb}")
 
     pdb_file_base = os.path.join(pdb[1:3].lower(), "pdb{}.ent.gz".format(pdb.lower()))
     pdb_file = os.path.join(work_dir, "pdb{}.ent.gz".format(pdb.lower()))
@@ -410,4 +451,7 @@ def s3_download_pdb(pdb, work_dir=None, remove=False):
         except OSError:
             pass
 
-    return pdb_file, format
+    if chain is None:
+        chain = get_first_chain(pdb_file)
+
+    return pdb_file, chain, format
