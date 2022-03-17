@@ -15,7 +15,7 @@ cloudpickle >= 0.2.1
 tables
 freesasa
 #boto3
-botocore==1.23.23
+botocore
 awscli
 spython
 h5py

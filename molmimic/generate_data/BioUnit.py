@@ -119,7 +119,7 @@ def build_sym_transforms(moving_mol, mol_pdb, mol_chain, moving_int, int_pdb, in
                         else:
                             rt_int = "{}.rottrans.{}.pdb".format(os.path.splitext(moving_int)[0], sym_op)
                             return tidy(rottrans_from_matrix(moving_int,
-                                transform["M"], transform["t", rt_int), replace=True)
+                                transform["M"], transform["t"], rt_int), replace=True)
 
         else:
             if return_matrices:
@@ -127,7 +127,7 @@ def build_sym_transforms(moving_mol, mol_pdb, mol_chain, moving_int, int_pdb, in
             else:
                 rt_int = "{}.rottrans.{}.pdb".format(os.path.splitext(moving_int)[0], transform["op"])
                 transformed_pdbs.append(tidy(rottrans_from_matrix(moving_int,
-                    transform["M"], transform["t", rt_int), replace=True))
+                    transform["M"], transform["t"], rt_int), replace=True))
 
     return transformed_pdbs
 
@@ -208,7 +208,7 @@ def get_sym_ops(rem290):
             sym_num, sym_op = line.strip().split()
             symops[sym_num[0]] = {"op": sym_op}
 
-            sym_op = [dim.split("+") dim in sym_op.split(",")]
+            sym_op = [dim.split("+") for dim in sym_op.split(",")]
             rot, trans = zip(*sym_op)
             trans = np.array(trans, dtype=float)
 

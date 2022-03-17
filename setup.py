@@ -30,5 +30,6 @@ setup(
     packages=packages,
     long_description=read('README.md'),
     install_requires=read("requirements.txt").splitlines(),
-    include_package_data=True
+    include_package_data=True,
+    zip_safe=False
 )
