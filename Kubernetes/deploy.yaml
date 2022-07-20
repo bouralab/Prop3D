@@ -16,39 +16,54 @@ spec:
      volumes:
      - name: aws-credentials-vol
        secret:
-         # Make sure the AWS credentials are available as a volume.
-         # This should match TOIL_AWS_SECRET_NAME
-         secretName: aws-credentials
+           # Make sure the AWS credentials are available as a volume.
+           # This should match TOIL_AWS_SECRET_NAME
+           secretName: aws-credentials
      - name: hsds-credentials-vol
        secret:
-         secretName: hsds-credentials
+           # Make sure the AWS credentials are available as a volume.
+           # This should match TOIL_AWS_SECRET_NAME
+           secretName: hsds-credentials
      # You may need to replace this with a different service account name as
      # appropriate for your cluster.
      serviceAccountName: default
      containers:
      - name: main
-       image: quay.io/ucsc_cgl/toil:5.5.0
+       image: edraizen/molmimic:0.0.1
+       imagePullPolicy: Never
        env:
        # Specify your username for inclusion in job names
        - name: TOIL_KUBERNETES_OWNER
-         value: demo-user
+         value: default
        # Specify where to find the AWS credentials to access the job store with
        - name: TOIL_AWS_SECRET_NAME
          value: aws-credentials
        # Specify where per-host caches should be stored, on the Kubernetes hosts.
        # Needs to be set for Toil's caching to be efficient.
-       - name: TOIL_KUBERNETES_HOST_PATH
-         value: /data/scratch
+       # - name: TOIL_KUBERNETES_HOST_PATH
+       #   value: /home/bournelab/molmimic/Kubernetes/test
+       - name: TOIL_WORKDIR
+         value: /tmp/scratch
+       - name: SINGULARITY_CACHEDIR
+         value: /tmp/scratch #This exists in the container
+       - name: TOIL_DOCKER_REGISTRY
+         value: edraizen
+       - name: TOIL_DOCKER_NAME
+         value: molmimic
+       - name: TOIL_APPLIANCE_SELF
+         value: edraizen/molmimic:0.0.1
        - name: JOB_NAME
-         value: cath-paper-test
-       - name: TOIL_S3_HOST
-         value: minio.minio-tenant-1.svc.cluster.local
-       - name: TOIL_S3_PORT
-         value: "80"
-       - name: TOIL_S3_USE_SSL
-         value: "False"
-       - name: S3_ENDPOINT
-         value: http://minio.minio-tenant-1.svc.cluster.local:80
+         value: cath-paper-test-real
+       #- name: TOIL_S3_HOST
+       #  value: minio.minio-tenant-1.svc.cluster.local
+       #- name: TOIL_S3_PORT
+       #  value: "80"
+       #- name: TOIL_S3_USE_SSL
+       #  value: "False"
+       #- name: S3_ENDPOINT
+       #    value: http://minio.minio-tenant-1.svc.cluster.local:80
+       - name: HS_ENDPOINT
+         value: http://hsds.default.svc.cluster.local:5101
        - name: USE_SINGULARITY
          value: "True"
        - name: SFAMS
@@ -80,30 +95,14 @@ spec:
          env | grep TOIL
          # This Bash script will set up Toil and the workflow to run, and run them.
          #set -e
-         # We make sure to create a work directory; Toil can't hot-deploy a
-         # script from the root of the filesystem, which is where we start.
-         mkdir /tmp/work
-         cd /tmp/work
-         # We make a virtual environment to allow workflow dependencies to be
-         # hot-deployed.
+         mkdir -p /root/.cache/aws
          #
-         # We don't really make use of it in this example, but for workflows
-         # that depend on PyPI packages we will need this.
+         cat ~/.aws/credentials | tail -n 2 | awk '{print $NF}' > /root/.cache/aws/cached_temporary_credentials
+         echo "" >> /root/.cache/aws/cached_temporary_credentials
+         echo -n "$(date -d '+10 days' +'%Y-%m-%dT%H:%M:%SZ')" >> /root/.cache/aws/cached_temporary_credentials
+         cat /root/.cache/aws/cached_temporary_credentials
+         wc -l /root/.cache/aws/cached_temporary_credentials
          #
-         # We use --system-site-packages so that the Toil installed in the
-         # appliance image is still available.
-         virtualenv --python python3 --system-site-packages venv
-         . venv/bin/activate
-         #
-         #Now we will install molimic into the virtualenv
-         git clone https://github.com/edraizen/molmimic.git
-         cd molmimic
-         python setup.py install
-         cd /tmp/work
-         rm -rf molmimic
-         python -m pip install h5py h5pyd
-         python -m pip install -U urllib3
-         python -m pip install -U requests
          #
          # Make sure job name is set
          if [[ -z "${JOB_NAME}" ]]; then
@@ -112,31 +111,34 @@ spec:
          fi
          #
          #Now we increment the job name if there were previous jobs
-         if [[ -z "${TOIL_S3_HOST}" ]]; then
-             if [[ ${TOIL_S3_USE_SSL:-True} == "True" ]]; then
-                 export JOB_INDEX=`aws --endpoint-url $TOIL_S3_HOST:$TOIL_S3_PORT s3 ls s3://$JOB_NAME | wc -l`
-             else
-                 export JOB_INDEX=`aws --no-verify-ssl --endpoint-url $TOIL_S3_HOST:$TOIL_S3_PORT s3 ls s3://$JOB_NAME | wc -l`
-             fi
-         else
-             export JOB_INDEX=`aws s3 ls s3://$JOB_NAME | wc -l`
-         fi
+         export JOB_INDEX=`aws s3 ls | grep $JOB_NAME | wc -l`
          export JOB_FULL_NAME="$JOB_NAME-$JOB_INDEX"
          echo "Running job with name: $JOB_FULL_NAME"
          #
          # Now we run the workflow. We make sure to use the Kubernetes batch
          # system and an AWS job store, and we set some generally useful
          # logging options. We also make sure to enable caching.
+
+         #s3hsds:us-east-1:/home/ed4bu/$JOB_FULL_NAME \
+
+         export
+
          python -m molmimic.generate_data.main \
              aws:us-east-1:$JOB_FULL_NAME \
              --batchSystem kubernetes \
              --logInfo \
              -c $SFAMS \
-             --hsds_file "/home/ed4bu/$TOIL_JOB_NAME.h5" \
+             --hsds_file "/home/ed4bu/$JOB_NAME.h5" \
              --force 0 \
              --realTimeLogging \
              --retryCount 4 \
              --clean never \
-             --maxNodes 21 \
-             --stats
-         sleep 3600
+             --maxNodes 20 \
+             --maxLocalJobs 20 \
+             --maxCores 4 \
+             --maxMemory 10G \
+             --stats \
+             --setEnv HS_ENDPOINT=$HS_ENDPOINT \
+             --setEnv HS_USERNAME=ed4bu@virginia.edu \
+             --setEnv HS_PASSWORD=13e571b7f8e41419c63aa7a0f3a33e29 \
+             --disableCaching \

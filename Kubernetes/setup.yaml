@@ -1,0 +1,74 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: default
+  name: default
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["explain", "get", "watch", "list", "describe", "logs", "attach", "exec", "port-forward", "proxy", "cp", "auth", "delete", "deletecollection"]
+- apiGroups: ["batch"]
+  resources: ["*"]
+  verbs: ["get", "watch", "list", "create", "run", "set", "delete", "deletecollection"]
+- apiGroups: [""]
+  resources: ["secrets", "pods", "pods/attach", "podtemplates", "configmaps", "events", "services"]
+  verbs: ["patch", "get", "update", "watch", "list", "create", "run", "set", "delete", "exec", "deletecollection"]
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "delete", "deletecollection"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create", "delete", "deletecollection"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  namespace: default
+  name: node-reader
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "describe", "delete", "deletecollection"]
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "describe", "delete", "deletecollection"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["*"]
+  verbs: ["*"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: toil-developer-member
+  namespace: default
+subjects:
+- kind: User
+  name: default
+  apiGroup: rbac.authorization.k8s.io
+- kind: ServiceAccount
+  name: default
+  namespace: default
+roleRef:
+  kind: Role
+  name: default
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  namespace: default
+  name: read-nodes
+subjects:
+- kind: User
+  name: default
+  apiGroup: rbac.authorization.k8s.io
+- kind: ServiceAccount
+  name: default
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: node-reader
+  apiGroup: rbac.authorization.k8s.io
