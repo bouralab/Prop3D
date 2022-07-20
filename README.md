@@ -10,7 +10,7 @@ Here we provide code to re-create the dataset. Unfortunately, it is a large/bloa
 
 First, we create Toil Jobs following the CATH Hierarchy
 
-<img src="figures/Cath2Toil.png" alt="CATH hierarchy in Toil" width="400"/>
+<img src="figures/Cath2Toil.png" alt="CATH hierarchy in Toil" width="300"/>
 
 Next, we 'clean' each CATH domain structure by:
 
