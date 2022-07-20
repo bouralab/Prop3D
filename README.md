@@ -10,15 +10,15 @@ Here we provide code to re-create the dataset. Unfortunately, it is a large/bloa
 
 First, we create Toil Jobs following the CATH Hierarchy
 
-!(images/Cath2Toil.png)
+![CATH hierarchy in Toil](images/Cath2Toil.png)
 
 For each domain, we 'clean' the CATH domain structure by:
 
-!(images/clean_structures_protocol.png)
+![How we clean strucutres](images/clean_structures_protocol.png)
 
 and then calculate biophysical and evolutionary properties for each atom in the given domain:
 
-!(images/biophysical_features.png)
+![biophysical properties](images/biophysical_features.png)
 
 ## Installation
 
