@@ -29,7 +29,10 @@ You must choose which type of cluster you want to use during install, e.g. `pip 
 
 Please follow their instructions if not running locally: (https://toil.readthedocs.io/en/latest/)(https://toil.readthedocs.io/en/latest/)
 
-### 1. Download & Install Prop3D
+### 1. Install Singularity (preferred) or Docker
+https://docs.sylabs.io/guides/3.5/user-guide/quick_start.html#quick-installation-steps
+
+### 2. Download & Install Prop3D
 ```
 git clone https://github.com/edraizen/Prop3D.git
 cd Prop3D
@@ -37,7 +40,10 @@ git submodule init
 git submodule update
 python setup.py install
 ```
-### 2. Set up your own [HSDS](https://github.com/HDFGroup/hsds) endpoint
+
+All of the external tools have been dockerized (available at https://hub.docker.com/u/edraizen) and pulled when requested automatically in the code, so no further installation is necessary
+
+### 3. Set up your own [HSDS](https://github.com/HDFGroup/hsds) endpoint
 
 You can set up HSDS on any cloud platform or a single machine using Docker or on a cluster using Kubernetes (or AKS on Microsoft Azure).
 
@@ -59,7 +65,7 @@ To create all of the necessary data, please run the Toil workflow in the generat
 
 ```bash
 export SFAM="1.10.10.10 1.10.238.10 1.10.490.10 1.10.510.10 1.20.1260.10 2.30.30.100 2.40.50.140 2.60.40.10 3.10.20.30 3.30.230.10 3.30.300.20 3.30.310.60 3.30.1360.40 3.30.1370.10 3.30.1380.10 3.40.50.300 3.40.50.720 3.80.10.10 3.90.79.10 3.90.420.10" #Change to include whichever superfamiles you want. If empty, it will run all CATH superfamilies
-python -m molmimic.generate_data.main file:prop3D-run --cathcode $SFAM --hsds_file /home/$USER/Prop3D.h5 --defaultCores 20 --maxLocalJobs 20
+USE_SINGULARITY=True python -m molmimic.generate_data.main file:prop3D-run --cathcode $SFAM --hsds_file /home/$USER/Prop3D.h5 --defaultCores 20 --maxLocalJobs 20
 ```
 Make sure to replace `/home/$USER/Prop3D.h5` with the actual path of Prop3D inside HSDS.
 
