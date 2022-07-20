@@ -1,117 +1,72 @@
-# molmimic
+# Prop3D
 
-**Note: this is all research code and is not functional**
+**Note: this is all research code and not all components are functional**
 
-molmimic is a tool to annotate binding sites involved in protein-protein interactions (PPI) given the structure of only one of the interaction partners. This method differs from other binding site prediction programs becuase we treat the problem as a 3D image/volume segmentaion problem. We use Sparse 3D Fully Convolutionary Neural Networks, or Sparse 3D Unet, to make voxel level predictions, where each atom is mapped to one or more voxels.
+Prop3D is a protein structure dataset that combines 3D atomic coordinates with biophysical and evolutionary properties for every atom in every "cleaned" domain structure in CATH. We use [Toil](https://github.com/DataBiosphere/toil) to create a massively parallel workflow to process the large amount of structures in CATH and then save and share the data using the [Highly Scalable Data Service (HSDS)](https://github.com/HDFGroup/hsds) to create and share the dataset.
 
-In the future we hope to report binding partners, binding sites for protein-ligand interactions (PLI), sites shared by PPI an PLI for drug repurposing, and sites that are 'mimicking' known interactions, e.g. host-pathogen PPI.
+Here we provide code to re-create the dataset. Unfortunately, it is a large/bloated project because it started out as a general structural bioinformatics toolkit, but it is not meant replace (better) tools such as [Biotite](https://github.com/biotite-dev/biotite) or [BioPython](https://github.com/biopython/biopython).
 
-# Requirements
-Python requirements
-```
-pytorch>=0.4
-torchvision
-pytorchviz
-tnt
-SparseConvNet
-numpy
-scikit-learn
-Biopython
-seaborn
-tqdm
-dask
-pandas
-```
-Non python requirements:
-```
-pdb2pqr
-apbs
-CNS
-openbabel
-DSSP
-CX
-```
-All non-python requirments can be run using docker:
-```
-docker://edraizen/pdb2pqr:latest
-docker://edraizen/apbs:latest
-docker://edraizen/openbabel:latest
-docker://edraizen/dssp:latest
-docker://edraizen/cx:latest
-```
+## Overview
 
-Toil is a requirment, but cannot be installed autmatically through pip. You must choose which type of cluster you want to use:
+First, we create Toil Jobs following the CATH Hierarchy
+
+!(images/Cath2Toil.png)
+
+For each domain, we 'clean' the CATH domain structure by:
+
+!(images/clean_structures_protocol.png)
+
+and then calculate biophysical and evolutionary properties for each atom in the given domain:
+
+!(images/biophysical_features.png)
+
+## Installation
+
+
+### 0. <i>If you are running locally, you can skip this step.</i> Toil is a requirement, but cannot be installed automatically through pip if running on a cluster.
+
+You must choose which type of cluster you want to use during install, e.g. `pip install toil[aws]`
+
+Please follow their instructions if not running locally: (https://toil.readthedocs.io/en/latest/)(https://toil.readthedocs.io/en/latest/)
+
+### 1. Download & Install Prop3D
 ```
-pip install toil #Only local clusters
-pip install toil[aws]
-pip install toil[gce]
-pip install toil[azure]
-pip install toil[all]
-```
-# Download
-```
-git clone https://github.com/edraizen/molmimic.git
-cd molmimic
+git clone https://github.com/edraizen/Prop3D.git
+cd Prop3D
 git submodule init
 git submodule update
+python setup.py install
 ```
-If not running on aws or cloud-based cluster, install module with all requirements:
-```python setup.py install
-```
-Else, follow the AWS steps in the Data generation section to install with all requirments
+### 2. Set up your own [HSDS](https://github.com/HDFGroup/hsds) endpoint
 
-# Data Generation
-To create all of the necessary data, please run the Toil workflow in the generate_data directory. You have the option to run this locally, on bare-metal cluster (e.g. SLURM or SGE), or on the cloud (e.g. AWS, Google Cloud, or Azure). For local or bare-metal cluster with shared filesytem, make sure all of the python dependencies are availble (and non python dependencies in your PATH if you don't want to use docker) and run the whole workflow or only part of it by calling:
-```python /path/to/molmimic/generate_data/run.py file:dataset-name --defaultCores 4 --maxLocalJobs 1000```
+You can set up HSDS on any cloud platform or a single machine using Docker or on a cluster using Kubernetes (or AKS on Microsoft Azure).
 
-For running on aws or other cloud options:
-1) Follow [Preparing yur AWS environment](https://toil.readthedocs.io/en/3.15.0/running/cloud/amazon.html#preparing-your-aws-environment) instruction on toil documentation
-1) Start the cluster
-```
-toil launch-cluster molmimic-cluster --keyPairName id_rsa --leaderNodeType t2.medium --zone us-east-1
-```
-2) Copy molmimic to the cluster
-```
-toil rsync-cluster -z us-east-1a molmimic-cluster -av molmimic :/root
-```
-3) SSH into the cluster
-```
-toil ssh-cluster molmimic-cluster --zone us-east-1
-```
-4) In the cluster's shell, create a virtual enviroment and install molmimic and its requirments (noting to make sure to use the --system-site-packages option!):
-```
-virtualenv --system-site-packages venv
-. venv/bin/activate
-cd /root/molmimic
-pip install .
-export PYTHONPATH=/venv/lib/python2.7/site-packages
-```
-5) Finally, run the workflow:
-```
-screen python -m molmimic.generate_data aws:us-east-1:dataset-name --provisioner aws --nodeTypes t2.micro --minNodes 100 --maxNodes 100 --maxLocalJobs 100 --targetTime 1 --preemptableCompensation 1.0 --batchSystem mesos
-#or
-screen python -m molmimic.generate_data.prepare_protein aws:us-east-1:dataset-name --provisioner aws --nodeTypes t2.micro --minNodes 100 --maxNodes 100 --maxLocalJobs 100 --targetTime 1 --preemptableCompensation 1.0 --batchSystem mesos
+For single machine setup, please clone the [HSDS](https://github.com/HDFGroup/hsds) repository and follow the instruction at [https://gitlab.com/uva-arc/hobo-request/-/blob/main/doc/single-node-k3s-hsds-install.md](https://gitlab.com/uva-arc/hobo-request/-/blob/main/doc/single-node-k3s-hsds-install.md).
 
+
+## 3. Data Generation
+
+### a. Use the Prop3D precalculated data
+
+```bash
+wget http://zenodo.com/doi-urfold/Prop3D.h5
+hsload Prop3D.h5 /home/$USER/Prop3D.h5 #Change last path to whatever you want to name the file in HSDS
 ```
 
-![Data Generation Pipeline](figures/data_generation_pipeline.png)
+### b. Recreate dataset
 
-# Running (Examples using singularity)
-## Training
-```shell
-run_singularity python molmimic/torch_train.py --use_deepsite_features --use-resnet-unet --epochs 100 --dropout-width --dropout-p 0.6 --learning-rate 0.00005 dataset_name /path/to/formated/interfaces.tsv
+To create all of the necessary data, please run the Toil workflow in the generate_data directory. You have the option to run this locally, on bare-metal cluster (e.g. SLURM or SGE), or on the cloud (e.g. AWS, Google Cloud, or Azure). For local or bare-metal cluster with shared filesystem, make sure all of the python dependencies are available (and non python dependencies in your PATH if you don't want to use docker) and run the whole workflow or only part of it by calling:
+
+```bash
+export SFAM="1.10.10.10 1.10.238.10 1.10.490.10 1.10.510.10 1.20.1260.10 2.30.30.100 2.40.50.140 2.60.40.10 3.10.20.30 3.30.230.10 3.30.300.20 3.30.310.60 3.30.1360.40 3.30.1370.10 3.30.1380.10 3.40.50.300 3.40.50.720 3.80.10.10 3.90.79.10 3.90.420.10" #Change to include whichever superfamiles you want. If empty, it will run all CATH superfamilies
+python -m molmimic.generate_data.main file:prop3D-run --cathcode $SFAM --hsds_file /home/$USER/Prop3D.h5 --defaultCores 20 --maxLocalJobs 20
 ```
+Make sure to replace `/home/$USER/Prop3D.h5` with the actual path of Prop3D inside HSDS.
 
-## Inference
-```shell
-run_singularity python molmimic/torch_test_simple.py --use_deepsite_features --use-resnet-unet --dropout-width --dropout-p 0.6 --learning-rate 0.00005 dataset_name path/to/model.pth
-```
+To run individual PDB files and not use CATH, add parameter `--pdb` with paths to each PDB file or to a text file with a list of pdb files.
 
-# Citations
-1. SparseConvNet: Graham, Engelcke, Maaten. [arXiv:1711.10275](https://arxiv.org/abs/1711.10275)
-2. 3D U-net: Cicek, Abdulkadir, *et al.* International Conference on Medical Image Computing and Computer Assisted Intervention. 2016. [arXiv](https://arxiv.org/abs/1606.06650)
-3. IBIS LUCA: Goncearenco, Shaytan, *et al.* Biophysical J. 2015. [Pubmed](https://www.ncbi.nlm.nih.gov/pubmed/26213149)
-4. IBIS: Shoemaker, Zhang, *et al.* Nucleic Acids Res. 2012. [Pubmed](https://www.ncbi.nlm.nih.gov/pubmed/22102591)
-5. DeepSite: Jimenez, Doerr, *et al.* Bioinformatics. 2017. doi:10.1093/bioinformatics/btx350 [Pubmed](https://www.ncbi.nlm.nih.gov/pubmed/28575181)
-6. 3DCNN: Torng, Altman. BMC Bioinformatics. 2017. doi:10.1186/s12859-017-1702-0. [Pubmed](https://www.ncbi.nlm.nih.gov/pubmed/28615003)
-7. EnzyNet: Amidi, *et al.* [arXiv:1707.06017](https://arxiv.org/abs/1707.06017)
+For running on AWS or other cloud providers, follow [Preparing your AWS environment](https://toil.readthedocs.io/en/3.15.0/running/cloud/amazon.html#preparing-your-aws-environment) instruction in the Toil documentation
+
+## Citation
+
+We will post the bioRxiv for Prop3D link soon
