@@ -1,8 +1,2 @@
+.DS_STORE
 *.pyc
-*.h5
-data/structures
-data/interfaces
-data/features
-data/ConSurf
-data/MMDB
-data/.snakemake
