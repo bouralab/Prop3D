@@ -14,7 +14,7 @@ First, we create Toil Jobs following the CATH Hierarchy
 
 Next, we 'clean' each CATH domain structure by:
 
-<img src="figures/clean_structures_protocol.png" alt="How we clean structures" width="400"/>
+<img src="figures/clean_structures_protocol.png" alt="How we clean structures" width="600"/>
 
 and then calculate biophysical and evolutionary properties for each atom in the given domain:
 
