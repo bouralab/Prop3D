@@ -4,11 +4,11 @@ hsdel /home/ed4bu/cath-paper-test-0-jobstore.h5
 mc rb --force bournelab/home-ed4bu-cath-paper-test-0--files
 
 if [[ $1 == "--update-docker" ]]; then
-   rm -f molmimic-0.0.1.tar
+   rm -f Prop3D-0.0.1.tar
    sudo -E make -C ../Docker
-   sudo docker save --output molmimic-0.0.1.tar edraizen/molmimic:0.0.1
-   sudo k3s ctr images rm docker.io/edraizen/molmimic:0.0.1
-   sudo k3s ctr images import molmimic-0.0.1.tar
+   sudo docker save --output Prop3D-0.0.1.tar edraizen/Prop3D:0.0.1
+   sudo k3s ctr images rm docker.io/edraizen/Prop3D:0.0.1
+   sudo k3s ctr images import Prop3D-0.0.1.tar
 fi
 
 sudo kubectl apply -f deploy.yaml

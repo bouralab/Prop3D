@@ -25,8 +25,8 @@ RUN python -m pip install -U urllib3
 RUN python -m pip install -U requests
 
 
-ADD . / /tmp/work/molmimic/
-WORKDIR /tmp/work/molmimic/
+ADD . / /tmp/work/Prop3D/
+WORKDIR /tmp/work/Prop3D/
 
 
 RUN echo "[easy_install]" > ~/.distutils.cfg
@@ -34,20 +34,20 @@ RUN echo "zip_ok = False" >> ~/.distutils.cfg
 
 #Update toil
 RUN python3 -m pip uninstall -y toil
-WORKDIR /tmp/work/molmimic/toil
+WORKDIR /tmp/work/Prop3D/toil
 RUN python setup.py sdist
-RUN pip install /tmp/work/molmimic/toil/dist/toil-5.6.0a1.tar.gz[all]
+RUN pip install /tmp/work/Prop3D/toil/dist/toil-5.6.0a1.tar.gz[all]
 
-WORKDIR /tmp/work/molmimic/
+WORKDIR /tmp/work/Prop3D/
 
-#Now we will install molmimic into the virtualenv
+#Now we will install Prop3D into the virtualenv
 RUN rm requirements.txt
 RUN touch requirements.txt
 RUN python -m pip install .
-#RUN pip install /tmp/work/molmimic/dist/molmimic-0.0.1.tar.gz
+#RUN pip install /tmp/work/Prop3D/dist/Prop3D-0.0.1.tar.gz
 WORKDIR /tmp/work
-#RUN rm -rf molmimic
+#RUN rm -rf Prop3D
 
 RUN mkdir /tmp/scratch
 
-ENTRYPOINT ["python", "-m", "molmimic.generate_data.main"]
+ENTRYPOINT ["python", "-m", "Prop3D.generate_data.main"]

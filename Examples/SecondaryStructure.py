@@ -2,10 +2,10 @@ from Bio.PDB.Structure import Structure
 from Bio.PDB.DSSP import DSSP
 import h5pyd
 
-from molmimic.parsers.container import containCall
+from Prop3D.parsers.container import containCall
 
-from molmimic.util import safe_remove
-from molmimic.util.cath import run_cath_hierarchy_h5
+from Prop3D.util import safe_remove
+from Prop3D.util.cath import run_cath_hierarchy_h5
 
 
 def calculate_secondary_structure(job, cathcode, domain_pdb):

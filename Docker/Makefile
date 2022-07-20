@@ -1,9 +1,9 @@
 # Definitions
-build_output = runtime/molmimic
+build_output = runtime/Prop3D
 runtime_fullpath = $(realpath runtime)
 build_tool = runtime-container.DONE
-#git_commit ?= $(shell git log --pretty=oneline -n 1 -- ../molmimic | cut -f1 -d " ")
-name = edraizen/molmimic
+#git_commit ?= $(shell git log --pretty=oneline -n 1 -- ../Prop3D | cut -f1 -d " ")
+name = edraizen/Prop3D
 tag = 0.0.1
 
 # Steps

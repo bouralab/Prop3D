@@ -65,7 +65,7 @@ To create all of the necessary data, please run the Toil workflow in the generat
 
 ```bash
 export SFAM="1.10.10.10 1.10.238.10 1.10.490.10 1.10.510.10 1.20.1260.10 2.30.30.100 2.40.50.140 2.60.40.10 3.10.20.30 3.30.230.10 3.30.300.20 3.30.310.60 3.30.1360.40 3.30.1370.10 3.30.1380.10 3.40.50.300 3.40.50.720 3.80.10.10 3.90.79.10 3.90.420.10" #Change to include whichever superfamiles you want. If empty, it will run all CATH superfamilies
-USE_SINGULARITY=True python -m molmimic.generate_data.main file:prop3D-run --cathcode $SFAM --hsds_file /home/$USER/Prop3D.h5 --defaultCores 20 --maxLocalJobs 20
+USE_SINGULARITY=True python -m Prop3D.generate_data.main file:prop3D-run --cathcode $SFAM --hsds_file /home/$USER/Prop3D.h5 --defaultCores 20 --maxLocalJobs 20
 ```
 Make sure to replace `/home/$USER/Prop3D.h5` with the actual path of Prop3D inside HSDS.
 

@@ -29,7 +29,7 @@ spec:
      serviceAccountName: default
      containers:
      - name: main
-       image: edraizen/molmimic:0.0.1
+       image: edraizen/Prop3D:0.0.1
        imagePullPolicy: Never
        env:
        # Specify your username for inclusion in job names
@@ -41,7 +41,7 @@ spec:
        # Specify where per-host caches should be stored, on the Kubernetes hosts.
        # Needs to be set for Toil's caching to be efficient.
        # - name: TOIL_KUBERNETES_HOST_PATH
-       #   value: /home/bournelab/molmimic/Kubernetes/test
+       #   value: /home/bournelab/Prop3D/Kubernetes/test
        - name: TOIL_WORKDIR
          value: /tmp/scratch
        - name: SINGULARITY_CACHEDIR
@@ -49,9 +49,9 @@ spec:
        - name: TOIL_DOCKER_REGISTRY
          value: edraizen
        - name: TOIL_DOCKER_NAME
-         value: molmimic
+         value: Prop3D
        - name: TOIL_APPLIANCE_SELF
-         value: edraizen/molmimic:0.0.1
+         value: edraizen/Prop3D:0.0.1
        - name: JOB_NAME
          value: cath-paper-test-real
        #- name: TOIL_S3_HOST
@@ -123,7 +123,7 @@ spec:
 
          export
 
-         python -m molmimic.generate_data.main \
+         python -m Prop3D.generate_data.main \
              aws:us-east-1:$JOB_FULL_NAME \
              --batchSystem kubernetes \
              --logInfo \

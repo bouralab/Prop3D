@@ -7,23 +7,23 @@ def read(fname):
     return reqs
 
 packages = [
-    "molmimic",
-    "molmimic.pdb_tools",
-    "molmimic.common",
-    "molmimic.generate_data",
-    "molmimic.parsers",
-    "molmimic.parsers.CNS-Templates",
-    "molmimic.parsers.superpose",
-    "molmimic.torch_model",
-    "molmimic.util",
-    "molmimic.visualize",
+    "Prop3D",
+    "Prop3D.pdb_tools",
+    "Prop3D.common",
+    "Prop3D.generate_data",
+    "Prop3D.parsers",
+    "Prop3D.parsers.CNS-Templates",
+    "Prop3D.parsers.superpose",
+    "Prop3D.torch_model",
+    "Prop3D.util",
+    "Prop3D.visualize",
 #    "prodigy",
 #    "prodigy.lib",
 #    "prodigy.data"
 ]
 
 setup(
-    name = "molmimic",
+    name = "Prop3D",
     version = "0.0.1",
     author = "Eli Draizen",
     author_email = "edraizen@gmail.com",
