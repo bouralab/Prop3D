@@ -20,6 +20,8 @@ and then calculate biophysical and evolutionary properties for each atom in the 
 
 <img src="figures/biophysical_features.png" alt="biophysical properties" width="400"/>
 
+If you just want use the dataset (and not recreate it), you can follow the instructions at http://github.com/bournelab/DeepUrfold to access the UVA HSDS endpoint.
+
 ## Installation
 
 
