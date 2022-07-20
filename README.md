@@ -10,15 +10,15 @@ Here we provide code to re-create the dataset. Unfortunately, it is a large/bloa
 
 First, we create Toil Jobs following the CATH Hierarchy
 
-![CATH hierarchy in Toil](images/Cath2Toil.png)
+![CATH hierarchy in Toil](figures/Cath2Toil.png)
 
 For each domain, we 'clean' the CATH domain structure by:
 
-![How we clean strucutres](images/clean_structures_protocol.png)
+![How we clean strucutres](figures/clean_structures_protocol.png)
 
 and then calculate biophysical and evolutionary properties for each atom in the given domain:
 
-![biophysical properties](images/biophysical_features.png)
+![biophysical properties](figures/biophysical_features.png)
 
 ## Installation
 
@@ -44,7 +44,7 @@ You can set up HSDS on any cloud platform or a single machine using Docker or on
 For single machine setup, please clone the [HSDS](https://github.com/HDFGroup/hsds) repository and follow the instruction at [https://gitlab.com/uva-arc/hobo-request/-/blob/main/doc/single-node-k3s-hsds-install.md](https://gitlab.com/uva-arc/hobo-request/-/blob/main/doc/single-node-k3s-hsds-install.md).
 
 
-## 3. Data Generation
+## Data Generation
 
 ### a. Use the Prop3D precalculated data
 
