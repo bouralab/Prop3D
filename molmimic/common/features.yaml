@@ -689,6 +689,70 @@
       min: 0.
       max: 1.
 
+    - name: is_regular_helix
+      default: 0.
+      aggregate: max
+      residue: true
+      bool: true
+      min: 0.
+      max: 1.
+
+    - name: is_beta_bridge
+      default: 0.
+      aggregate: max
+      residue: true
+      bool: true
+      min: 0.
+      max: 1.
+
+    - name: is_extended_strand
+      default: 0.
+      aggregate: max
+      residue: true
+      bool: true
+      min: 0.
+      max: 1.
+
+    - name: is_310_helix
+      default: 0.
+      aggregate: max
+      residue: true
+      bool: true
+      min: 0.
+      max: 1.
+
+    - name: is_pi_helix
+      default: 0.
+      aggregate: max
+      residue: true
+      bool: true
+      min: 0.
+      max: 1.
+
+    - name: is_hbond_turn
+      default: 0.
+      aggregate: max
+      residue: true
+      bool: true
+      min: 0.
+      max: 1.
+
+    - name: is_bend
+      default: 0.
+      aggregate: max
+      residue: true
+      bool: true
+      min: 0.
+      max: 1.
+
+    - name: no_ss
+      default: 0.
+      aggregate: max
+      residue: true
+      bool: true
+      min: 0.
+      max: 1.
+
 - get_deepsite_features:
     - name: "hydrophobic_atom"
       default: 0.

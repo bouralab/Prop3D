@@ -113,6 +113,10 @@ class CATHApi(JSONApi):
         superfamily = self.fix_superfamily(superfamily)
         return self.get("api/rest/superfamily/{}".format(superfamily))
 
+    def get_superfamily_info(self, superfamily):
+        superfamily = self.fix_superfamily(superfamily)
+        return self.get("api/rest/superfamily/{}".format(superfamily))
+
     def get_superfamily_sequences(self, superfamily):
         superfamily = self.fix_superfamily(superfamily)
         return self.ftp.get("sequence-data/sequence-by-superfamily/" + \

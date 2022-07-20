@@ -2,6 +2,8 @@ import numpy as np
 import numpy.lib.recfunctions
 from sklearn import preprocessing
 from sklearn.decomposition import PCA
+from Bio.PDB.Atom import Atom
+from Bio.PDB import PDBIO
 
 import h5pyd
 
@@ -15,25 +17,27 @@ atom_columns = ["serial_number", "atom_name", "residue_id", "chain", "bfactor",
 entity_levels = ["A", "R", "C", "M", "S"]
 
 class DistributedStructure(AbstractStructure):
-    def __init__(self, path, key, cath_domain_dataset, coarse_grained=False, file_mode="r"):
+    def __init__(self, path, key, cath_domain_dataset=None, coarse_grained=False):
         self.path = path
         self.key = key
+        self.f = None
 
         if cath_domain_dataset is None:
-            if file_mode == "r":
-                raise RuntimeError("A h5 dataset must be passed in with param cath_domain_dataset")
-            f = h5pyd.File(path, cache=False)
+            #Full key given
+            self.f = h5pyd.File(path, use_cache=False)
             try:
-                group = f[key]
+                cath_domain_dataset = self.f[key]
             except KeyError:
-                raise RuntimeError("Must create datasets first")
-
-            if coarse_grained:
-                rec_array = default_residue_feature_np() #Need regular Structure object...
-            else:
-                rec_aray = default_atom_feature_np()
-
-            cath_domain_dataset = f.create_dataset(key, rec_arr.shape, data=rec_arr)
+                raise RuntimeError(f"Structure with key {key} does not exist in {path}")
+        elif isinstance(cath_domain_dataset, str):
+            #Name of domain
+            self.f = h5pyd.File(path, use_cache=False)
+            try:
+                cath_domain_dataset = self.f[f"{key}/domains/{cath_domain_dataset}"]
+            except KeyError:
+                raise RuntimeError(f"Structure with key {key}/domains/{cath_domain_dataset} does not exist in {path}")
+        elif not isinstance(cath_domain_dataset, h5pyd.Group):
+            raise RuntimeError("cath_domain_dataset must be None (key suppllied w/ previous argument), a domain name within the key, or a h5pyd.Group")
 
         self.cath_domain_dataset = cath_domain_dataset
 
@@ -41,7 +45,6 @@ class DistributedStructure(AbstractStructure):
         self.pdb = key[:4]
         self.chain = key[4]
         self.domNo = key[5:]
-        self.file_mode = file_mode
         self.coarse_grained = coarse_grained
 
         if coarse_grained:
@@ -60,6 +63,9 @@ class DistributedStructure(AbstractStructure):
         self.get_coords()
 
         super().__init__(key, coarse_grained=coarse_grained)
+
+        if self.f is not None:
+            self.f.close()
 
     def deep_copy_feature(self, feature_name):
         return self.features.copy()
@@ -105,7 +111,7 @@ class DistributedStructure(AbstractStructure):
         if path is None:
             path = StringIO()
         elif isinstance(path, str):
-            path = open(path)
+            path = open(path, "w")
         elif not hasattr(path, "write"):
             raise RuntimeError("path must be a filename, file-like object, or None (interpreted as StringIO)")
 
@@ -117,21 +123,23 @@ class DistributedStructure(AbstractStructure):
                 print(line.rstrip(), file=path)
 
         for atom in self.data:
-            if atom["residue_id"][-1].isalpha():
-                resseq, icode = atom["residue_id"][:-1], atom["residue_id"][-1]
+            res_id = atom["residue_id"].astype(str)
+            if res_id.isalpha():
+                resseq, icode = int(res_id[:-1]), res_id[-1]
             else:
-                resseq, icode = atom["residue_id"], " "
+                resseq, icode = int(res_id), " "
 
             s = writer._get_atom_line(
-                Atom(atom["atom_name"].strip(), atom[["X", "Y", "Z"]],
-                    atom["bfactor"], " ", atom["atom_name"], atom["serial_number"]),
+                Atom(name=atom["atom_name"].decode("utf-8").strip(), coord=atom[["X", "Y", "Z"]],
+                     bfactor=atom["bfactor"], occupancy=1.0, altloc=" ",
+                     fullname=atom["atom_name"].decode("utf-8"), serial_number=atom["serial_number"]),
                 " ", #hetfield empty
                 " ", #segid empty
                 atom["serial_number"],
-                atom["residue_name"] if "residue_name" in self.data.dtype.names else "UNK",
+                atom["residue_name"].decode("utf-8") if "residue_name" in self.data.dtype.names else "UNK",
                 resseq,
                 icode,
-                atm["chain"],
+                atom["chain"].decode("utf-8"),
             )
             path.write(s)
 
@@ -198,7 +206,7 @@ class DistributedStructure(AbstractStructure):
         na = {float:np.nan, str_type:"", int:9999999}
 
         new_dt = [(name, "<f8") for name in features]
-        new_dt = np.dtype(self.data.dtype.descr + new_dt])
+        new_dt = np.dtype(self.data.dtype.descr + new_dt)
 
         new_df = np.empty(self.data.shape, dtype=new_dt)
 
@@ -210,6 +218,9 @@ class DistributedStructure(AbstractStructure):
 
         self.feature_names += list(features.keys())
         self.features = self.data[self.feature_names]
+
+    def _to_unstructured(self, x):
+        return np.lib.recfunctions.structured_to_unstructured(x)
 
     # def get_mean_coord(self):
     #     if not self.mean_coord_updated:
@@ -251,7 +262,7 @@ class DistributedStructure(AbstractStructure):
     #
     def get_coords(self, include_hetatms=False, exclude_atoms=None):
         if self.coords is None:
-            self.coords = numpy.lib.recfunctions.structured_to_unstructured(
+            self.coords = self._to_unstructured(
                 self.pdb_info[["X", "Y", "Z"]]).round(decimals=4)
         return self.coords
     #

@@ -647,9 +647,18 @@ class ProteinFeaturizer(Structure):
             psi,
             np.sin(psi),
             np.cos(psi),
-            float(atom_ss in "GHIT"),
+            float(atom_ss in "GH"),
             float(atom_ss in "BE"),
-            float(atom_ss not in "GHITBE")])
+            float(atom_ss not in "GHBE"),
+            float(atom_ss == "H"),
+            float(atom_ss == "B"),
+            float(atom_ss == "E"),
+            float(atom_ss == "G"),
+            float(atom_ss == "I"),
+            float(atom_ss == "T"),
+            float(atom_ss == "S"),
+            float(atom_ss in ["", "-", None, "None"])
+        ])
 
         if is_atom:
             idx = atom.serial_number

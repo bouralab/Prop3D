@@ -9,11 +9,10 @@ from molmimic.common.ProteinTables import vdw_aa_radii
 from molmimic.common.features import default_atom_features, default_residue_features
 
 class DistributedVoxelizedStructure(DistributedStructure):
-    def __init__(self, path, key, cath_domain_dataset, coarse_grained=False, file_mode="r",
+    def __init__(self, path, key, cath_domain_dataset, coarse_grained=False,
       volume=264, voxel_size=1.0, rotate=None, use_features=None, predict_features=None,
       replace_na=False, ligand=False):
-        super().__init__(path, key, cath_domain_dataset, coarse_grained=coarse_grained,
-            file_mode=file_mode)
+        super().__init__(path, key, cath_domain_dataset, coarse_grained=coarse_grained)
 
         self.mean_coord = np.zeros(3)
         self.mean_coord_updated = False

@@ -135,7 +135,6 @@ class AbstractStructure(object):
         else:
             features = self.features[features_to_use]
 
-
         bfactors = self.get_bfactors()
 
         path = os.path.join(work_dir, self.name.replace("/", "_"))
@@ -252,8 +251,10 @@ class AbstractStructure(object):
             ss_type = pd.DataFrame.from_records(
                 self.data[["serial_number", "is_helix", "is_sheet", "Unk_SS"]],
                 index="serial_number")
+            get_id = lambda x: x["residue_id"]
         else:
             ss_type = self.features[["is_helix", "is_sheet", "Unk_SS"]]
+            get_id = lambda x: x.get_id()
 
         ss_type = ss_type.rename(columns={"is_helix":"H", "is_sheet":"E", "Unk_SS":"X"})
         ss_type = ss_type.idxmax(axis=1)
@@ -270,16 +271,20 @@ class AbstractStructure(object):
                 this_group_residues = tuple(self.unfold_entities(this_group_atoms, "R"))
 
                 if verbose:
-                    print(this_group_residues[0].get_id(), this_group_residues[-1].get_id(), this_group)
+                    this_group_id = tuple(np.unique(r["residue_id"])[0] for r in this_group_residues)
+                    print(this_group_id[0], this_group_id[-1], this_group)
 
-                # if len(this_group_residues)<4 and this_group != "X":
-                #     ss_type.loc[ss_group.index] = "X"
+                if len(this_group_residues)<4 and this_group != "X":
+                    ss_type.loc[ss_group.index] = "X"
                 if len(this_group_residues)<3 and prev_group == next_group:
                     ss_type.loc[ss_group.index] = prev_group
                 elif len(this_group_residues)<3 and next_group == "X" and this_group != prev_group:
                     ss_type.loc[ss_group.index] = "X"
 
-                if len(this_group_residues)<5:
+                if this_group=="H" and prev_group=="E" and next_group=="E" and len(this_group_residues)<5:
+                    ss_type.loc[ss_group.index] = "X"
+
+                if len(this_group_residues)<3: #OB=5
                     if prev_group == next_group:
                         ss_type.loc[ss_group.index] = prev_group
                     else:
@@ -329,7 +334,9 @@ class AbstractStructure(object):
         if verbose:
             print()
             for ss in ss_groups:
-                print(ss[0].get_id(), ss[-1].get_id(), ss_type[ss])
+                ss_id = tuple(np.unique(r["residue_id"])[0] for r in ss)
+                _ssid = list(sorted(map(int, ss_id)))
+                print(_ssid[0], _ssid[-1], ss_type[ss_id])
 
         return ss_groups, loop_for_ss, original_order, ss_type, leading_trailing_residues, number_ss
 

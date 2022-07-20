@@ -402,7 +402,7 @@ class Structure(object):
               ("serial_number", str_type),
               ("atom_name", str_type),
               ("residue_id", str_type),
-              ("residue_name", str_type)
+              ("residue_name", str_type),
               ("chain", str_type),
               ("bfactor", float),
               ("X", float),
