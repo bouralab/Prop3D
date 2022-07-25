@@ -21,6 +21,7 @@ class DistributedStructure(AbstractStructure):
         self.path = path
         self.key = key
         self.f = None
+        self.cath_domain_dataset_key = cath_domain_dataset
 
         if cath_domain_dataset is None:
             #Full key given
