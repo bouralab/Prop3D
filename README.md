@@ -6,6 +6,8 @@ Prop3D is a protein structure dataset that combines 3D atomic coordinates with b
 
 Here we provide code to re-create the dataset. Unfortunately, it is a large/bloated project because it started out as a general structural bioinformatics toolkit, but it is not meant replace (better) tools such as [Biotite](https://github.com/biotite-dev/biotite) or [BioPython](https://github.com/biopython/biopython).
 
+To learn how the dateset is organized, please see the [Dataset README](README-Dataset.md)
+
 ## Overview
 
 First, we create Toil Jobs following the CATH Hierarchy
