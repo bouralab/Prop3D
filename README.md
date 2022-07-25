@@ -59,7 +59,7 @@ For single machine setup, please clone the [HSDS](https://github.com/HDFGroup/hs
 ### a. Use the Prop3D precalculated data
 
 ```bash
-wget http://zenodo.com/doi-urfold/Prop3D.h5
+wget https://zenodo.org/record/6873024/files/Prop3D-20.h5
 hsload Prop3D.h5 /home/$USER/Prop3D.h5 #Change last path to whatever you want to name the file in HSDS
 ```
 

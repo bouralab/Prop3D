@@ -35,7 +35,7 @@ For more information on setting up HSDS and/or recreate this dataset, please see
 
 ```bash
 export PROP3D_DATA=/home/$USER/Prop3D.h5 #Change to whereever yous tore Prop3D within HSDS
-wget -O Prop3D-20.h5 6873024
+wget -O Prop3D-20.h5 https://zenodo.org/record/6873024/files/Prop3D-20.h5
 ```
 ### 2. If your are using HSDS, follow these steps: <a name="use-hsds"></a>
 Follow the instructions at https://gitlab.com/uva-arc/hobo-request/-/blob/main/doc/single-node-k3s-hsds-install.md to configure HSDS, then run:
