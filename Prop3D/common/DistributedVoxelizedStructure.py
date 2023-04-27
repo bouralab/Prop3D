@@ -33,6 +33,8 @@ class DistributedVoxelizedStructure(DistributedStructure):
 
         self.ligand = ligand
 
+        self.features = self.features[self.use_features]
+
         if rotate is None or (isinstance(rotate, bool) and not rotate):
             self.shift_coords_to_volume_center()
             self.set_voxel_size(self.voxel_size)
@@ -47,6 +49,15 @@ class DistributedVoxelizedStructure(DistributedStructure):
         else:
             raise RuntimeError("Invalid rotation option. Must be None or False for no rotation, 'pai' to orient to princple axis, 'random' for random rotation matrix, or an actual roation matrix")
 
+            # if r is None:
+            #     setattr(result, k, copy.deepcopy(v, memo))
+
+            # if "features" in k:
+            #     setattr(result, k, self.deep_copy_feature(k))
+            # else:
+            #     print(k, v)
+            #     setattr(result, k, copy.deepcopy(v, memo))
+    
     def create_full_volume(self, input_shape=(96, 96, 96)):
         truth_grid = np.zeros(list(input_shape)+[1])
         for atom in self.get_atoms():

@@ -4,9 +4,9 @@ import pandas as pd
 from Prop3D.parsers.cath import CATHApi
 
 
-def get_representatives(cathcode, data_dir):
+def get_representatives(cathcode, data_dir, job_or_cathstore):
     print("Running", cathcode)
-    cath = CATHApi()
+    cath = CATHApi(job=job_or_cathstore)
     hierarchy = cath.list_children_in_heirarchy(cathcode, 5)
     print(hierarchy)
     representatives = [child["example_domain_id"] for child in hierarchy["children"]]

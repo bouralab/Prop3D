@@ -3,20 +3,21 @@ import shutil
 import yaml
 import pandas as pd
 
-from Prop3D.generate_data import data_stores
+from Prop3D.generate_data.data_stores import data_stores
 from Prop3D.parsers.json import JSONApi, WebService
 from Prop3D.parsers.container import Container
 
 class CATHApi(JSONApi):
-    def __init__(self, cath_store=None, work_dir=None, download=True, max_attempts=2):
+    def __init__(self, cath_store=None, work_dir=None, download=True, max_attempts=2, job=None):
         if cath_store is None:
-            cath_store = data_stores.cath_api_service
+            assert job is not None
+            cath_store = data_stores(job).cath_api_service
         super().__init__("https://www.cathdb.info/version/v4_3_0/",
             cath_store, work_dir=work_dir, download=download, clean=False,
             max_attempts=max_attempts)
 
         self.ftp = CATHFTP(cath_store=cath_store, work_dir=work_dir,
-            download=download, max_attempts=max_attempts)
+            download=download, max_attempts=max_attempts, job=job)
 
     def parse(self, file_path, key):
         if ".pdb" in key:
@@ -154,9 +155,10 @@ class CATHApi(JSONApi):
         return self.get("api/rest/superfamily/{}/ec".format(superfamily))
 
 class CATHFTP(WebService):
-    def __init__(self, cath_store=None, work_dir=None, download=True, max_attempts=2):
+    def __init__(self, cath_store=None, work_dir=None, download=True, max_attempts=2, job=None):
         if cath_store is None:
-            cath_store = data_stores.cath_api_service
+            assert job is not None
+            cath_store = data_stores(job).cath_api_service
         super().__init__("ftp://orengoftp.biochem.ucl.ac.uk/cath/releases/latest-release/",
             cath_store, work_dir=work_dir, download=download, clean=False,
             max_attempts=max_attempts)

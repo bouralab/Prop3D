@@ -41,6 +41,7 @@ import subprocess
 import datetime
 import json
 import subprocess
+from pathlib import Path
 
 # Need stuff for Amazon s3
 try:
@@ -407,6 +408,11 @@ class FileIOStore(IOStore):
         self.path_prefix = self.store_name = path_prefix
         self.store_string = "file:"+path_prefix
 
+        path = Path(self.path_prefix)
+        if not path.is_dir():
+            path.mkdir(parents=True, exist_ok=True)
+
+
     def read_input_file(self, input_path, local_path):
         """
         Get input from the filesystem.
@@ -706,6 +712,7 @@ class S3IOStore(IOStore):
         if name_prefix != "":
             self.store_string += "/{}".format(name_prefix)
         self.s3 = None
+        self.enpoint_url = None
 
     def connect(self):
         self.__connect()
@@ -728,6 +735,18 @@ class S3IOStore(IOStore):
 
             if "S3_ENDPOINT" in os.environ:
                 kwds["endpoint_url"] = os.environ["S3_ENDPOINT"]
+
+            if "TOIL_S3_HOST" in os.environ:
+                host = os.environ['TOIL_S3_HOST']
+                port = os.environ.get('TOIL_S3_PORT', None)
+                protocol = 'https'
+                if os.environ.get('TOIL_S3_USE_SSL', True) == 'False':
+                    protocol = 'http'
+                endpoint_url = f'{protocol}://{host}' + f':{port}' if port else ''
+                kwds["endpoint_url"] = endpoint_url
+
+            if "endpoint_url" in kwds:
+                self.enpoint_url =   kwds["endpoint_url"]
 
             # Connect to the s3 bucket service where we keep everything
             self.s3 = boto3.client('s3', self.region, **kwds)
@@ -792,6 +811,7 @@ class S3IOStore(IOStore):
             yield get_output(obj)
 
     def download_input_directory(self, prefix, local_dir, postfix=None):
+        
         from boto.utils import get_instance_metadata
 #         instanceMetadata = get_instance_metadata()["iam"]["security-credentials"]["toil_cluster_toil"]
 #         RealtimeLogger.info("CRED={}".format(instanceMetadata))
@@ -816,7 +836,8 @@ class S3IOStore(IOStore):
         cmd = ["s3", "sync", "s3://{}/{}".format(self.bucket_name, prefix), local_dir]
         if postfix is not None:
             cmd += ["--exclude=\"*\"", "--include=\"*{}\"".format(postfix)]
-
+        if self.enpoint_url is not None:
+            cmd = ["--enpoint-url", self.endpoint_url] + cmd
 
         rc = driver.main(args=cmd)
 
@@ -875,7 +896,7 @@ class S3IOStore(IOStore):
         otherwise.
 
         """
-
+        self.__connect()
         return self.s3.head_object(Bucket=self.bucket_name, Key=path)['ContentLength']
 
     @backoff
@@ -883,10 +904,11 @@ class S3IOStore(IOStore):
         """
         Return the number of items in path if it exits, or None otherwise
         """
-
+        self.__connect()
         return sum(1 for _ in self.list_input_directory(path))
 
     def remove_file(self, path):
+        self.__connect()
         self.s3r.Object(self.bucket_name, path).delete()
 
 class FileS3IOStore(object):

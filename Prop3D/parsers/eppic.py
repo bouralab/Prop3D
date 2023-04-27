@@ -23,6 +23,7 @@ from Prop3D.parsers.json import JSONApi
 from Prop3D.parsers.pdbe import PDBEApi
 from Prop3D.parsers.container import Container
 from Prop3D.util.pdb import s3_download_pdb
+from Prop3D.generate_data.data_stores import data_stores
 
 from toil.realtimeLogger import RealtimeLogger
 
@@ -311,7 +312,8 @@ class EPPICLocal(Container):
             fallback_local=fallback_local, work_dir=work_dir)
 
         if eppic_local_store is None:
-            eppic_local_store = data_stores.eppic_local_store
+            assert job is not None
+            eppic_local_store = data_stores(job).eppic_local_store
 
         self.pdb = pdb
 

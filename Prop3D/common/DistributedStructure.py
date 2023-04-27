@@ -1,3 +1,6 @@
+import os
+import copy
+
 import numpy as np
 import numpy.lib.recfunctions
 from sklearn import preprocessing
@@ -6,6 +9,7 @@ from Bio.PDB.Atom import Atom
 from Bio.PDB import PDBIO
 
 import h5pyd
+import pandas as pd
 
 from Prop3D.common.AbstractStructure import AbstractStructure
 from Prop3D.common.features import default_atom_feature_np, default_residue_feature_np, \
@@ -27,6 +31,7 @@ class DistributedStructure(AbstractStructure):
             #Full key given
             self.f = h5pyd.File(path, use_cache=False)
             try:
+                self.full_key = key
                 cath_domain_dataset = self.f[key]
             except KeyError:
                 raise RuntimeError(f"Structure with key {key} does not exist in {path}")
@@ -34,15 +39,19 @@ class DistributedStructure(AbstractStructure):
             #Name of domain
             self.f = h5pyd.File(path, use_cache=False)
             try:
+                self.full_key = f"{key}/domains/{cath_domain_dataset}"
                 cath_domain_dataset = self.f[f"{key}/domains/{cath_domain_dataset}"]
             except KeyError:
                 raise RuntimeError(f"Structure with key {key}/domains/{cath_domain_dataset} does not exist in {path}")
         elif not isinstance(cath_domain_dataset, h5pyd.Group):
             raise RuntimeError("cath_domain_dataset must be None (key suppllied w/ previous argument), a domain name within the key, or a h5pyd.Group")
+        else:
+            #Is is already a group
+            self.full_key = cath_domain_dataset.name
 
         self.cath_domain_dataset = cath_domain_dataset
 
-        self.cath_domain = key
+        self.cath_domain = self.full_key[1:].rsplit('/', 1)[1]
         self.pdb = key[:4]
         self.chain = key[4]
         self.domNo = key[5:]
@@ -63,13 +72,23 @@ class DistributedStructure(AbstractStructure):
         self.coords = None
         self.get_coords()
 
-        super().__init__(key, coarse_grained=coarse_grained)
+        super().__init__(f"{key}-{self.cath_domain}", coarse_grained=coarse_grained)
 
         if self.f is not None:
             self.f.close()
 
-    def deep_copy_feature(self, feature_name):
-        return self.features.copy()
+    def deep_copy_feature(self, feature_name, memo):
+        if feature_name == "data":
+            return copy.deepcopy(self.data, memo)
+        if feature_name == "features":
+            print("copying features")
+            return copy.deepcopy(self.features, memo)
+        elif feature_name == "f":
+            return None
+        elif feature_name == "cath_domain_dataset":
+            return None
+        else:
+            raise NotImplementedError
 
     def get_atoms(self, atoms=None, include_hetatms=False, exclude_atoms=None, include_atoms=None):
         data = self.data if atoms is None else atoms
@@ -125,7 +144,7 @@ class DistributedStructure(AbstractStructure):
 
         for atom in self.data:
             res_id = atom["residue_id"].astype(str)
-            if res_id.isalpha():
+            if res_id[-1].isalpha():
                 resseq, icode = int(res_id[:-1]), res_id[-1]
             else:
                 resseq, icode = int(res_id), " "
@@ -163,62 +182,83 @@ class DistributedStructure(AbstractStructure):
     #     return surface
 
     def get_bfactors(self):
-        return self.pdb_info["bfactor"]
+        return self.data["bfactor"]
 
-    def write_features(self, path=None, key=None, feature_key="features", features=None, force=0):
+    def write_features(self, path=None, key=None, features=None, coarse_grained=False, name=None, work_dir=None, force=None, multiple=False):
+        
+        #
+        # path=None, key=None, feature_key="features", features=None, force=0):
+
         if path is None:
-            path = os.path.splitext(self.path)+"_features.h5"
+            if work_dir is None:
+                work_dir = os.getcwd()
 
-        if not path.startswith("/"):
-            path = os.path.join(os.path.basename(self.path), path)
+            if name is None:
+                name = self.cath_domain_dataset
 
-        if not path.endswith(".h5"):
-            name += ".h5"
-
-        if force == 2:
-            with h5pyd.Folder(os.path.basename(self.path)) as folder:
-                if os.path.basename(path) in folder:
-                    del folder[os.path.basename(path)]
+            path = os.path.join(work_dir, f"{name}_features.h5")
 
         if key is None:
-            key = self.key
+            key = self.full_key if multiple else self.cath_domain_dataset_key
+        
+        pd.DataFrame.from_records(self.features).to_hdf(path, key)
+            
 
-        key = os.path.join(key, feature_key)
+        # if not path.startswith("/"):
+        #     path = os.path.join(os.path.basename(self.path), path)
 
-        if features is None:
-            data = self.features
-        else:
-            assert set(features).issubset(set(self.features.dtype.names))
-            data = self.features[features]
+        # if not path.endswith(".h5"):
+        #     name += ".h5"
 
-        with h5pyd.File(name, "a") as f:
-            if force == 0 and key in f:
-                raise RuntimeError(f"{key} already exists in {name}, not overwriting. Set force=True to overwrite")
+        # if distributed and force == 2:
+        #     with h5pyd.Folder(os.path.basename(self.path)) as folder:
+        #         if os.path.basename(path) in folder:
+        #             del folder[os.path.basename(path)]
 
-            group = f.require_group(os.path.dirname(key))
+        # if key is None:
+        #     key = self.full_key
 
-            ds1 = f.create_table(self.key, data=data, chunks=True,
-                compression="gzip", compression_opts=9)
+        # key = os.path.join(key, feature_key)
+
+        # if features is None:
+        #     data = self.features
+        # else:
+        #     assert set(features).issubset(set(self.features.dtype.names))
+        #     data = self.features[features]
+
+        # if not distributed:
+        #     import h5py as h5
+        # else:
+        #     h5 = h5pyd
+
+        # with h5.File(name, "a") as f:
+        #     if force == 0 and key in f:
+        #         raise RuntimeError(f"{key} already exists in {name}, not overwriting. Set force=True to overwrite")
+
+        #     group = f.require_group(os.path.dirname(key))
+
+        #     ds1 = f.create_table(self.key, data=data, chunks=True,
+        #         compression="gzip", compression_opts=9)
 
     def add_features(self, coarse_grained=False, **features):
-        assert [len(f)==len(self.data) for f in features.values()], "Features must contain same number of atoms (or residues is coarse grained)"
+        assert [len(f)==len(self.features) for f in features.values()], "Features must contain same number of atoms (or residues is coarse grained)"
 
         str_type = np.dtype('O', metadata={'vlen': str})
         na = {float:np.nan, str_type:"", int:9999999}
 
         new_dt = [(name, "<f8") for name in features]
-        new_dt = np.dtype(self.data.dtype.descr + new_dt)
+        new_dt = np.dtype(self.features.dtype.descr + new_dt)
 
-        new_df = np.empty(self.data.shape, dtype=new_dt)
+        new_df = np.empty(self.features.shape, dtype=new_dt)
 
-        for c in self.data.dtype.names:
-            new_df[c] = self.data[c]
+        for c in self.features.dtype.names:
+            new_df[c] = self.features[c]
 
-        for col, value in features:
+        for col, value in features.items():
             new_df[col] = value
 
         self.feature_names += list(features.keys())
-        self.features = self.data[self.feature_names]
+        self.features = new_df #self.data[self.feature_names]
 
     def _to_unstructured(self, x):
         return np.lib.recfunctions.structured_to_unstructured(x)
@@ -298,7 +338,7 @@ class DistributedStructure(AbstractStructure):
     #     self.mean_coord_updated = False
 
     def update_bfactors(self, b_factors):
-        self.pdb_info["bfactor"] = b_factors
+        self.data["bfactor"] = b_factors
 
     def calculate_neighbors(self, d_cutoff=100.0):
         """

@@ -10,6 +10,7 @@ import warnings
 
 from datetime import datetime
 from io import StringIO
+from pathlib import Path
 from collections import OrderedDict
 from subprocess import CalledProcessError
 from contextlib import contextmanager
@@ -144,6 +145,7 @@ class Container(object):
     ARG_SEP = " "
     GPUS = False
     EXTRA_CONTAINER_KWDS = {}
+    CONTAINER_FILE_PREFIX = "/data"
 
     def __init__(self, job=None, return_files=False, force_local=False, fallback_local=False,
       intermediate_file_store=None, work_dir=None, detach=False, cleanup_when_done=True):
@@ -191,9 +193,9 @@ class Container(object):
         #     self.__call__ = iterator_to_list(self.__call__)
 
     def __init_subclass__(cls, *args, **kwargs):
-         super().__init_subclass__(*args, **kwargs)
-         if not cls.DETACH:
-             cls.__call__ = iterator_to_list(cls.__call__)
+        super().__init_subclass__(*args, **kwargs)
+        if not cls.DETACH:
+            cls.__call__ = iterator_to_list(cls.__call__)
 
     def process_args(self):
         self.parameters = []
@@ -297,7 +299,7 @@ class Container(object):
 
     def __call__(self, *args, **kwds):
         if self.force_local:
-            return self.local(*args, **kwds)
+            yield self.local(*args, **kwds)
 
         assert self.job is not None
 
@@ -320,8 +322,8 @@ class Container(object):
                     self.job,
                     image=image,
                     entrypoint=self.ENTRYPOINT,
-                    working_dir="/data",
-                    volumes={self.work_dir:{"bind":"/data", "mode":"rw"}},
+                    working_dir=self.CONTAINER_FILE_PREFIX,
+                    volumes={self.work_dir:{"bind":self.CONTAINER_FILE_PREFIX, "mode":"rw"}},
                     parameters=parameters,
                     detach=self.detach,
                     **self.EXTRA_CONTAINER_KWDS)
@@ -335,7 +337,7 @@ class Container(object):
                 if self.fallback_local:
                     import traceback as tb
                     RealtimeLogger.error(tb.format_exc())
-                    return self.local(*args, **kwds)
+                    yield self.local(*args, **kwds)
                 self.clean()
                 self.change_paths = OrderedDict()
                 if self.GPUS and USE_DOCKER:
@@ -354,7 +356,7 @@ class Container(object):
                     for line in out:
                         yield line
 
-                    #yield from out
+                    # yield from out
 
             except (SystemExit, KeyboardInterrupt):
                 raise
@@ -370,7 +372,7 @@ class Container(object):
             if USE_SINGULARITY:
                 message = "".join(out["message"])
 
-                if out["return_code"]:
+                if out["return_code"] and not "chown: changing ownership:" not in message.splitlines()[-1]:
                     self.clean()
                     self.change_paths = OrderedDict()
                     raise RuntimeError(f"{parameters} {out}")
@@ -378,12 +380,15 @@ class Container(object):
                 #Docker already handled error above
                 message = out
 
+        self.message = out
+
         try:
             out_files = self.check_output()
         except AssertionError:
             self.stdout = out
             self.clean()
             self.change_paths = OrderedDict()
+            
             raise
 
         self.out_files = out_files
@@ -431,8 +436,8 @@ class Container(object):
             pass
 
 
-        RealtimeLogger.info(f"args {args}")
-        RealtimeLogger.info(f"kwds {kwds}")
+        #RealtimeLogger.info(f"args {args}")
+        #RealtimeLogger.info(f"kwds {kwds}")
 
         # if len(args) == self.number_of_parameters and len(kwds) == self.number_of_optional_parameters":
         #     #Correct number of args, all default options
@@ -458,7 +463,7 @@ class Container(object):
         RealtimeLogger.info(f"p {parameters}")
 
         for k, v in kwds.items():
-            RealtimeLogger.info(f"checking {k}={v}")
+            RealtimeLogger.info(f"checking {k}")
             try:
                 idx = self.params_to_update[k]
                 param_func = self.param_funcs[idx]
@@ -541,7 +546,7 @@ class Container(object):
         else:
             raise RuntimeError(f"Invalid arg formatter: {formatter}")
 
-    def format_in_path(self, name, path, move_files_to_work_dir=True):
+    def format_in_path(self, name, path, move_files_to_work_dir=True, absolute_path=True):
         if False and self.is_local or not move_files_to_work_dir or any(path.startswith(p) for p in os.environ.get("ALLOWABLE_CONTAINER_PATHS", "").split(":")):
             if not os.path.isfile(path):
                 raise RuntimeError("{} is not found".format(path))
@@ -557,18 +562,21 @@ class Container(object):
                     if path.startswith("/"):
                         path = path[1:]
 
-                    new_path = os.path.join("/data", path) if not self.is_local else path
+                    if absolute_path:
+                        new_path = os.path.join(self.CONTAINER_FILE_PREFIX, path) if not self.is_local else path
+                    else:
+                        new_path = path
                 else:
                     local_path = os.path.abspath(os.path.join(self.work_dir, os.path.basename(path)))
                     if not os.path.isfile(local_path):
                         shutil.copyfile(path, local_path)
                         #self.files_to_remove.append(local_path)
-                    new_path = os.path.join("/data", os.path.basename(path)) if not self.is_local else os.path.basename(path)
+                    new_path = os.path.join(self.CONTAINER_FILE_PREFIX, os.path.basename(path)) if not self.is_local else os.path.basename(path)
                     if not os.path.isfile(local_path):
                         time.sleep(2)
                     assert os.path.isfile(local_path), f"DNE {local_path}"
             else:
-                new_path = os.path.join("/data", os.path.basename(path)) if not self.is_local else os.path.basename(path)
+                new_path = os.path.join(self.CONTAINER_FILE_PREFIX, os.path.basename(path)) if not self.is_local else os.path.basename(path)
 
             return new_path
 
@@ -582,7 +590,7 @@ class Container(object):
             self.change_paths[name] = (path, path)
             return os.path.abspath(path)
         else:
-            new_path = os.path.join("/data", os.path.basename(path))
+            new_path = os.path.join(self.CONTAINER_FILE_PREFIX, os.path.basename(path))
             fix_path = os.path.join(self.work_dir, os.path.basename(path))
             self.change_paths[name] = (fix_path, path)
             return new_path
@@ -609,8 +617,8 @@ class Container(object):
         for name, (out_path, change_path) in self.change_paths.items():
             if name not in self.skip_output_file_checks:
                 assert os.path.isfile(out_path), "Outfile '{}' not found. ".format(
-                    out_path) + "Could not change to '{}': {}".format(
-                        change_path, os.listdir(self.work_dir))
+                    out_path) + "Could not change to '{}': {}. Message: {}".format(
+                        change_path, os.listdir(self.work_dir), self.message if hasattr(self,'message') else "")
             if name in self.skip_output_file_checks:
                 RealtimeLogger.info("Not moving file, same dir={}; {}=>{}".format(
                     os.path.abspath(out_path) != os.path.abspath(change_path),

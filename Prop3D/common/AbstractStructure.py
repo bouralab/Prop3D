@@ -1,3 +1,5 @@
+import os
+import copy
 import numpy as np
 import pandas as pd
 from scipy.stats import special_ortho_group
@@ -31,10 +33,13 @@ class AbstractStructure(object):
         memo[id(self)] = result
         empty = False
         for k, v in self.__dict__.items():
-            if "features" in k:
-                setattr(result, k, self.deep_copy_feature(k))
-            else:
-                setattr(result, k, copy.deepcopy(v, memo))
+            try:
+                new_value = self.deep_copy_feature(k, memo)
+            except NotImplementedError:
+                new_value = copy.deepcopy(v, memo)
+
+            setattr(result, k, new_value)
+            
         return result
 
     def __abs__(self):

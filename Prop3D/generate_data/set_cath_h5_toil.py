@@ -110,7 +110,7 @@ def create_splits_for_superfamily_levels(job, sfam, cath_full_h5):
 
 def create_representatives_for_superfamily(job, sfam, cath_full_h5):
     from Prop3D.parsers.cath import CATHApi
-    cath = CATHApi()
+    cath = CATHApi(job=job)
     hierarchy = cath.list_children_in_heirarchy(sfam, 5)
     representatives = [child["example_domain_id"] for child in hierarchy["children"]]
 

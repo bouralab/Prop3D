@@ -8,7 +8,7 @@ from Prop3D.util.pdb import PDB_TOOLS, extract_chains, get_all_chains, \
     get_atom_lines, update_xyz
 from Prop3D.util import SubprocessChain
 
-class Superpose(object):
+class SuperposeOld(object):
     def get_chain(self, pdb_file, chain, new_chain):
         chain_file = self.tempfile()
         extract_chains(pdb_file, chain, rename=new_chain*len(chain),

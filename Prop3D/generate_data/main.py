@@ -18,7 +18,7 @@ from Prop3D.generate_data.calculate_features import calculate_features
 from Prop3D.generate_data.calculate_features_hsds import calculate_features as calculate_features_hsds
 from Prop3D.generate_data.set_cath_h5_toil import create_h5_hierarchy
 
-from Prop3D.generate_data import data_stores
+from Prop3D.generate_data.data_stores import data_stores
 
 
 
@@ -40,8 +40,8 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
 
     if superfamily is not None:
         key = "{}/{}.pdb".format(superfamily, cath_domain)
-        should_prepare_structure = data_stores.prepared_cath_structures.exists(key) or \
-            data_stores.prepared_cath_structures.get_size(key)==0
+        should_prepare_structure = not data_stores(job).prepared_cath_structures.exists(key) or \
+            data_stores(job).prepared_cath_structures.get_size(key)==0
         h5_key = f"/{superfamily}/domains/{cath_domain}"
     else:
         should_prepare_structure = True
@@ -64,12 +64,14 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
             except:
                 #Failed, do not proceed in calculating features
                 raise
+    # else:
+    #     assert 0, (should_prepare_structure, force)
 
     if not force and not use_hsds:
         #Check if any feature files exist
         feat_files = ["{}/{}_{}".format(superfamily, cath_domain, ext) for ext in \
             ('atom.h5', 'residue.h5', 'edges.h5')]
-        feats_exist = all([data_stores.cath_features.exists(f) for f in feat_files])
+        feats_exist = all([data_stores(job).cath_features.exists(f) for f in feat_files])
     elif not force and use_hsds:
         with h5pyd.File(cathFileStoreID, mode="r", use_cache=False, retries=100) as store:
             try:
@@ -83,6 +85,9 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
                 feats_exist = False
     else:
         feats_exist = False
+
+    if not should_prepare_structure and not feats_exist:
+        local_domain_file = None #Will download in features function
 
     RealtimeLogger.info(f"get_domain_structure_and_features FEATURES {force} {update_features}, {feats_exist}")
 
@@ -105,7 +110,7 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
     if update_features is not None:
         jobStoreName = os.path.basename(job.fileStore.jobStore.config.jobStore.split(":")[-1])
         done_file = job.fileStore.getLocalTempFile()
-        data_stores.data_eppic_cath_features.write_output_file(done_file,
+        data_stores(job).data_eppic_cath_features.write_output_file(done_file,
             f"updates/{jobStoreName}/{superfamily}/{cath_domain}")
         safe_remove(done_file)
 
@@ -149,7 +154,7 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
     if False and not force and update_features is None:
         #Get domians that have edge features uploaded (last feature file to be uploaded so we know its done)
         done_domains = [os.path.basename(domain).split("_")[0] for domain in \
-            data_stores.cath_features.list_input_directory(superfamily) \
+            data_stores(job).cath_features.list_input_directory(superfamily) \
             if domain.endswith("edges.txt.gz")]
         n_domains = len(cath_domains)
         cath_domains = list(set(cath_domains)-set(done_domains))
@@ -158,7 +163,7 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
         #oldest = datetime.date(2021, 2, 9)
         jobStoreName = os.path.basename(job.fileStore.jobStore.config.jobStore.split(":")[-1])
         updated_domains = [cath_domain for cath_domain, last_modified in \
-            data_stores.data_eppic_cath_features.list_input_directory(
+            data_stores(job).data_eppic_cath_features.list_input_directory(
                 f"updates/{jobStoreName}/{superfamily}/", with_times=True)] # \
                 #if datetime.strptime(last_modified, '%Y-%m-%dT%H:%M:%S')<oldest]
 
@@ -169,7 +174,7 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
     if further_parallize:
         map_job(job, get_domain_structure_and_features, cath_domains,
             superfamily, cathFileStoreID, update_features=update_features,
-            further_parallelize=False, use_hsds=use_hsds, force=False)
+            further_parallelize=False, use_hsds=use_hsds, force=force)
     else:
         RealtimeLogger.info("Looping over domain")
         for domain in cath_domains:
@@ -212,7 +217,7 @@ def start_domain_and_features(job, cathFileStoreID, cathcode=None, skip_cathcode
                     drop_duplicates=True)
 
                 done_domains = [os.path.basename(domain).split("_")[0] for sfam in cathcode \
-                    for domain in data_stores.cath_features.list_input_directory("/".join(sfam) if \
+                    for domain in data_stores(job).cath_features.list_input_directory("/".join(sfam) if \
                         isinstance(sfam, (list,tuple)) else sfam.replace(".", "/")) \
                         if domain.endswith("edges.txt.gz")]
 
@@ -222,7 +227,7 @@ def start_domain_and_features(job, cathFileStoreID, cathcode=None, skip_cathcode
                         cath_domains = pd.DataFrame([(cath_domain, sfam) for sfam in fixed_sfams \
                             for cath_domain in store[f"{sfam}/domains"].keys()], columns=["cath_domain", "cathcode"])
                     except KeyError:
-                        raise RuntimeError(f"Must create hsds file first. Key not found {sfam}/domains")
+                        raise RuntimeError(f"Must create hsds file first. Key not found {sfam+'/domain' for sfam in fixed_sfams}")
 
                     # try:
                     #     check = [f"{sfam}/domains" for sfam in fixed_sfams]
@@ -297,7 +302,6 @@ def start_domain_and_features(job, cathFileStoreID, cathcode=None, skip_cathcode
     #job.addChildJobFn()
 
 def start_toil(job, cathFileStoreID, cathcode=None, skip_cathcode=None, pdbs=None, update_features=None, use_hsds=True, work_dir=None, force=False):
-    RealtimeLogger.info("RUNN START")
     if work_dir is None:
         if job is not None and hasattr(job, "fileStore"):
             work_dir = job.fileStore.getLocalTempDir()
@@ -430,7 +434,7 @@ if __name__ == "__main__":
     # elif "HS_ENDPOINT" not in os.environ or not os.environ["HS_ENDPOINT"].startswith("http"):
     #     raise RuntimeError("Must specify HSDS endpoint env variable: HS_ENDPOINT and it must begin with http")
 
-
+    os.environ["TOIL_START_DIR"] = options.work_dir
 
     with Toil(options) as workflow:
         if not workflow.options.restart:

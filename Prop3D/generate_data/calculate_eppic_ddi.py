@@ -20,7 +20,7 @@ from Prop3D.parsers.USEARCH import ClusterFast
 
 from Prop3D.generate_data.prepare_protein import process_domain
 from Prop3D.generate_data.calculate_features import calculate_features
-from Prop3D.generate_data import data_stores
+from Prop3D.generate_data.data_stores import data_stores
 
 from toil.realtimeLogger import RealtimeLogger
 
@@ -165,7 +165,7 @@ def extract_binding_sites(job, cath_domain, superfamily, cathFileStoreID, work_d
     pdb_key = "{}/{}.pdb.raw".format(superfamily, cath_domain)
     pdb_file = os.path.join(work_dir, "{}.pdb".format(cath_domain))
     try:
-        data_stores.prepared_cath_structures.read_input_file(pdb_key, pdb_file)
+        data_stores(job).prepared_cath_structures.read_input_file(pdb_key, pdb_file)
     except (SystemExit, KeyboardInterrupt):
         raise
     except:
@@ -233,7 +233,7 @@ def cluster_binding_sites(job, cathFileStoreID, cathcode=None, seq=False, no_str
 def cluster_binding_site_sequences(job, cathcode=None, work_dir=None, output_dir=None, force=False):
     for seqID in [1.0, 0.95, 0.60, 0.35]:
         cluster_file = "binding_sites_3d/sequence_clusters/all_binding_site_clusters_uc_{}.h5".format(seqID)
-        if not force and data_stores.eppic_interfaces.exists(cluster_file):
+        if not force and data_stores(job).eppic_interfaces.exists(cluster_file):
             continue
         job.addChildJobFn(cluster_binding_site_sequences_with_seqID,
             seqID, cathcode=cathcode, work_dir=work_dir, output_dir=output_dir)
@@ -264,7 +264,7 @@ def cluster_binding_site_sequences_with_seqID(job, seqID, cathcode=None, work_di
     cluster_files = cluster.cluster(fasta_file=all_binding_sites_file, id=seqID, threads=cores)
 
     def save_cluster_msa_file(cluster_msa_file):
-        data_stores.eppic_interfaces.write_output_file(
+        data_stores(job).eppic_interfaces.write_output_file(
             cluster_msa_file,
             "binding_sites_3d/sequence_clusters/seqID_{}/{}.fasta".format(
                 seqID, os.path.basename(cluster_msa_file).split(".")[-1]
@@ -387,13 +387,13 @@ def process_superfamily(job, superfamily, cathFileStoreID, output_dir="",
     #     cathcode=cathcode)["cath_domain"].tolist()
 
     avail_domains = [os.path.basename(domain).split("_")[0] for domain in \
-        data_stores.eppic_interfaces.list_input_directory("cath/"+superfamily) \
+        data_stores(job).eppic_interfaces.list_input_directory("cath/"+superfamily) \
         if domain.endswith("_ddi.h5")]
 
     #RealtimeLogger.info("Available Doms {}".format(avail_domains))
 
     if not force:
-        done_files = list(data_stores.eppic_interfaces.list_input_directory("binding_sites_3d/"+superfamily))
+        done_files = list(data_stores(job).eppic_interfaces.list_input_directory("binding_sites_3d/"+superfamily))
         # done_pdbs = [os.path.basename(domain).split("_")[0] for domain in \
         #     done_files if domain.endswith(".pdb")] #Doesn't make sense
         done_fasta = [os.path.splitext(os.path.basename(domain))[0] for domain in \
@@ -428,7 +428,7 @@ def start_toil(job, cathFileStoreID, cathcode=None, update_features=None, seq=Fa
     #     "table",
     #     columns=["cath_domain", "cathcode"],
     #     drop_duplicates=True)
-    eppic_interfaces_store = data_stores.eppic_interfaces_sync(output_dir)
+    eppic_interfaces_store = data_stores(job).eppic_interfaces_sync(output_dir)
 
     if not eppic_interfaces_store.exists("binding_sites_3d/all_binding_sites.fasta"):
         #Start CATH hiearchy

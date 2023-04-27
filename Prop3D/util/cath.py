@@ -7,7 +7,7 @@ from Prop3D.parsers.cath import CATHApi
 from Prop3D.util.hdf import get_file, filter_hdf, filter_hdf_chunks
 from Prop3D.util.toil import map_job
 from Prop3D.util import safe_remove
-from Prop3D.generate_data import data_stores
+from Prop3D.generate_data.data_stores import data_stores
 
 from toil.realtimeLogger import RealtimeLogger
 
@@ -268,14 +268,14 @@ def run_cath_hierarchy_h5(job, cathcode, func, path, *args, **kwds):
 
     del cathcodes
 
-def download_cath_domain(cath_domain, sfam_id=None, work_dir=None):
+def download_cath_domain(job, cath_domain, sfam_id=None, work_dir=None):
     """Download CATH domain from CATh API. Raises KeyError is cath_domain doesn't
     exist"""
     if work_dir is None:
         work_dir = os.getcwd()
 
-    cath_store = data_stores.cath_api_service
-    cath = CATHApi(cath_store, work_dir=work_dir)
+    cath_store = data_stores(job).cath_api_service
+    cath = CATHApi(cath_store, work_dir=work_dir, job=job)
 
     domain_file = cath.get_domain_pdb_file(cath_domain)
 

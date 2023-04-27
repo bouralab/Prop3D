@@ -80,10 +80,13 @@ def map_job(job, func, inputs, *args, **kwds):
     final_loop = kwds.get("final_loop", False)
     RealtimeLogger.info("start map job {} {}".format(partition_size, type(final_loop), "True" if final_loop else "False"))
 
+    rvs = []
+
     if (final_loop and partition_size>num_partitions) or partition_size > 1:
         RealtimeLogger.info("Loop over {} partitions with {}".format(num_partitions, len(inputs)))
         for partition in partitions(inputs, partition_size):
-            job.addChildJobFn(map_job, func, partition, *args, **kwds)
+            j = job.addChildJobFn(map_job, func, partition, *args, **kwds)
+            rvs.append(j.rv())
 
     elif final_loop:
         RealtimeLogger.info("Loop over {} final samples in this job".format(len(inputs)))
@@ -99,7 +102,10 @@ def map_job(job, func, inputs, *args, **kwds):
             del kwds["final_loop"]
         for sample in inputs:
             RealtimeLogger.info("Adding job for: {}".format(sample))
-            job.addChildJobFn(func, sample, *args, **kwds)
+            j = job.addChildJobFn(func, sample, *args, **kwds)
+            rvs.append(j.rv())
+
+    return [] #rvs
     # if (final_loop and partition_size>num_partitions) or partition_size > 1:
     #     RealtimeLogger.info("MAP_JOB: total: {}; paritions_size: {}".format(
     #         len(inputs), partition_size))

@@ -82,6 +82,20 @@ class PrepareReceptor(MGLTools):
                 return self(receptor=scwrlFile, out_file=out_file, **kwds)
             else:
                 assert 0
+        except ZeroDivisionError as e:
+            if "ZeroDivisionError" in str(e):
+                scwrl = SCWRL(job=self.job, work_dir=self.work_dir)
+                scwrlFile = scwrl.fix_rotamers(receptor)
+                return self(receptor=scwrlFile, out_file=out_file, **kwds)
+            else:
+                assert 0
+        except AssertionError as e:
+            if "ZeroDivisionError" in str(e):
+                scwrl = SCWRL(job=self.job, work_dir=self.work_dir)
+                scwrlFile = scwrl.fix_rotamers(receptor)
+                return self(receptor=scwrlFile, out_file=out_file, **kwds)
+            else:
+                assert 0
 
     def get_autodock_atom_types(self, receptor, verify=False, **kwds):
         pdbqt_file = self.convert_to_pdbqt(receptor, **kwds)

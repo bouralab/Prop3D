@@ -24,7 +24,7 @@ from Prop3D.util import natural_keys, safe_remove
 from Prop3D.util.toil import map_job, map_job_rv, map_job_rv_list
 from Prop3D.util.cath import run_cath_hierarchy
 from Prop3D.parsers.eppic import EPPICApi
-from Prop3D.generate_data import data_stores
+from Prop3D.generate_data.data_stores import data_stores
 
 from toil.realtimeLogger import RealtimeLogger
 
@@ -292,7 +292,7 @@ class EPPICInteractome(object):
         self.skip_intIds = self.status.finished_interfaces()
 
         #Start new connection EPPIC api
-        self.eppic = EPPICApi(pdbId.lower(), data_stores.eppic_store, data_stores.pdbe_store,
+        self.eppic = EPPICApi(pdbId.lower(), data_stores(job).eppic_store, data_stores(job).pdbe_store,
             use_representative_chains=False, work_dir=work_dir)
 
     def run(self):
@@ -615,7 +615,7 @@ class EPPICInteractome(object):
 def process_pdb(job, pdbId, cathFileStoreID, manual_status=False, work_dir=None):
     work_dir = work_dir if work_dir is not None else job.fileStore.getLocalTempDir()
     try:
-        interactome = EPPICInteractome(job, pdbId, cathFileStoreID, data_stores.eppic_interfaces,
+        interactome = EPPICInteractome(job, pdbId, cathFileStoreID, data_stores(job).eppic_interfaces,
             manual_status=manual_status, work_dir=work_dir)
         interactome.run()
     except (SystemExit, KeyboardInterrupt):
@@ -674,13 +674,13 @@ def start_toil(job, cathFileStoreID, force=False, split_groups=False, filter_obs
         pdb = pdb[~pdb.isin(obsolete)]
 
     if not force:
-        keys = list(data_stores.eppic_interfaces.list_input_directory())
+        keys = list(data_stores(job).eppic_interfaces.list_input_directory())
 
-        all_files = list(data_stores.eppic_interfaces.list_input_directory("pdb"))
+        all_files = list(data_stores(job).eppic_interfaces.list_input_directory("pdb"))
         done_pdbs = [f.split("/")[1] for f in all_files if "status.json" in f]
 
         # done_pdbs = []
-        # for pdbId, files in groupby(data_stores.eppic_interfaces.list_input_directory(), lambda k: k.split("/")[1]):
+        # for pdbId, files in groupby(data_stores(job).eppic_interfaces.list_input_directory(), lambda k: k.split("/")[1]):
         #     files = [os.path.splitext("".join(k.split("/")[2:]))[0] for k in files]
         #     if len(files) > 1 and "status.json" in files:
         #         done_pdbs.append(pdbId)

@@ -31,6 +31,9 @@ class WebService(object):
         self.clean()
 
     def clean(self):
+        if not hasattr(self, 'files'):
+            return 
+            
         for key, (fname, should_delete) in self.files.items():
             if should_delete:
                 try:
@@ -189,6 +192,9 @@ class WebService(object):
         return True
 
 class JSONApi(WebService):
+    def __init__(self, *args, **kwds):
+        super().__init__(*args, **kwds)
+
     def extension(self, key):
         return ".json"
 

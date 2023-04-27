@@ -14,7 +14,6 @@ packages = [
     "Prop3D.parsers",
     "Prop3D.parsers.CNS-Templates",
     "Prop3D.parsers.superpose",
-    "Prop3D.torch_model",
     "Prop3D.util",
     "Prop3D.visualize",
 #    "prodigy",

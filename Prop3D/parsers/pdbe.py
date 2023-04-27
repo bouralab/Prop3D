@@ -1,13 +1,15 @@
 import pandas as pd
 from Prop3D.parsers.json import JSONApi
-from Prop3D.generate_data.data_stores import pdbe_store
+from Prop3D.generate_data.data_stores import data_stores
 
 class PDBEApi(JSONApi):
-    def __init__(self, store=None, work_dir=None, download=True, max_attempts=2):
+    def __init__(self, store=None, work_dir=None, download=True, max_attempts=2, job=None):
         url = "https://www.ebi.ac.uk/pdbe/api/"
-        store = pdbe_store if store is None else store
+        if store is None:
+            assert job is not None
+            store = data_stores(job).pdbe_store if store is None else store
         super(PDBEApi, self).__init__(url, store, work_dir=work_dir,
-            download=download, max_attempts=max_attempts)
+            download=download, max_attempts=max_attempts, job=job)
 
     def get_pdb_residues(self, pdb, chain):
         residues = self.get("pdb/entry/residue_listing/{}/chain/{}".format(pdb.lower(), chain))

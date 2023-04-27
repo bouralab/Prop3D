@@ -36,14 +36,15 @@ from Prop3D.util import SubprocessChain, safe_remove
 from Prop3D.util.pdb import get_first_chain, get_all_chains, PDB_TOOLS, s3_download_pdb
 from Prop3D.util.cath import download_cath_domain
 
-from Prop3D.generate_data import data_stores
+from Prop3D.generate_data.data_stores import data_stores
 
 class PrepareProteinError(RuntimeError):
-    def __init__(self, cath_domain, stage, message, errors=None, *args, **kwds):
+    def __init__(self, cath_domain, stage, message, job,  errors=None, *args, **kwds):
         super().__init__(*args, **kwds)
         self.cath_domain = cath_domain
         self.stage = stage
         self.message = message
+        self.job = job
         self.errors = errors if isinstance(errors, list) else []
 
     def __str__(self):
@@ -52,7 +53,7 @@ class PrepareProteinError(RuntimeError):
 
     def save(self, store=None):
         if store is None:
-            store = data_stores.prepared_cath_structures
+            store = data_stores(self.job).prepared_cath_structures
         fail_file = "{}.{}".format(self.cath_domain, self.stage)
         with open(fail_file, "w") as f:
             print(self.message, file=f)
@@ -274,7 +275,7 @@ def prepare_domain(pdb_file, chain, cath_domain, sfam_id=None,
         raise PrepareProteinError(cath_domain, "prepare", "Unable to protonate" + \
             "{} using pdb2pqr. Please check pdb2pqr error logs.".format(pdb_file) + \
             "Most likeley reason for failing is that the structure is missing " + \
-            "too many heavy atoms.", errors)
+            "too many heavy atoms.", job, errors)
 
     if perform_cns_min:
         #Remove pdb2pqr file at end
@@ -349,12 +350,12 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
             assert len(cath_domain)==7
             #Get cath domain file
             cath_key = "{}/{}.pdb".format(cathcode.replace(".", "/"), cath_domain)
-            if cathcode is not None and data_stores.prepared_cath_structures.exists(cath_key) and \
-              data_stores.prepared_cath_structures.get_size(cath_key)>0:
+            if cathcode is not None and data_stores(job).prepared_cath_structures.exists(cath_key) and \
+              data_stores(job).prepared_cath_structures.get_size(cath_key)>0:
                 return None, None, None, False
 
             #Download cath domain from s3 bucket or cath api
-            domain_file = download_cath_domain(cath_domain, cathcode, work_dir=work_dir)
+            domain_file = download_cath_domain(job, cath_domain, cathcode, work_dir=work_dir)
             chain = cath_domain[4]
             if cathcode is not None:
                 files_to_remove.append(domain_file)
@@ -374,18 +375,18 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
                 except:
                     #Cannot download
                     tb = traceback.format_exc()
-                    raise PrepareProteinError(cath_domain, "s3download", tb)
+                    raise PrepareProteinError(cath_domain, "s3download", tb, job)
 
             else:
                 #Cannot download
                 tb = traceback.format_exc()
-                raise PrepareProteinError(cath_domain, "download", tb)
+                raise PrepareProteinError(cath_domain, "download", tb, job)
         except Exception as e:
             tb = traceback.format_exc()
-            raise PrepareProteinError(cath_domain, "unk_download", tb)
+            raise PrepareProteinError(cath_domain, "unk_download", tb, job)
 
-    if local_file or not data_stores.prepared_cath_structures.exists(cath_key+".raw") or \
-      data_stores.prepared_cath_structures.get_size(cath_key+".raw")==0:
+    if local_file or not data_stores(job).prepared_cath_structures.exists(cath_key+".raw") or \
+      data_stores(job).prepared_cath_structures.get_size(cath_key+".raw")==0:
         #Extract domain; cleaned but atomic coordinates not added or changed
         try:
             domain_file, prep_steps = extract_domain(domain_file, cath_domain, cathcode,
@@ -394,11 +395,11 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
             raise
         except Exception as e:
             tb = traceback.format_exc()
-            raise PrepareProteinError(cath_domain, "extract", tb)
+            raise PrepareProteinError(cath_domain, "extract", tb, job)
 
         if not local_file:
             #Write raw domain file to store
-            data_stores.prepared_cath_structures.write_output_file(domain_file, cath_key+".raw")
+            data_stores(job).prepared_cath_structures.write_output_file(domain_file, cath_key+".raw")
 
         #Write preperation steps
         prep_steps_file = os.path.join(work_dir, "{}.raw.prep".format(cath_domain))
@@ -407,7 +408,7 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
                 print(step, file=fh)
 
         if not local_file:
-            data_stores.prepared_cath_structures.write_output_file(prep_steps_file,
+            data_stores(job).prepared_cath_structures.write_output_file(prep_steps_file,
                 cath_key+".raw.prep")
 
             files_to_remove.append(domain_file)
@@ -422,11 +423,11 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
         work_dir=work_dir, job=job)
 
     if os.path.getsize(prepared_file) == 0:
-        raise PrepareProteinError(cath_domain, "empty_file", "")
+        raise PrepareProteinError(cath_domain, "empty_file", "", job)
 
     if not local_file:
         #Write prepared domain file to store
-        data_stores.prepared_cath_structures.write_output_file(prepared_file, cath_key)
+        data_stores(job).prepared_cath_structures.write_output_file(prepared_file, cath_key)
         files_to_remove.append(prepared_file)
     RealtimeLogger.info("Finished preparing domain: {}".format(domain_file))
 
@@ -437,7 +438,7 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
             print(step, file=fh)
 
     if not local_file:
-        data_stores.prepared_cath_structures.write_output_file(prep_steps_file,
+        data_stores(job).prepared_cath_structures.write_output_file(prep_steps_file,
             cath_key+".prep")
         files_to_remove.append(prep_steps_file)
 
@@ -465,7 +466,7 @@ def process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chain
         #     e.save()
         # except:
         #     tb = traceback.format_exc()
-        #     raise PrepareProteinError(cath_domain, "unk_error", tb)
+        #     raise PrepareProteinError(cath_domain, "unk_error", tb, job)
     except (SystemExit, KeyboardInterrupt):
         raise
     except PrepareProteinError as e:

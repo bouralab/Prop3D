@@ -1,7 +1,6 @@
 import os
 
 from Prop3D.util import safe_remove
-from Prop3D.generate_data import data_stores
 from Prop3D.parsers.json import WebService
 from Prop3D.parsers.container import Container
 
