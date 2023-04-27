@@ -22,7 +22,7 @@ and then calculate biophysical and evolutionary properties for each atom in the 
 
 <img src="figures/biophysical_features.png" alt="biophysical properties" width="400"/>
 
-If you just want to use the dataset (and not recreate it), you can follow the instructions at http://github.com/bournelab/DeepUrfold to access the UVA HSDS endpoint.
+If you just want to use the dataset (and not recreate it), you can follow the instructions at http://github.com/bouralab/DeepUrfold to access the UVA HSDS endpoint.
 
 ## Installation
 
@@ -38,7 +38,7 @@ https://docs.sylabs.io/guides/3.5/user-guide/quick_start.html#quick-installation
 
 ### 2. Download & Install Prop3D
 ```
-git clone https://github.com/edraizen/Prop3D.git
+git clone https://github.com/boura/Prop3D.git
 cd Prop3D
 git submodule init
 git submodule update
