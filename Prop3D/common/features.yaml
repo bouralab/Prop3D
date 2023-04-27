@@ -813,3 +813,78 @@
       threshold: 0.5
       from_feature: "eppic_entropy"
       equality: "<"
+
+- get_frustration:
+    - name: 'density_res'
+      default: 0.
+      aggregate: min
+      residue: true
+      bool: false
+      min: 0.
+      max: 100.
+
+    - name: 'native_energy'
+      default: 0.
+      aggregate: avg
+      residue: true
+      bool: false
+      min: -5.
+      max: 5.
+    
+    - name: 'decoy_energy'
+      default: 0.
+      aggregate: avg
+      residue: true
+      bool: false
+      min: -5.
+      max: 5.
+    
+    - name: 'sd_energy'
+      default: 0.
+      aggregate: avg
+      residue: true
+      bool: false
+      min: -5.
+      max: 5.
+    
+    - name: 'frustration_index'
+      default: 0.
+      aggregate: avg
+      residue: true
+      bool: false
+      min: -3.
+      max: 3.
+
+    - name: 'is_highly_frustrated'
+      default: 0
+      aggregate: max
+      residue: true
+      bool: true
+      min: 0.
+      max: 1.
+      threshold: -1
+      from_feature: "frustration_index"
+      equality: "<="
+    
+    - name: 'is_minimally_frustrated'
+      default: 0
+      aggregate: max
+      residue: true
+      bool: true
+      min: 0.
+      max: 1.
+      threshold: 0.78
+      from_feature: "frustration_index"
+      equality: ">="
+
+    - name: 'has_nuetral_frustration'
+      default: 0
+      aggregate: max
+      residue: true
+      bool: true
+      min: 0.
+      max: 1.
+      threshold: [-1, 0.78]
+      from_feature: "frustration_index"
+      equality: [">=", "<="]
+

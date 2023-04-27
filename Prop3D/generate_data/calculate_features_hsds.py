@@ -18,9 +18,9 @@ from Prop3D.util.iostore import IOStore
 from Prop3D.util.pdb import InvalidPDB, get_atom_lines
 from Prop3D.util.hdf import get_file, filter_hdf, filter_hdf_chunks
 from Prop3D.util.toil import map_job
-from Prop3D.util.cath import run_cath_hierarchy, download_cath_domain
+from Prop3D.util.cath import run_cath_hierarchy
 
-from Prop3D.generate_data import data_stores
+from Prop3D.generate_data.data_stores import data_stores
 
 from toil.realtimeLogger import RealtimeLogger
 from botocore.exceptions import ClientError
@@ -40,7 +40,7 @@ class CalculateFeaturesError(RuntimeError):
 
     def save(self, store=None):
         if store is None:
-            store = data_stores.cath_features
+            store = data_stores(job).cath_features
         fail_file = "{}.{}".format(self.cath_domain, self.stage)
         with open(fail_file, "w") as f:
             print(self.message, file=f)
@@ -76,7 +76,7 @@ def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features
             fail = False
             for ext in ("atom.h5", "residue.h5", "edges.txt.gz"):
                 try:
-                    data_stores.cath_features.read_input_file(
+                    data_stores(job).cath_features.read_input_file(
                         "{}_{}".format(s3_cath_key, ext),
                         os.path.join(work_dir, "{}_{}".format(cath_domain, ext)))
                 except ClientError:
@@ -111,7 +111,7 @@ def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features
     if s3_cath_key is not None:
         domain_file = os.path.join(work_dir, "{}.pdb".format(cath_domain))
         try:
-            data_stores.prepared_cath_structures.read_input_file(
+            data_stores(job).prepared_cath_structures.read_input_file(
                 s3_cath_key+".pdb", domain_file)
         except ClientError:
             RealtimeLogger.info("Failed to download prapred cath file {}".format(
@@ -157,9 +157,6 @@ def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features
             special_col_types = {"serial_number":"<i8", "atom_name":"<S5",
                 "residue_id":"<S8", "residue_name":"<S8", "chain":"<S2"}
 
-        RealtimeLogger.info(df)
-        RealtimeLogger.info(df.columns)
-
         column_dtypes = {col:special_col_types.get(col, '<f8') for col in df.columns}
         rec_arr = df.to_records(index=False, column_dtypes=column_dtypes)
 
@@ -171,7 +168,7 @@ def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features
                     pass
 
             if f"{cath_key}/{ext}" not in store.keys():
-                ds1 = store.create_table(f"{cath_key}/{ext}", data=rec_arr,
+                ds1 = store.create_table(f"{cath_key}/{ext}", data=rec_arr, dtype=list(column_dtypes.items()),
                     chunks=True, compression="gzip", compression_opts=9)
             else:
                 ds1 = store[f"{cath_key}/{ext}"]       # load the data

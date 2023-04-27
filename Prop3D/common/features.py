@@ -84,18 +84,30 @@ def check_threshold(feature_name, raw_value, residue=False):
     else:
         threshold, equality = residue_feature_thresholds[feature_name]
 
-    if equality == ">":
-        val = raw_value>threshold
-    elif equality == "<":
-        val = raw_value<threshold
-    elif equality == "<=":
-        val = raw_value<=threshold
-    elif equality == ">=":
-        val = raw_value>=threshold
-    elif equality == "!=":
-        val = raw_value!=threshold
+    if isinstance(threshold, (list, tuple)):
+        if not isinstance(equality, (list, tuple)) or len(threshold)!=2:
+            raise RuntimeError("If using two inequality values, they must both be lists or tuples of length 2")
+        
     else:
-        raise RuntimeError("Unknown equlaity")
+        threshold, equality = [threshold], [equality]
+
+    val = True
+
+    for e, t in zip(equality, threshold):
+        if e == ">":
+            val_ = raw_value>t
+        elif e == "<":
+            val_ = raw_value<t
+        elif e == "<=":
+            val_ = raw_value<=t
+        elif e == ">=":
+            val_ = raw_value>=t
+        elif e == "!=":
+            val_ = raw_value!=t
+        else:
+            raise RuntimeError("Unknown equality")
+
+        val = val and val_
 
     return float(val)
 

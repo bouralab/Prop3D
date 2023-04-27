@@ -13,13 +13,14 @@ from toil.realtimeLogger import RealtimeLogger
 
 from Prop3D.util.pdb import InvalidPDB
 from Prop3D.util import natural_keys, silence_stdout, silence_stderr
-from Prop3D.util.iostore import IOStore
+from Prop3D.generate_data.data_stores import data_stores
 from Prop3D.parsers import mgltools
 from Prop3D.parsers.FreeSASA import run_freesasa_biopython
 from Prop3D.parsers.Electrostatics import APBS, Pdb2pqr
 from Prop3D.parsers.cx import CX
 from Prop3D.parsers.dssp import DSSP
 from Prop3D.parsers.eppic import EPPICApi, EPPICLocal
+from Prop3D.parsers.frustratometeR import FrustratometeR
 
 from Prop3D.common.Structure import Structure, angle_between, get_dihedral
 from Prop3D.common.ProteinTables import hydrophobicity_scales
@@ -117,6 +118,8 @@ class ProteinFeaturizer(Structure):
             self.get_element_type(atom)
             self.get_charge_and_electrostatics(atom)
             self.get_hydrophobicity(atom)
+            self.get_frustration(atom)
+            
             if warn_if_buried:
                 is_buried = self.get_accessible_surface_area(atom, save=False)
         else:
@@ -131,6 +134,7 @@ class ProteinFeaturizer(Structure):
             self.get_ss(atom)
             self.get_deepsite_features(atom, calc_charge=False, calc_conservation=False)
             self.get_evolutionary_conservation_score(atom)
+            self.get_frustration(atom)
 
             is_buried = self.atom_features.loc[atom.serial_number, "residue_buried"]
 
@@ -174,6 +178,7 @@ class ProteinFeaturizer(Structure):
             self.get_charge_and_electrostatics(residue)
             self.get_hydrophobicity(residue)
             self.get_evolutionary_conservation_score(residue)
+            self.get_frustration(residue)
             if warn_if_buried:
                 is_buried = self.get_accessible_surface_area(residue, save=False)
         elif only_aa:
@@ -189,6 +194,7 @@ class ProteinFeaturizer(Structure):
             self.get_residue(residue)
             self.get_ss(residue)
             self.get_evolutionary_conservation_score(residue)
+            self.get_frustration(residue)
             is_buried = self.residue_features.loc[[residue.get_id()], "residue_buried"]
 
         if warn_if_buried:
@@ -740,11 +746,8 @@ class ProteinFeaturizer(Structure):
                 self.residue_features.loc[idx, cols]
 
         if not hasattr(self, "_eppic"):
-            pdbe_store = IOStore.get("aws:us-east-1:Prop3D-pdbe-service")
-            eppic_store = IOStore.get("aws:us-east-1:Prop3D-eppic-service")
-
             try:
-                eppic_api = EPPICApi(self.pdb[:4], eppic_store, pdbe_store,
+                eppic_api = EPPICApi(self.pdb[:4], data_stores(self.job).eppic_store, data_stores(self.job).pdbe_store,
                     use_representative_chains=False, work_dir=self.work_dir)
                 self._eppic = eppic_api.get_entropy_scores(self.chain)
             except (SystemExit, KeyboardInterrupt):
@@ -772,6 +775,49 @@ class ProteinFeaturizer(Structure):
 
         return result
 
+    def get_frustration(self, atom_or_residue):
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
+            use_atom = True
+            atom = atom_or_residue
+            residue = atom_or_residue.get_parent()
+            cols = atom_features_by_category["get_frustration"]
+        elif isinstance(atom_or_residue, PDB.Residue.Residue):
+            use_atom = False
+            residue = atom_or_residue
+            cols = residue_features_by_category["get_frustration"]
+        else:
+            raise RuntimeError("Input must be Atom or Residue")
+
+        idx = residue.get_id()
+
+        if self.update_features is not None and "get_frustration" not in self.update_features:
+            #No need to update
+            return self.atom_features.loc[atom.serial_number, cols] if use_atom else \
+                self.residue_features.loc[idx, cols]
+
+        if not hasattr(self, "_frustration_singleresidue"):
+            frust = FrustratometeR(work_dir=self.work_dir)
+            self._frustration_singleresidue = frust.run(pdb_file=self.path, mode="singleresidue")
+
+        try:
+            frust_values = self._frustration_singleresidue[
+                (self._frustration_singleresidue.Res=="".join(map(str,idx[1:])).strip())&\
+                (self._frustration_singleresidue.ChainRes==self.chain)].iloc[0]
+        except IndexError:
+            frust_values = {}
+
+        result = pd.Series(np.empty(len(cols)), index=cols, dtype=np.float64)
+        result["density_res"] = frust_values.get("DensityRes", np.nan)
+        result["native_energy"] = frust_values.get("NativeEnergy", np.nan)
+        result["decoy_energy"] = frust_values.get("DecoyEnergy", np.nan)
+        result["sd_energy"] = frust_values.get("SDEnergy", np.nan)
+        result["frustration_index"] = frust_values.get("FrstIndex", np.nan)
+
+        result["is_highly_frustrated"] = check_threshold("is_highly_frustrated", frust_values.get("FrstIndex", np.nan), residue=not use_atom)
+        result["is_minimally_frustrated"] = check_threshold("is_minimally_frustrated", frust_values.get("FrstIndex", np.nan), residue=not use_atom)
+        result["has_nuetral_frustration"] = check_threshold("has_nuetral_frustration", frust_values.get("FrstIndex", np.nan), residue=not use_atom)
+        
+
     def calculate_graph(self, d_cutoff=100., edgelist=False, write=True):
         import networkx as nx
         structure_graph = nx.Graph()
@@ -779,15 +825,14 @@ class ProteinFeaturizer(Structure):
             structure_graph.add_edge(r1.get_id(), r2.get_id(),
                 attr_dict=self.get_edge_features(r1, r2))
 
+        edge_file = os.path.join(self.work_dir, "{}.edges.gz".format(self.id))
+        if write:
+            nx.write_edgelist(structure_graph, edge_file)
+
         if edgelist:
             edges = [{"src":u, "dst":v, **dict(d)["attr_dict"]} for u, v, d in \
                 structure_graph.edges(data=True)]
             structure_graph = pd.DataFrame(edges)
-
-        edge_file = os.path.join(self.work_dir, "{}.edges.gz".format(self.id))
-
-        if write:
-            nx.write_edgelist(structure_graph, edge_file)
 
         return structure_graph, edge_file
 
@@ -822,10 +867,41 @@ class ProteinFeaturizer(Structure):
 
         #chirality = int(theta > 0)
 
+        #Calculate pairwise frustration
+        #NativeEnergy DecoyEnergy SDEnergy FrstIndex Welltype FrstState
+
+        r1_idx = r1.get_id()
+        r2_idx = r2.get_id()
+
+        if not hasattr(self, "_frustration_configutational"):
+            frust = FrustratometeR(work_dir=self.work_dir)
+            self._frustration_configutational = frust.run(pdb_file=self.path, mode="configurational")
+
+        try:
+            frust_values = self._frustration_configutational[
+                (self._frustration_configutational.Res1=="".join(map(str, r1_idx[1:])).strip())&\
+                (self._frustration_configutational.ChainRes1==self.chain)&\
+                (self._frustration_configutational.Res2=="".join(map(str, r2_idx[1:])).strip())&\
+                (self._frustration_configutational.ChainRes2==self.chain)].iloc[0]
+        except IndexError:
+            frust_values = {}
+
         return {
             "distance":distance,
             "angle":angle,
             "omega":omega,
             "theta":theta,
             #"chirality":chirality
+
+            #Frustration:
+            "native_energy": frust_values.get("NativeEnergy", np.nan),
+            "decoy_energy": frust_values.get("DecoyEnergy", np.nan),
+            "sd_energy": frust_values.get("SDEnergy", np.nan),
+            "frustration_index": frust_values.get("FrstIndex", np.nan),
+            "is_highly_frustrated": frust_values.get("FrstState","")=="highly",
+            "is_minimally_frustrated": frust_values.get("FrstState","")=="minimally",
+            "has_nuetral_frustration": frust_values.get("FrstState","")=="neutral",
+            "is_water_mediated_welltype": frust_values.get("Welltype","")=="water-mediated",
+            "is_short_welltype": frust_values.get("Welltype","")=="short",
+            "is_long_welltype": frust_values.get("Welltype","")=="long",
         }
