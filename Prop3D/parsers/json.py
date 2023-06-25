@@ -123,9 +123,11 @@ class WebService(object):
             raise
         except ValueError as e:
             rerun = False
+            RealtimeLogger.info("Donwlaod step pre6")
             try:
                 with open(fname) as f:
                     for line in f:
+                        RealtimeLogger.info(f"check line {line}")
                         rerun = self.check_line(key, line, attempts)
             except Exception:
                 rerun = True
@@ -135,7 +137,7 @@ class WebService(object):
             except (OSError, FileNotFoundError):
                 pass
 
-            RealtimeLogger.info("Donwlaod step 6 {}".format(rerun))
+            RealtimeLogger.info("Donwlaod step 6, will rerun={}; attempts={}".format(rerun, attempts))
 
             if rerun and attempts > 0:
                 return self.get(key, attempts=attempts-1, last_source=source)

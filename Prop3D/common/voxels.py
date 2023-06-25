@@ -10,12 +10,36 @@ from scipy import spatial
 from Bio import PDB
 from Bio.PDB.NeighborSearch import NeighborSearch
 
-from Prop3D.common.Structure import Structure
+from Prop3D.common.LocalStructure import Structure
 from Prop3D.common.ProteinTables import vdw_radii, vdw_aa_radii
 from Prop3D.common.features import atom_features_by_category, number_of_features, \
     default_atom_features, default_residue_features
 
 class ProteinVoxelizer(Structure):
+    """DEPRECATED use DistributedVoxelizedStructure. Maintined for legacy code.
+    
+    A Structure object that handles voxelized volumes. Atoms (with there fill Van der Waals density) 
+    are mapped to a regularly space grid (1 Angstrom) using a KD-Tree and atoms that intersect with a 
+    voxel receive the chosen features of that atom. Voxels that intersect multiple atoms (e.g. covalent
+    bonding) receive a combined feature set according to the features 'combine' rule: Boolean features
+    reiecve the max feature vector.
+
+    Parameters:
+    -----------
+    path : str
+    cath_domain : str
+    input_format : str
+    volume : float
+    voxel_size : float
+    rotate : bool
+    features_path : str
+    residue_feature_mode : str
+    use_features : list of str
+    predict_features : list of str
+    replace_na : bool 
+    ligand : bool
+
+    """
     def __init__(self, path, cath_domain, input_format="pdb",
       volume=264, voxel_size=1.0, rotate=True, features_path=None,
       residue_feature_mode=None, use_features=None, predict_features=None,

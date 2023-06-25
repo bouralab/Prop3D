@@ -1,0 +1,3 @@
+Make LocalStructure a subclass of AbstractStructure
+    Remove code from abdratc and voxel versions
+Make LocalVoxelizedStructure match DistributedVoxelizedStructure

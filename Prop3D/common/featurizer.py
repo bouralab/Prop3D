@@ -22,13 +22,34 @@ from Prop3D.parsers.dssp import DSSP
 from Prop3D.parsers.eppic import EPPICApi, EPPICLocal
 from Prop3D.parsers.frustratometeR import FrustratometeR
 
-from Prop3D.common.Structure import Structure, angle_between, get_dihedral
+from Prop3D.common.LocalStructure import LocalStructure, angle_between, get_dihedral
 from Prop3D.common.ProteinTables import hydrophobicity_scales
 from Prop3D.common.features import atom_features, residue_features, \
     atom_features_by_category, residue_features_by_category, default_atom_features, \
     check_threshold
 
-class ProteinFeaturizer(Structure):
+class ProteinFeaturizer(LocalStructure):
+    """An object to calculate biophysical properties from a single protein in a local structure file
+
+    Parameters:
+    -----------
+    path : str
+        Path to local structure file
+    cath_domain : str
+        Name of protein domain
+    job : toil.job or None
+        Toil Job, needed for some application to run from Toil
+    work_dir : str
+        Where to save all temporary files from all run software. If None, use cwd.
+    input_format : str
+        Input format, "pdb", "mmCIF", what ever Bio.PDB understands 
+    force_feature_calculation : bool
+        Recalculate all features even already present. Defualt is False, do not ovewrite. 
+    update_features : list
+        List of features names or feature groups to update (while keeping the rest the same). Defualt is None, update all features
+    features_path : path or None
+        Path to save feature file. If None, use cwd.
+    """
     def __init__(self, path, cath_domain, job, work_dir,
       input_format="pdb", force_feature_calculation=False, update_features=None, features_path=None, **kwds):
         feature_mode = "w+" if force_feature_calculation else "r"
@@ -47,6 +68,30 @@ class ProteinFeaturizer(Structure):
 
     def calculate_flat_features(self, coarse_grained=False, only_aa=False, only_atom=False,
       non_geom_features=False, use_deepsite_features=False, write=True):
+        """Calculate features for each atom (or residue)
+
+        Parameters:
+        -----------
+        coarse_grained : bool
+            Use residue features. Default false (Atoms features)
+        only_aa : bool
+            Only calculate features at the residue level. Defualt false.
+        only_atom : bool
+            Only calculate features at the atom level. Defualt false.
+        non_geom_features : bool
+            Only calculate features at that are non-geometric Defualt false.
+        use_deepsite_features : bool
+            Copy features first used by DeepSite by classifying autodock names
+        write : bool
+            Save features to file after calculating.
+
+        Returns:
+        --------
+        features : pd.DataFrame
+            All caculated features
+        feature_file : Str
+            Path to where features were written to (if chosen to write)
+        """
         if coarse_grained:
             features = [self.calculate_features_for_residue(
                 self._remove_inscodes(r), only_aa=only_aa,
@@ -68,22 +113,48 @@ class ProteinFeaturizer(Structure):
 
     def calculate_flat_residue_features(self, only_aa=False, only_atom=False,
       non_geom_features=False, use_deepsite_features=False, write=True):
+        """See calculate_flat_features"""
         return self.calculate_flat_features(coarse_grained=True,
             only_aa=only_aa, only_atom=only_atom,
             non_geom_features=non_geom_features,
             use_deepsite_features=use_deepsite_features, write=write)
 
     def get_features_per_atom(self, residue_list):
-        """Get features for eah atom, but not organized in grid"""
+        """Get features for each atom in a list of residues"""
         features = [self.get_features_for_atom(self._remove_altloc(a)) for r in residue_list for a in r]
         return features
 
     def get_features_per_residue(self, residue_list):
+        """Get features for each atom in a list of residues"""
         features = [self.get_features_for_residue(self._remove_inscodes(r)) for r in residue_list]
         return features
 
     def calculate_features_for_atom(self, atom, only_aa=False, only_atom=False,
       non_geom_features=False, use_deepsite_features=False, warn_if_buried=False):
+        """Calculate features for a single atom
+        
+        Parameters:
+        -----------
+        atom : Bio.PDB.Atom
+            Atom that needs features
+        only_aa : bool
+            Only calculate features at the residue level. Defualt false.
+        only_atom : bool
+            Only calculate features at the atom level. Defualt false.
+        non_geom_features : bool
+            Only calculate features at that are non-geometric Defualt false.
+        use_deepsite_features : bool
+            Copy features first used by DeepSite by classifying autodock names
+        warn_if_buried : bool
+            returns a bool if residue is buried or not from DSSP
+
+        Returns:
+        --------
+        atom_features : pd.DataFrame
+            All calcuated atom features
+        is_burried : bool
+            Is residue buried or not
+        """
         if self.update_features is not None:
             for feat_type, feat_names in atom_features_by_category.items():
                 if feat_type in self.update_features:
@@ -154,7 +225,28 @@ class ProteinFeaturizer(Structure):
 
     def calculate_features_for_residue(self, residue, only_aa=False, non_geom_features=False,
       use_deepsite_features=False, warn_if_buried=False):
-        """Calculate FEATUREs"""
+        """Calculate features for a single atom
+        
+        Parameters:
+        -----------
+        residue : Bio.PDB.Residue
+            Residue that needs features
+        only_aa : bool
+            Only calculate features at the residue level. Defualt false.
+        non_geom_features : bool
+            Only calculate features at that are non-geometric Defualt false.
+        use_deepsite_features : bool
+            Copy features first used by DeepSite by classifying autodock names
+        warn_if_buried : bool
+            returns a bool if residue is buried or not from DSSP
+
+        Returns:
+        --------
+        atom_features : pd.DataFrame
+            All calcuated atom features
+        is_burried : bool
+            Is residue buried or not
+        """
         if self.update_features is not None:
             for feat_type, feat_names in residue_features_by_category.items():
                 if feat_type in self.update_features:
@@ -171,7 +263,7 @@ class ProteinFeaturizer(Structure):
                     is_buried = self.residue_features.loc[residue.get_id(), "residue_buried"]
                 return self.residue_features, bool(is_buried["residue_buried"])
             else:
-                return self.atom_features
+                return self.residue_features
 
         if non_geom_features:
             self.get_residue(residue)
@@ -203,7 +295,7 @@ class ProteinFeaturizer(Structure):
             return self.residue_features
 
     def get_atom_type(self, atom):
-        """Get Autodock atom type"""
+        """Get Autodock atom type for Bio.PDB.Atom"""
 
         if not hasattr(self, "_autodock"):
             prep = mgltools.PrepareReceptor(job=self.job, work_dir=self.work_dir)
@@ -226,6 +318,7 @@ class ProteinFeaturizer(Structure):
             atom_features_by_category["get_atom_type"]]
 
     def get_element_type(self, atom):
+        """Get element name for Bio.PDB.Atom"""
         elems = "CNOS"
         elem_col = "{}_elem".format(atom.element)
 
@@ -242,6 +335,7 @@ class ProteinFeaturizer(Structure):
             atom_features_by_category["get_element_type"]]
 
     def get_vdw(self, atom_or_residue):
+        """Get Van der Waals radius for Bio.PDB.Atom"""
         vdw = super().get_vdw(atom_or_residue)
 
         if isinstance(atom_or_residue, PDB.Atom.Atom):
@@ -257,7 +351,18 @@ class ProteinFeaturizer(Structure):
 
     def get_charge_and_electrostatics(self, atom_or_residue, only_charge=False,
       only_bool=False, calculate=True):
+        """Run pdb2par and APBS on an atom or residue to get charge and electrostatic information
 
+        Parameters:
+        -----------
+        atom_or_residue : Bio.PDB.Atom or Bio.PDB.Residue
+        only_charge : bool
+            Only run pdb2pqr to get charge
+        only_bool : bool
+            Only save threshld values (bool). Default is False
+        calculate : bool
+            Should calculate values, otherwise just look them up. Defautl True
+        """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             atom = atom_or_residue
             return self.get_charge_and_electrostatics_for_atom(atom,
@@ -271,6 +376,18 @@ class ProteinFeaturizer(Structure):
 
     def get_charge_and_electrostatics_for_residue(self, atom_or_residue, only_charge=False,
       only_bool=False, calculate=True):
+        """Run pdb2par and APBS on an atom or residue to get charge and electrostatic information at the residue level
+
+        Parameters:
+        -----------
+        atom_or_residue : Bio.PDB.Atom or Bio.PDB.Residue
+        only_charge : bool
+            Only run pdb2pqr to get charge
+        only_bool : bool
+            Only save threshld values (bool). Default is False
+        calculate : bool
+            Should calculate values, otherwise just look them up. Defautl True
+        """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             is_atom = True
             atom = atom_or_residue
@@ -320,6 +437,18 @@ class ProteinFeaturizer(Structure):
 
     def get_charge_and_electrostatics_for_atom(self, atom, only_charge=False,
       only_bool=False, calculate=True):
+        """Run pdb2par and APBS on an atom to get carge and electrostatic information
+
+        Parameters:
+        -----------
+        atom: Bio.PDB.Atom
+        only_charge : bool
+            Only run pdb2pqr to get charge
+        only_bool : bool
+            Only save threshld values (bool). Default is False
+        calculate : bool
+            Should calculate values, otherwise just look them up. Defautl True
+        """
         if not isinstance(atom, PDB.Atom.Atom):
             raise RuntimeErorr("Input must be Atom")
 
@@ -397,6 +526,8 @@ class ProteinFeaturizer(Structure):
         return self.atom_features.loc[idx, cols]
 
     def get_concavity(self, atom_or_residue):
+        """Get concavity of an atom or residue by running CX
+        """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             atom = atom_or_residue
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
@@ -436,6 +567,9 @@ class ProteinFeaturizer(Structure):
         return self.atom_features.loc[idx, cols]
 
     def get_hydrophobicity(self, atom_or_residue):
+        """Get the hydrophocity of an atom or residue using three different scales: 
+            Kyte-Doolite (kd), Biological, and Octanal
+        """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             atom = atom_or_residue
             residue = atom_or_residue.get_parent()
@@ -580,7 +714,7 @@ class ProteinFeaturizer(Structure):
                 return pd.Series(asa, index=cols)
 
     def get_residue(self, atom_or_residue):
-        """
+        """Get a one hote encoded represatnation the amino acid from atom or residue
         """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             is_atom = True
@@ -617,6 +751,8 @@ class ProteinFeaturizer(Structure):
                 residue_features_by_category["get_residue"]]
 
     def get_ss(self, atom_or_residue):
+        """Get 3- and 7- secondary strcutre codes from DSSP for an atom or residue as well as the phi and psi angles
+        """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             is_atom = True
             atom = atom_or_residue
@@ -678,7 +814,21 @@ class ProteinFeaturizer(Structure):
             return self.residue_features.loc[idx, cols]
 
     def get_deepsite_features(self, atom, calc_charge=True, calc_conservation=True):
-        """Use DeepSites rules for autodock atom types
+        """Use DeepSite rules for autodock atom types: 
+            is_hydrophobic (C or A)
+            is_aromatic (A)
+            is_hbond_acceptor (NA, NS, OA, OS, or SA)
+            is_hbond_donor (HS or HD)
+            is_metal (MG, ZN, MN, CA, FA) (not relavent since all hetatms are likley removed)
+
+        Parameters:
+        -----------
+        atom : Bio.PDB.Atom
+            Atom to apply features to
+        calc_charge : bool
+            Also calculate charge if not pre-computed. Defualt is True.
+        calc_conservation : bool
+            Also get conservation values
         """
         if not isinstance(atom, PDB.Atom.Atom):
             raise RuntimeError("Input must be Atom")
@@ -723,6 +873,17 @@ class ProteinFeaturizer(Structure):
 
     def get_evolutionary_conservation_score(self, atom_or_residue, eppic=True,
       only_bool=False, run_eppic_for_domain_on_failure=False):
+        """Get the evolutionary conservation score measured by the EPPIC entropy value.
+
+        Parameters:
+        -----------
+        eppic : bool
+            DEPRECATED. It is always using EPPIC now
+        only_bool : bool
+            Only save threshold values
+        run_eppic_for_domain_on_failure : bool
+            If protein does not exist in the EPPIC server, run local. Default False
+        """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             use_atom = True
             atom = atom_or_residue
@@ -776,6 +937,7 @@ class ProteinFeaturizer(Structure):
         return result
 
     def get_frustration(self, atom_or_residue):
+        """Calculate frustration for an atom or residue"""
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             use_atom = True
             atom = atom_or_residue
@@ -819,6 +981,9 @@ class ProteinFeaturizer(Structure):
         
 
     def calculate_graph(self, d_cutoff=100., edgelist=False, write=True):
+        """Build a residue-residue network, linking residues if the distances between is less than given cutoff and 
+        give attributes to each edge. Network is saved as a pd.DataFrame or edge list.
+        """
         import networkx as nx
         structure_graph = nx.Graph()
         for r1, r2 in self.calculate_neighbors(d_cutoff=d_cutoff):
@@ -837,6 +1002,26 @@ class ProteinFeaturizer(Structure):
         return structure_graph, edge_file
 
     def get_edge_features(self, r1, r2):
+        """Calculate edge features for a pair of residues.
+
+        Features:
+        distance,
+        angle,
+        omega,
+        theta, (or dihedral)
+        
+        #Frustration:
+        native_energy
+        decoy_energy
+        sd_energy
+        frustration_index
+        is_highly_frustrated
+        is_minimally_frustrated
+        has_nuetral_frustration
+        is_water_mediated_welltype
+        is_short_welltype
+        is_long_welltype
+        """
         r1_pos = np.array([self._remove_altloc(a).get_coord() for a in r1]).mean(axis=0)
         r2_pos = np.array([self._remove_altloc(a).get_coord() for a in r2]).mean(axis=0)
 

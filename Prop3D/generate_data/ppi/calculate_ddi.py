@@ -15,12 +15,12 @@ from botocore.exceptions import ClientError
 
 from Prop3D.generate_data.job_utils import map_job
 from Prop3D.generate_data.iostore import IOStore
-from Prop3D.generate_data.iRMSD import Complex
+from Prop3D.generate_data.ppi.iRMSD import Complex
 from Prop3D.generate_data.prepare_protein import copy_pdb_h5, process_domain
 from Prop3D.generate_data.util import filter_hdf, get_all_chains
 from Prop3D.parsers.Electrostatics import run_pdb2pqr
 from Prop3D.generate_data.job_utils import map_job
-from Prop3D.generate_data.BioUnit import check_contacts, build_biounit
+from Prop3D.generate_data.old.BioUnit import check_contacts, build_biounit
 
 from six.moves import zip
 

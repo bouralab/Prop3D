@@ -11,7 +11,7 @@ from Bio.PDB.Residue import Residue
 from Bio.PDB import Selection
 from Bio.PDB.Polypeptide import three_to_one
 
-from Prop3D.common.Structure import Structure
+from Prop3D.common.LocalStructure import Structure
 from Prop3D.parsers.MODELLER import MODELLER
 from Prop3D.generate_data.create_input_files import create_input_files
 

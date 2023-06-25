@@ -21,7 +21,27 @@ from Prop3D.common.ProteinTables import vdw_radii, vdw_aa_radii
 from Prop3D.common.features import default_atom_feature_df, default_residue_feature_df, \
     atom_features, residue_features
 
-class Structure(object):
+class LocalStructure(object):
+    """An object to read in a local structure files (PDB, mmCIF) and manipulate proteins in cartiesian space.
+    Backend: Bio.PDB. TODO: Convert to use abstract structure
+
+    Parameters:
+    -----------
+    path : str
+        Path to structure file on local filesystem
+    cath_domain : str
+        Name of domain used to save the files later on
+    feature_mode : str (r, w, r+, w+):
+        Open file for (r)eading or (w)riting. Default reading.
+    features_path : str or None
+        DEPRECATED. Path to .h5 file for features. Not used anymore.
+    residue_feature_mode : str
+        DEPRECATED. Open features for reading or writing
+    reset_chain : bool
+        Get chain name from structure file, not cath_domain. Default is False.
+    volume : float
+        DEPRACATED. volume for voxels. Use Distributed VoxelizedStructure.
+    """
     def __init__(self, path, cath_domain, input_format="pdb",
                  feature_mode="r", features_path=None, residue_feature_mode="r",
                  reset_chain=False, volume=256):
@@ -126,13 +146,17 @@ class Structure(object):
         self.residue_feature_names = copy.copy(residue_features)
 
     def __abs__(self):
+        """Take the absolue value of all atom features
+        """
         new = self.copy()
         new.atom_features = new.atom_features.abs()
         return new
 
     def __sub__(self, other):
+        """Subtract atom feature values from other structure from this stucture.
+        """
         new = self.copy()
-        if isinstance(other, Structure):
+        if isinstance(other, LocalStructure):
             new.atom_features -= other.atom_features
         elif isinstance(other, (int, float)):
             new.atom_features -= other
@@ -141,8 +165,10 @@ class Structure(object):
         return new
 
     def __add__(self, other):
+        """Add atom feature values from other structure from this stucture.
+        """
         new = self.copy()
-        if isinstance(other, Structure):
+        if isinstance(other, LocalStructure):
             new.atom_features += other.atom_features
         elif isinstance(other, (int, float)):
             new.atom_features += other
@@ -151,8 +177,10 @@ class Structure(object):
         return new
 
     def __floordiv__(self, other):
+        """Divide atom feature values from other structure from this stucture.
+        """
         new = self.copy()
-        if isinstance(other, Structure):
+        if isinstance(other, LocalStructure):
             new.atom_features /= other.atom_features
         elif isinstance(other, (int, float)):
             new.atom_features /= other
@@ -161,9 +189,18 @@ class Structure(object):
         return new
 
     def __truediv__(self, other):
+        """Divide atom feature values from other structure from this stucture.
+        """
         return self.__floordiv__(other)
 
     def normalize_features(self, columns=None):
+        """Normalize features using min max scaling
+
+        Parameters:
+        -----------
+        columns: str or list of strs
+            Names of feature columns to normalize
+        """
         new = self.copy()
 
         if columns is not None:
@@ -184,6 +221,13 @@ class Structure(object):
         return new
 
     def copy(self, empty=False):
+        """Create a deep copy of current structure.
+
+        Parameters:
+        -----------
+        (deprecated) empty: bool
+            Don't copy features
+        """
         new = copy.deepcopy(self)
         return new
 
@@ -195,6 +239,8 @@ class Structure(object):
         return new
 
     def __deepcopy__(self, memo):
+        """
+        """
         cls = self.__class__
         result = cls.__new__(cls)
         memo[id(self)] = result
@@ -220,10 +266,23 @@ class Structure(object):
         return result
 
     def get_atoms(self, include_hetatms=False, exclude_atoms=None, include_atoms=None):
+        """Enumerate protein model for all atoms with options to filter
+
+        Parameters:
+        -----------
+        include_hetatms : boolean
+            Inclue hetero atoms or not. Default is False.
+        exlude_atoms : list
+            List of atoms to skip during enumeration (depends on model if id or pyton object)
+        inlude_atoms : list
+            List of atoms to inllude during enumeration (depends on model if id or pyton object)
+        """
         for a in self.filter_atoms(self.structure.get_atoms(), include_hetatms=include_hetatms, exclude_atoms=exclude_atoms, include_atoms=include_atoms):
             yield a
 
     def get_surface(self, level="R"):
+        """Returns all surface atoms, using DSSP accessible surface value"
+        """
         if self.atom_features["residue_buried"].astype(int).sum() == 0:
             raise RuntimeError("Must calculate features with featurizer before running this")
 
@@ -237,6 +296,17 @@ class Structure(object):
         return Selection.unfold_entities(surface_atoms, level)
 
     def filter_atoms(self, atoms, include_hetatms=False, exclude_atoms=None, include_atoms=None):
+        """Enumerate protein model for all atoms with options to filter
+
+        Parameters:
+        -----------
+        include_hetatms : boolean
+            Inclue hetero atoms or not. Default is False.
+        exlude_atoms : list
+            List of atoms to skip during enumeration (depends on model if id or pyton object)
+        inlude_atoms : list
+            List of atoms to inllude during enumeration (depends on model if id or pyton object)
+        """
         for a in atoms:
             hetflag, resseq, icode = a.get_parent().get_id()
             if not include_hetatms and hetflag != ' ':
@@ -248,6 +318,23 @@ class Structure(object):
             yield a
 
     def save_pdb(self, path=None, header=None, file_like=False, rewind=True):
+        """Write PDB to file
+
+        Parameters:
+        -----------
+        path : None or str
+            Path to save PDB file. If None, file_like needs to be True.
+        header : str or list of strs
+            Header string to write to the beginning of each PDB file
+        file_like : boolean
+            Return a StringIO object of the PDB file, do not write to disk. Default False.
+        rewind : boolean
+            If returning a file-like object, rewind the beginning of the file
+
+        Returns:
+        --------
+        None or file-like object of PDB file data
+        """
         lines = not path and not file_like
         if path is None:
             path = StringIO()
@@ -277,6 +364,19 @@ class Structure(object):
         return path
 
     def write_features(self, features=None, coarse_grained=False, name=None, work_dir=None):
+        """Write features to a spefic file, depnignd on protein loading class, e.g. HDF
+
+        Parameters:
+        -----------
+        features : str or list of strs
+            Features to write
+        course_grained : boolean
+            Include features only at the residue level. Default False
+        name : str
+            File name to write file
+        work_dir : None or str
+            Directory to save file
+        """
         if work_dir is not None or name is not None:
             if work_dir is None:
                 work_dir = self.features_path
@@ -313,6 +413,25 @@ class Structure(object):
             self.atom_features.to_hdf(atom_features_file, "table")
 
     def write_features_to_pdb(self, features_to_use=None, name=None, coarse_grain=False, work_dir=None, other=None):
+        """Write features to PDB files in the bfactor column. One feature per PDB file.
+
+        Parameters:
+        -----------
+        features_to_use: str or list of strs
+            Features to write
+        name : None or str
+            File name to write file
+        course_grained : boolean
+            Include features only at the residue level. Default False
+        work_dir : None or str
+            Directory to save files.
+        other : obj
+            Ignored. May be useful for subclasses.
+
+        Returns
+        -------
+        File names of each written PDB file for each feature
+        """
         if work_dir is None:
             work_dir = os.getcwd()
 
@@ -341,6 +460,8 @@ class Structure(object):
         return outfiles
 
     def add_features(self, coarse_grained=False, **features):
+        """Add a feature column to dataset
+        """
         if coarse_grained:
             assert [len(f)==len(self.residue_features) for f in features.values()]
             self.residue_features = self.residue_features.assign(**features)
@@ -351,6 +472,15 @@ class Structure(object):
             self.atom_feature_names += list(features.keys())
 
     def get_pdb_dataframe(self, coarse_grained=False, include_features=False):
+        """Get standard data from PDB as a data frame
+
+        Parameters:
+        -----------
+        coarse_grained : bool
+            Use residue level. Else use atom level. Defualt False.
+        include_features : list
+            Include calculated features into DataFrame. Default is False
+        """
         str_type = np.dtype('O', metadata={'vlen': str})
         na = {float:np.nan, str_type:"", int:9999999}
 
@@ -416,6 +546,17 @@ class Structure(object):
         return df
 
     def get_residue_from_resseq(self, resseq, model=0, chain=None):
+        """Quickly access residue from Bio.PDB by resseq, handling erros
+
+        Parameters:
+        -----------
+        resseq : str or int
+            Residue number to search for '22' or '22A'
+        model : int
+            PDB model number. Default 0.
+        chain : None or str
+            PDB chain to search. If None, use the chain specific in init. Dfault None.
+        """
         chain = chain or self.chain
         try:
             return self.structure[model][chain][resseq]
@@ -436,6 +577,8 @@ class Structure(object):
                 return None
 
     def align_seq_to_struc(self, *seq_num, **kwds):
+        """DEPRACATED. Convert PDB, UniProt, and MMDB numberings
+        """
         return_residue = kwds.get("return_residue", False)
         use_mmdb_index = kwds.get("return_residue", False)
 
@@ -456,18 +599,38 @@ class Structure(object):
         return mapped_residues
 
     def get_mean_coord(self):
+        """Get the mean XYZ coordinate or center of mass.
+        """
         if not self.mean_coord_updated:
             self.mean_coord = np.around(np.mean(self.get_coords(), axis=0), decimals=4)
             self.mean_coord_updated = True
         return self.mean_coord
 
     def get_max_coord(self):
+        """Get the maximum coordinate in each dimanesion
+        """
         return np.max(self.get_coords(), axis=0)
 
     def get_min_coord(self):
+        """Get the minimum coordinate in each dimanesion
+        """
         return np.min(self.get_coords(), axis=0)
 
     def get_max_length(self, buffer=0, pct_buffer=0):
+        """Get the length of the protein to create a volume around
+
+        Parameters:
+        -----------
+        buffer : float
+            Amount of space to incldue around volume in Angstroms. Defualt 0
+        pct_buffer : float
+            Amount of space to incldue around volume in as percentage of the total legnth in Angstroms. Defualt 0
+
+        Returns:
+        --------
+        length : float
+            Max length of protein
+        """
         length = int(np.ceil(np.linalg.norm(self.get_max_coord()-self.get_min_coord())))
         if pct_buffer!=0:
             length += int(np.ceil(length*pct_buffer))
@@ -478,7 +641,19 @@ class Structure(object):
         return length
 
     def shift_coords(self, new_center=None, from_origin=True):
-        """if new_center is None, it will shift to the origin"""
+        """Shift coordinates by setting a new center of mass value or shift to the origin
+        
+        Parameters:
+        -----------
+        new_center : 3-tuple of floats or None
+            XYZ cooridnate of new center. if new_center is None, it will shift to the origin. Default is None.
+        from_origin : bool
+            Start shift from the origin by first subratcting center of mass. Defualt is True.
+
+        Returns:
+        --------
+        The new center coordinate
+        """
         coords = self.get_coords()
         if from_origin or new_center is None:
             mean_coord = self.get_mean_coord()
@@ -491,6 +666,12 @@ class Structure(object):
         return np.mean(coords, axis=0)
 
     def shift_coords_to_origin(self):
+        """Center structure at the origin
+
+        Returns:
+        --------
+        The new center coordinate
+        """
         return self.shift_coords()
 
     def shift_coords_to_volume_center(self):
@@ -517,7 +698,26 @@ class Structure(object):
         self.shift_coords_to_volume_center()
 
     def rotate(self, rvs=None, num=1):
-        """Rotate structure in randomly in place"""
+        """Rotate structure by either randomly in place or with a set rotation matrix. 
+        Random rotations matrices are drawn from the Haar distribution (the only uniform 
+        distribution on SO(3)) from scipy.
+
+        Parameters:
+        -----------
+        rvs : np.array (3x3)
+            A rotation matrix. If None, a randome roation matrix is used. Default is None.
+        num : int
+            Number of rotations to perfom
+        return_to : XYZ coordinate
+            When finsihed rotating, move structure to this coordinate. Defualt is to the center of mass
+
+        Yields:
+        -------
+        r : int
+            Rotation number
+        M : np.array (3x3)
+            Rotation matrix
+        """
         for r in range(num):
             if rvs is None:
                 M, theta, phi, z = rotation_matrix(random=True)
@@ -537,16 +737,20 @@ class Structure(object):
             yield r, M
 
     def update_coords(self, coords):
+        """Update XYZ coordinates with a new set of coordinates for the same atoms"""
         for atom, coord in zip(self.structure.get_atoms(), coords):
             atom.set_coord(coord)
         self.mean_coord = None
         self.mean_coord_updated = False
 
     def update_bfactors(self, b_factors):
+        """Update bfactors with a new set of bfactors for the same atoms"""
         for atom, b in zip(self.structure.get_atoms(), b_factors):
             atom.set_bfactor(b)
 
     def _remove_altloc(self, atom):
+        """Get the first atom if there are multiple altlocs
+        """
         if isinstance(atom, PDB.Atom.Atom):
             return atom
         elif isinstance(atom, PDB.Atom.DisorderedAtom):
@@ -555,6 +759,8 @@ class Structure(object):
             raise RuntimeError("Invalid atom type")
 
     def _remove_inscodes(self, residue):
+        """Get the first residue if there are multiple residues for same location
+        """
         if isinstance(residue, PDB.Residue.Residue):
             return residue
         elif isinstance(residue, PDB.Residue.DisorderedResidue):
@@ -588,6 +794,8 @@ class Structure(object):
         return all_list
 
     def get_vdw(self, atom_or_residue):
+        """Get van der walls radii for an atom or residue
+        """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             return np.array([vdw_radii.get(atom_or_residue.element.title(), 1.7)])
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
@@ -595,6 +803,8 @@ class Structure(object):
             return np.array([vdw_aa_radii.get(atom_or_residue.get_resname(), 3.0)])
 
     def get_dihedral_angles(self, atom_or_residue):
+        """Get deidral angle for atom (mapped up to residue) or the residue
+        """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             residue = atom_or_residue.get_parent()
         elif isinstance(atom_or_residue, PDB.Residue.Residue):

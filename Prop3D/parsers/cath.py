@@ -1,7 +1,9 @@
 import os
 import shutil
 import yaml
+import html
 import pandas as pd
+from io import StringIO
 
 from Prop3D.generate_data.data_stores import data_stores
 from Prop3D.parsers.json import JSONApi, WebService
@@ -47,8 +49,18 @@ class CATHApi(JSONApi):
             return file_path
 
         elif "from_cath_id_to_depth" in key or "cluster_summary_data" in key:
+            def strip_html(fh):
+                value = StringIO()
+                for line in fh:
+                    print(html.unescape(line.rstrip().replace("<html><title>CATH</title><body><pre>", "").replace("</pre></body></html>", "")), file=value)
+                value.seek(0)
+                
+                return value
             with open(file_path) as fh:
-                result = yaml.safe_load(fh)
+                try:
+                    result = yaml.safe_load(strip_html(fh))
+                except yaml.scanner.ScannerError:
+                    raise ValueError("{} is invalid".format(file_path))
                 if "500 Internal Server Error" in result:
                     raise ValueError("{} is invalid".format(file_path))
                 return result
@@ -77,6 +89,7 @@ class CATHApi(JSONApi):
 
     def check_line(self, key, line, attempts):
         if "500 Internal Server Error" in line:
+            raise ValueError()
             return True
         if ".pdb" in key:
             return not line.startswith("ATOM")

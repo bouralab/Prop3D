@@ -21,6 +21,20 @@ atom_columns = ["serial_number", "atom_name", "residue_id", "chain", "bfactor",
 entity_levels = ["A", "R", "C", "M", "S"]
 
 class DistributedStructure(AbstractStructure):
+    """A structure class to deal with structures originated from a distributed
+     HSDS instance.
+
+    Parameters:
+    -----------
+    path : str
+        HSDS endpoint to access structures
+    key : str
+        Key to access speficic protein inside the HDF file
+    cath_domain_dataset : str
+        The CATH superfamily if endpoint is setup to use CATH (use '/' instead of '.')
+    coarse_grained: boolean
+        Use a residue only model instead of an all atom model. Defualt False. Warning, not fully implemented.
+    """
     def __init__(self, path, key, cath_domain_dataset=None, coarse_grained=False):
         self.path = path
         self.key = key
@@ -78,6 +92,19 @@ class DistributedStructure(AbstractStructure):
             self.f.close()
 
     def deep_copy_feature(self, feature_name, memo):
+        """Deep copy a  specific feature
+
+        Parameters:
+        -----------
+        feature_name: str
+            Feature name to copy
+        memo :
+            objects to pass to deepcopy
+
+        Raises
+        ------
+        NotImeplementedError if no method to handle feature
+        """
         if feature_name == "data":
             return copy.deepcopy(self.data, memo)
         if feature_name == "features":
@@ -91,6 +118,17 @@ class DistributedStructure(AbstractStructure):
             raise NotImplementedError
 
     def get_atoms(self, atoms=None, include_hetatms=False, exclude_atoms=None, include_atoms=None):
+        """Enumerate over all atoms with options to filter
+
+        Parameters:
+        -----------
+        include_hetatms : boolean
+            Inclue hetero atoms or not. Default is False.
+        exlude_atoms : list
+            List of atoms to skip during enumeration (depends on model if id or pyton object)
+        inlude_atoms : list
+            List of atoms to inllude during enumeration (depends on model if id or pyton object)
+        """
         data = self.data if atoms is None else atoms
         if include_atoms is not None:
             if not isinstance(include_atoms, (list, tuple)):
@@ -103,10 +141,27 @@ class DistributedStructure(AbstractStructure):
 
         for a in data:
             yield a
+    
+    def get_residues(self):
+        residues = np.unique(np.stack([a["residue_id"] for a in self.data]))
+        for r in residues:
+            yield self.data[self.data["residue_id"]==r]
 
     def unfold_entities(self, entity_list, target_level="A"):
-        """Adapted from BioPython"""
+        """Map lower level such as atoms (single row) into higher entites such as 
+        residues (multiple rows). Only works for atoms and chainsAdapted from BioPython
 
+        Parameters:
+        -----------
+        entity_list : list
+            List of entites to unfold
+        target_level : str 
+            level to map to, eg: 'A' for atom, 'R' for residue
+
+        Yields:
+        -------
+        Either single row atoms or multiple rows for residues
+        """
         if target_level in ["C", "M", "S"]:
             #We only allow single chain, single model
             return self.features
@@ -126,6 +181,23 @@ class DistributedStructure(AbstractStructure):
                 yield self.data[self.data["residue_id"]==r]
 
     def save_pdb(self, path=None, header=None, file_like=False, rewind=True):
+        """Write PDB to file
+
+        Parameters:
+        -----------
+        path : None or str
+            Path to save PDB file. If None, file_like needs to be True.
+        header : str or list of strs
+            Header string to write to the beginning of each PDB file
+        file_like : boolean
+            Return a StringIO object of the PDB file, do not write to disk. Default False.
+        rewind : boolean
+            If returning a file-like object, rewind the beginning of the file
+
+        Returns:
+        --------
+        None or file-like object of PDB file data
+        """
         writer = PDBIO()
         lines = not path and not file_like
         if path is None:
@@ -177,18 +249,33 @@ class DistributedStructure(AbstractStructure):
 
         return output
 
-    # def get_surface(self):
-    #     surface = self.features[self.features["residue_buried"]==0]
-    #     return surface
-
     def get_bfactors(self):
+        """Get bfactors for all atoms
+        """
         return self.data["bfactor"]
 
     def write_features(self, path=None, key=None, features=None, coarse_grained=False, name=None, work_dir=None, force=None, multiple=False):
-        
-        #
-        # path=None, key=None, feature_key="features", features=None, force=0):
+        """Write features to an hdf file
 
+        Parameters:
+        -----------
+        path : str
+            Path to sve HDF file
+        key : str
+            Key to save dataset inside HDF file
+        features : str or list of strs
+            Features to write
+        course_grained : boolean
+            Include features only at the residue level. Default False
+        name : str
+            File name to write file
+        work_dir : None or str
+            Directory to save file
+        force : bool
+            Not used
+        multiple bool
+            Not used
+        """
         if path is None:
             if work_dir is None:
                 work_dir = os.getcwd()
@@ -241,6 +328,8 @@ class DistributedStructure(AbstractStructure):
         #         compression="gzip", compression_opts=9)
 
     def add_features(self, coarse_grained=False, **features):
+        """Add a feature column to dataset
+        """
         assert [len(f)==len(self.features) for f in features.values()], "Features must contain same number of atoms (or residues is coarse grained)"
 
         str_type = np.dtype('O', metadata={'vlen': str})
@@ -261,46 +350,9 @@ class DistributedStructure(AbstractStructure):
         self.features = new_df #self.data[self.feature_names]
 
     def _to_unstructured(self, x):
+        """Convert a rec array for atom(s) toa  regualr numpy array"""
         return np.lib.recfunctions.structured_to_unstructured(x)
 
-    # def get_mean_coord(self):
-    #     if not self.mean_coord_updated:
-    #         self.mean_coord = np.around(np.nanmean(self.coords, axis=0), decimals=4)
-    #         self.mean_coord_updated = True
-    #     return self.mean_coord
-
-    # def get_max_coord(self):
-    #     return np.nanmax(self.coords, axis=0)
-
-    # def get_min_coord(self):
-    #     return np.nanmin(self.coords, axis=0)
-
-    # def get_max_length(self, buffer=0, pct_buffer=0):
-    #     length = int(np.ceil(np.linalg.norm(self.get_max_coord()-self.get_min_coord())))
-    #     if pct_buffer!=0:
-    #         length += int(np.ceil(length*pct_buffer))
-    #     else:
-    #         length += buffer
-    #     if length%2 == 1:
-    #         length += 1
-    #     return length
-    #
-    # def shift_coords(self, new_center=None, from_origin=True):
-    #     """if new_center is None, it will shift to the origin"""
-    #     coords = self.coords
-    #     if from_origin or new_center is None:
-    #         mean_coord = self.get_mean_coord()
-    #         coords -= mean_coord
-    #     if new_center is not None:
-    #         coords += np.around(new_center, decimals=4)
-    #
-    #     self.update_coords(coords)
-    #     self.mean_coord_updated = False
-    #     return np.nanmean(coords, axis=0)
-    #
-    # def shift_coords_to_origin(self):
-    #     return self.shift_coords()
-    #
     def get_coords(self, include_hetatms=False, exclude_atoms=None):
         if self.coords is None:
             self.coords = self._to_unstructured(

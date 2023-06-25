@@ -7,7 +7,7 @@ CUSTOM_DATABASE = "{}/../data/structures/Ig2".format(os.path.dirname(__file__))
 
 def get_pdb(pdb, chain=None, sdi=None, domain=None, prepare=True, updating=True, allow_download=False):
     """Get the correct PDB file from custom database of protonated and minimized
-    structures, find the raw PDB file in a local spapshot and prepare the file,
+    structures, find the raw PDB file in a local snapshot and prepare the file,
     or download the file from wwwPDB if there is no snapshot and prepare it.
 
     Parameters

@@ -41,6 +41,7 @@ import subprocess
 import datetime
 import json
 import subprocess
+import shutil
 from pathlib import Path
 
 # Need stuff for Amazon s3
@@ -305,7 +306,7 @@ class IOStore(object):
 
 
     @staticmethod
-    def get(store_string):
+    def get(store_string, create=True):
         """
         Get a concrete IOStore created from the given connection string.
 
@@ -349,7 +350,7 @@ class IOStore(object):
                 "Local paths must start with . or /".format(store_string))
 
         if store_type == "file":
-            return FileIOStore(store_arguments)
+            return FileIOStore(store_arguments, create=create)
         elif store_type == "aws":
             # Break out the AWS arguments
             region, bucket_name = store_arguments.split(":", 1)
@@ -361,7 +362,7 @@ class IOStore(object):
                 # No path prefix
                 path_prefix = ""
 
-            return S3IOStore(region, bucket_name, path_prefix)
+            return S3IOStore(region, bucket_name, path_prefix, create=create)
         elif store_type == "file-aws":
             # Break out the AWS & File arguments
             region, bucket_name, local_path = store_arguments.split(":")
@@ -373,19 +374,7 @@ class IOStore(object):
                 # No path prefix
                 path_prefix = ""
 
-            return FileS3IOStore(region, bucket_name, path_prefix, local_path)
-        elif store_type == "azure":
-            # Break out the Azure arguments.
-            account, container = store_arguments.split(":", 1)
-
-            if "/" in container:
-                # Split the container from the path
-                container, path_prefix = container.split("/", 1)
-            else:
-                # No path prefix
-                path_prefix = ""
-
-            return AzureIOStore(account, container, path_prefix)
+            return FileS3IOStore(region, bucket_name, path_prefix, local_path, create=create)
         else:
             raise RuntimeError("Unknown IOStore implementation {}".format(
                 store_type))
@@ -398,7 +387,7 @@ class FileIOStore(IOStore):
 
     """
 
-    def __init__(self, path_prefix=""):
+    def __init__(self, path_prefix="", create=True):
         """
         Make a new FileIOStore that just treats everything as local paths,
         relative to the given prefix.
@@ -410,7 +399,10 @@ class FileIOStore(IOStore):
 
         path = Path(self.path_prefix)
         if not path.is_dir():
-            path.mkdir(parents=True, exist_ok=True)
+            if create:
+                path.mkdir(parents=True, exist_ok=True)
+            else:
+                raise RuntimeError(f"Not creating FileIOStore at {path_prefix}")
 
 
     def read_input_file(self, input_path, local_path):
@@ -469,6 +461,12 @@ class FileIOStore(IOStore):
                 # If something goes wrong here (like us not having permission to
                 # change permissions), ignore it.
                 pass
+
+    def download_input_directory(self, prefix, local_dir, postfix=None, force=False):
+        if force:
+            shutil.copytree(os.path.join(self.path_prefix, prefix), local_dir)
+        else:
+            os.symlink(os.path.join(self.path_prefix, prefix), local_dir)
 
     def list_input_directory(self, input_path, recursive=False, with_times=False):
         """
@@ -694,7 +692,7 @@ class S3IOStore(IOStore):
 
     """
 
-    def __init__(self, region, bucket_name, name_prefix=""):
+    def __init__(self, region, bucket_name, name_prefix="", create=True):
         """
         Make a new S3IOStore that reads from and writes to the given
         container in the given account, adding the given prefix to keys. All
@@ -713,6 +711,10 @@ class S3IOStore(IOStore):
             self.store_string += "/{}".format(name_prefix)
         self.s3 = None
         self.enpoint_url = None
+
+        self.create = create
+        if not create:
+            self.connect()
 
     def connect(self):
         self.__connect()
@@ -746,7 +748,7 @@ class S3IOStore(IOStore):
                 kwds["endpoint_url"] = endpoint_url
 
             if "endpoint_url" in kwds:
-                self.enpoint_url =   kwds["endpoint_url"]
+                self.endpoint_url =   kwds["endpoint_url"]
 
             # Connect to the s3 bucket service where we keep everything
             self.s3 = boto3.client('s3', self.region, **kwds)
@@ -754,15 +756,18 @@ class S3IOStore(IOStore):
             try:
                 self.s3.head_bucket(Bucket=self.bucket_name)
             except:
-                if self.region == 'us-east-1':
-                    self.s3.create_bucket(
-                        Bucket=self.bucket_name,
-                    )
+                if self.create:
+                    if self.region == 'us-east-1':
+                        self.s3.create_bucket(
+                            Bucket=self.bucket_name,
+                        )
+                    else:
+                        self.s3.create_bucket(
+                            Bucket=self.bucket_name,
+                            CreateBucketConfiguration={'LocationConstraint': self.region},
+                        )
                 else:
-                    self.s3.create_bucket(
-                        Bucket=self.bucket_name,
-                        CreateBucketConfiguration={'LocationConstraint': self.region},
-                    )
+                    raise RuntimeError(f"Not creating S3IOStore at {name_prefix}")
 
     #@backoff
     def read_input_file(self, input_path, local_path):
@@ -811,7 +816,13 @@ class S3IOStore(IOStore):
             yield get_output(obj)
 
     def download_input_directory(self, prefix, local_dir, postfix=None):
-        
+        return self.sync_directory(local_dir, local_dir, postfix=postfix, download=True)
+    
+    def upload_input_directory(self, local_dir, prefix, postfix=None):
+        return self.sync_directory(local_dir, local_dir, postfix=postfix, download=False)
+
+    def sync_directory(self, dir1, dir2, postfix=None, download=True):
+
         from boto.utils import get_instance_metadata
 #         instanceMetadata = get_instance_metadata()["iam"]["security-credentials"]["toil_cluster_toil"]
 #         RealtimeLogger.info("CRED={}".format(instanceMetadata))
@@ -833,11 +844,16 @@ class S3IOStore(IOStore):
         import awscli.clidriver
         driver = awscli.clidriver.create_clidriver()
 
-        cmd = ["s3", "sync", "s3://{}/{}".format(self.bucket_name, prefix), local_dir]
+        if download:
+            dir1 = "s3://{}/{}".format(self.bucket_name, dir1)
+        else:
+            dir2 = "s3://{}/{}".format(self.bucket_name, dir2)
+
+        cmd = ["s3", "sync", dir1, dir2]
         if postfix is not None:
             cmd += ["--exclude=\"*\"", "--include=\"*{}\"".format(postfix)]
-        if self.enpoint_url is not None:
-            cmd = ["--enpoint-url", self.endpoint_url] + cmd
+        if self.endpoint_url is not None:
+            cmd = ["--endpoint-url", self.endpoint_url] + cmd
 
         rc = driver.main(args=cmd)
 
@@ -847,6 +863,7 @@ class S3IOStore(IOStore):
         del awscli.clidriver
 
         if rc != 0:
+            assert 0
             subprocess.call(["aws", "configure"])
 
     def write_output_file(self, local_path, output_path):
@@ -858,6 +875,9 @@ class S3IOStore(IOStore):
 
         RealtimeLogger.debug("Saving {} to S3IOStore".format(
             output_path))
+
+        if os.path.isdir(local_path):
+            return self.upload_input_directory(local_path, output_path)
 
         # Download the file contents.
         #self.s3.upload_file(local_path, self.bucket_name, os.path.join(self.name_prefix, output_path))
@@ -918,15 +938,15 @@ class FileS3IOStore(object):
 
     """
 
-    def __init__(self, region, bucket_name, name_prefix="", file_path_dir=""):
+    def __init__(self, region, bucket_name, name_prefix="", file_path_dir="", create=True):
         """
         Make a new S3IOStore that reads from and writes to the given
         container in the given account, adding the given prefix to keys. All
         paths will be interpreted as keys or key prefixes.
 
         """
-        self.FileIOStore = FileIOStore(os.path.join(file_path_dir, bucket_name))
-        self.S3IOStore = S3IOStore(region, bucket_name, name_prefix)
+        self.FileIOStore = FileIOStore(os.path.join(file_path_dir, bucket_name), create=create)
+        self.S3IOStore = S3IOStore(region, bucket_name, name_prefix, create=create)
         self.path_prefix = os.path.join(file_path_dir, bucket_name)
         self.region = region
         self.bucket_name = self.store_name = bucket_name

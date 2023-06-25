@@ -5,6 +5,8 @@ from Prop3D.util.iostore import IOStore
 
 class data_stores(object):
     def __init__(self, prefix):
+        self.use_s3 = False
+        self.use_file = False
         if isinstance(prefix, Job):
             prefix = prefix._fileStore.jobStore.config.jobStore
 
@@ -13,11 +15,14 @@ class data_stores(object):
                 if "TOIL_S3_HOST" in os.environ:
                     #Save data to S3 bucket even if using file jobStore if you are using a custom S3 server suchas as MinIO
                     prefix = f"aws:us-east-1:{os.environ['USER']}-"
+                    self.use_s3 = True
                 else:
                     localPath = Path(prefix.split(":")[1]).parent
                     prefix = f"file:{localPath}/"
+                    self.use_file = True
             else:
                 prefix = f"{prefix.rsplit(1)[0]}:{os.environ['USER']}-"
+                self.use_s3 = True
         
         self.prefix = prefix
 
@@ -67,3 +72,10 @@ class data_stores(object):
     @property
     def uniref(self):
         return IOStore.get(f"{self.prefix}Prop3D-uniref")
+
+    def custom_input(self, name, create=True):
+        if self.use_s3 or name.endswith("--input"):
+            return IOStore.get(f"{self.prefix}{name}", create=create)
+        else:
+            #Using file. It already exists since it was used as input
+            return IOStore.get(name, create=create)

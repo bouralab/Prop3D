@@ -4,9 +4,24 @@ import numpy as np
 import pandas as pd
 from scipy.stats import special_ortho_group
 
+from Prop3D.common.ProteinTables import three_to_one
+
 class AbstractStructure(object):
+    """A base structure class that holds default methods for dealing with structures.
+    Subclasses can be created to use different protein libraires, e.g. BioPython, BioTite,
+    our own HDF/HSDS distributed stucture.
+
+    Parameters:
+    -----------
+    name: str
+        Name of proten, e.g. PDB or CATH id
+    file_mode: str (r, w, r+, w+, etc)
+        Open file for reading or writing. Defualt is just reading, no methods will affect underlying file
+    coarse_grained: boolean
+        Use a residue only model instead of an all atom model. Defualt False. Warning, not fully implemented.
+    """
     def __init__(self, name, file_mode="r", coarse_grained=False):
-        assert hasattr(self, "features"), "Must sublass and insitalize features as a recarray or pd.DataFrame"
+        assert hasattr(self, "features"), "Must sublass and instialize features as a recarray or pd.DataFrame"
         self.name = name
         self.file_mode = file_mode
         self.coarse_grained = coarse_grained
@@ -21,13 +36,33 @@ class AbstractStructure(object):
         self.mean_coord_updated = False
 
     def copy(self, empty=False):
+        """Create a deep copy of current structure.
+
+        Parameters:
+        -----------
+        (deprecated) empty: bool
+            Don't copy features
+        """
         new = copy.deepcopy(self)
         return new
 
     def deep_copy_feature(self, feature_name):
+        """Subclass this method to handle custom copying of specific features
+
+        Parameters:
+        -----------
+        feature_name: str
+            Feature name to copy
+
+        Raises
+        ------
+        NotImeplementedError if no method to handle feature
+        """
         raise NotImplementedError
 
     def __deepcopy__(self, memo):
+        """
+        """
         cls = self.__class__
         result = cls.__new__(cls)
         memo[id(self)] = result
@@ -43,13 +78,18 @@ class AbstractStructure(object):
         return result
 
     def __abs__(self):
+        """Take the absolue value of all features
+        """
         new = self.copy()
         new.features = new.features.abs()
         return new
 
     def __sub__(self, other):
+        """Subtract feature values from other structure from this stucture.
+        """
         new = self.copy()
-        if isinstance(other, Structure):
+        if isinstance(other, AbstractStructure):
+            assert self.coarse_grained == other.coarse_grained, "Must both be at atom or residue level"
             new.features -= other.features
         elif isinstance(other, (int, float)):
             new.features -= other
@@ -58,8 +98,11 @@ class AbstractStructure(object):
         return new
 
     def __add__(self, other):
+        """Add feature values from other structure from this stucture.
+        """
         new = self.copy()
-        if isinstance(other, Structure):
+        if isinstance(other, AbstractStructure):
+            assert self.coarse_grained == other.coarse_grained, "Must both be at atom or residue level"
             new.features += other.features
         elif isinstance(other, (int, float)):
             new.features += other
@@ -68,8 +111,11 @@ class AbstractStructure(object):
         return new
 
     def __floordiv__(self, other):
+        """Divide feature values from other structure from this stucture.
+        """
         new = self.copy()
-        if isinstance(other, Structure):
+        if isinstance(other, AbstractStructure):
+            assert self.coarse_grained == other.coarse_grained, "Must both be at atom or residue level"
             new.features /= other.features
         elif isinstance(other, (int, float)):
             new.features /= other
@@ -78,9 +124,18 @@ class AbstractStructure(object):
         return new
 
     def __truediv__(self, other):
+        """Divide feature values from other structure from this stucture.
+        """
         return self.__floordiv__(other)
 
     def normalize_features(self, columns=None):
+        """Normalize features using min max scaling
+
+        Parameters:
+        -----------
+        columns: str or list of strs
+            Names of feature columns to normalize
+        """
         new = self.copy()
 
         if columns is not None:
@@ -108,26 +163,101 @@ class AbstractStructure(object):
         return new
 
     def get_atoms(self, include_hetatms=False, exclude_atoms=None, include_atoms=None):
+        """Subclass to enumerate protein model for all atoms with options to filter
+
+        Parameters:
+        -----------
+        include_hetatms : boolean
+            Inclue hetero atoms or not. Default is False.
+        exlude_atoms : list
+            List of atoms to skip during enumeration (depends on model if id or pyton object)
+        inlude_atoms : list
+            List of atoms to inllude during enumeration (depends on model if id or pyton object)
+        """
         raise NotImplementedError
 
     def filter_atoms(atoms=None, include_hetatms=False, exclude_atoms=None, include_atoms=None):
+        """Subclass to enumerate protein model for all atoms with options to filter
+
+        Parameters:
+        -----------
+        include_hetatms : boolean
+            Inclue hetero atoms or not. Default is False.
+        exlude_atoms : list
+            List of atoms to skip during enumeration (depends on model if id or pyton object)
+        inlude_atoms : list
+            List of atoms to inllude during enumeration (depends on model if id or pyton object)
+        """
         yield from self.get_atoms(atoms, include_hetatms=include_hetatms,
             exclude_atoms=exclude_atoms, include_atoms=include_atoms)
 
     def get_surface(self):
+        """Returns all surface atoms, using DSSP accessible surface value"
+        """
         surface = self.features[self.features["residue_buried"]==0]
         return surface
 
     def get_bfactors(self):
+        """Get bfactors for all atoms
+        """
         raise NotImplementedError
 
     def save_pdb(self, path=None, header=None, file_like=False, rewind=True):
+        """Write PDB to file
+
+        Parameters:
+        -----------
+        path : None or str
+            Path to save PDB file. If None, file_like needs to be True.
+        header : str or list of strs
+            Header string to write to the beginning of each PDB file
+        file_like : boolean
+            Return a StringIO object of the PDB file, do not write to disk. Default False.
+        rewind : boolean
+            If returning a file-like object, rewind the beginning of the file
+
+        Returns:
+        --------
+        None or file-like object of PDB file data
+        """
         raise NotImplementedError
 
     def write_features(self, features=None, coarse_grained=False, name=None, work_dir=None):
+        """Subclass to write features to a spefic file, depnignd on protein loading class, e.g. HDF
+
+        Parameters:
+        -----------
+        features : str or list of strs
+            Features to write
+        course_grained : boolean
+            Include features only at the residue level. Default False
+        name : str
+            File name to write file
+        work_dir : None or str
+            Directory to save file
+        """
         raise NotImplementedError
 
     def write_features_to_pdb(self, features_to_use=None, name=None, coarse_grain=False, work_dir=None, other=None):
+        """Write features to PDB files in the bfactor column. One feature per PDB file.
+
+        Parameters:
+        -----------
+        features_to_use: str or list of strs
+            Features to write
+        name : None or str
+            File name to write file
+        course_grained : boolean
+            Include features only at the residue level. Default False
+        work_dir : None or str
+            Directory to save files.
+        other : obj
+            Ignored. May be useful for subclasses.
+
+        Returns
+        -------
+        File names of each written PDB file for each feature
+        """
         if work_dir is None:
             work_dir = os.getcwd()
 
@@ -158,30 +288,78 @@ class AbstractStructure(object):
         return outfiles
 
     def add_features(self, coarse_grained=False, **features):
+        """Subclass to add a feature column to dataset
+        """
         raise NotImplementedError
 
     def get_coords(self, include_hetatms=False, exclude_atoms=None):
+        """Subclass to return all XYZ coordinates fro each atom
+
+        Parameters:
+        -----------
+        include_hetatms : bool
+            Include heteroatoms or not. Default is False.
+        exclude_atoms : bool
+            Atoms to exlude while getting coordinates
+
+        Returns:
+        --------
+        XYZ coordinates from each atom in a specified format of subclass
+        """
         raise NotImplementedError
+    
+    def get_sequence(self):
+        """Get amino acid sequence from structure
+        """
+        sequence = ""
+        prev_resi = None
+        for a in self.get_atoms():
+            resi = a["residue_id"]
+            if resi != prev_resi:
+                resn = three_to_one(a["residue_name"].decode("utf-8"))
+                sequence += resn
+        
+        return sequence
 
     def update_coords(self, coords):
-        """Must be Subclassed"""
+        """Sublcass to create method to update XYZ coordinates with a new set of coordinates for the same atoms"""
         self.coords = coords
         self.mean_coord = None
         self.mean_coord_updated = False
 
     def get_mean_coord(self):
+        """Get the mean XYZ coordinate or center of mass.
+        """
         if not self.mean_coord_updated:
             self.mean_coord = np.around(np.nanmean(self.coords, axis=0), decimals=4)
             self.mean_coord_updated = True
         return self.mean_coord
 
     def get_max_coord(self):
+        """Get the maximum coordinate in each dimanesion
+        """
         return np.nanmax(self.coords, axis=0)
 
     def get_min_coord(self):
+        """Get the minimum coordinate in each dimanesion
+        """
         return np.nanmin(self.coords, axis=0)
 
     def get_max_length(self, buffer=0, pct_buffer=0):
+        """Get the length of the protein to create a volume around
+
+        Parameters:
+        -----------
+        buffer : float
+            Amount of space to incldue around volume in Angstroms. Defualt 0
+        pct_buffer : float
+            Amount of space to incldue around volume in as percentage of the total legnth in Angstroms. Defualt 0
+
+        Returns:
+        --------
+        length : float
+            Max length of protein
+        """
         length = int(np.ceil(np.linalg.norm(self.get_max_coord()-self.get_min_coord())))
         if pct_buffer!=0:
             length += int(np.ceil(length*pct_buffer))
@@ -192,7 +370,19 @@ class AbstractStructure(object):
         return length
 
     def shift_coords(self, new_center=None, from_origin=True):
-        """if new_center is None, it will shift to the origin"""
+        """Shift coordinates by setting a new center of mass value or shift to the origin
+        
+        Parameters:
+        -----------
+        new_center : 3-tuple of floats or None
+            XYZ cooridnate of new center. if new_center is None, it will shift to the origin. Default is None.
+        from_origin : bool
+            Start shift from the origin by first subratcting center of mass. Defualt is True.
+
+        Returns:
+        --------
+        The new center coordinate
+        """
         coords = self.coords
         if from_origin or new_center is None:
             mean_coord = self.get_mean_coord()
@@ -205,9 +395,24 @@ class AbstractStructure(object):
         return np.nanmean(coords, axis=0)
 
     def shift_coords_to_origin(self):
+        """Center structure at the origin
+
+        Returns:
+        --------
+        The new center coordinate
+        """
         return self.shift_coords()
 
     def orient_to_pai(self, random_flip=False, flip_axis=(0.2, 0.2, 0.2)):
+        """Orient structure to the Principle Axis of Interertia and optionally flip. Modified from EnzyNet
+
+        Parameters:
+        -----------
+        random_flip : bool
+            Randomly flip around axis. Defualt is False.
+        flip_axis: 3-tuple of floats
+            New axis to flip.
+        """
         self.shift_coords_to_origin()
 
         coords = PCA(n_components = 3).fit_transform(self.get_coords())
@@ -217,10 +422,29 @@ class AbstractStructure(object):
         self.update_coords(coords)
 
     def rotate(self, rvs=None, num=1, return_to=None):
-        """Rotate structure in randomly in place"""
+        """Rotate structure by either randomly in place or with a set rotation matrix. 
+        Random rotations matrices are drawn from the Haar distribution (the only uniform 
+        distribution on SO(3)) from scipy.
+
+        Parameters:
+        -----------
+        rvs : np.array (3x3)
+            A rotation matrix. If None, a randome roation matrix is used. Default is None.
+        num : int
+            Number of rotations to perfom
+        return_to : XYZ coordinate
+            When finsihed rotating, move structure to this coordinate. Defualt is to the center of mass
+
+        Yields:
+        -------
+        r : int
+            Rotation number
+        M : np.array (3x3)
+            Rotation matrix
+        """
         for r in range(num):
             if rvs is None:
-                M, theta, phi, z = special_ortho_group.rvs(3) #rotation_matrix(random=True)
+                M, theta, phi, z = special_ortho_group.rvs(3)
             else:
                 M=rvs
             self.shift_coords_to_origin()
@@ -233,22 +457,42 @@ class AbstractStructure(object):
             yield r, M
 
     def update_bfactors(self, b_factors):
+        """Sublcass to create method to update bfactors with a new set of bfactors for the same atoms"""
         raise NotImplementedError
 
     def calculate_neighbors(self, d_cutoff=100.0):
+        """Subclass to find all nearest neighbors within a given radius.
+
+        Parameters:
+        -----------
+        d_cutoff : float
+            Distance cutoff to find neighbors. Deualt is 100 Angtroms
+        """
         raise NotImplementedError
 
     def get_vdw(self, atom_or_residue):
+        """Get van der walls radii for an atom or residue
+        """
         raise NotImplementedError
 
     def get_dihedral_angles(self, atom_or_residue):
+        """Get deidral angle for atom (mapped up to residue) or the residue
+        """
         raise NotImplementedError
 
     def get_secondary_structures_groups(self, verbose=False):
-        """1. Secondary structure for each domain was assigned by the program DSSP.
-        Short helical and strand segments (<4 residues) were treated as coils to
-        decrease the number of loops for a given protein by reducing the number of
-        secondary structure segments (SSSs).
+        """Get groups of adjecent atom rows the belong to the same secondary structure.
+        We use DSSP to assing secondary structures to each reisdue mapped down to atoms. 
+        If any segment was <4 residues, they were merged the previous and next groups
+
+        Returns:
+        --------
+        ss_groups : list of pd.DataFrames of atoms in each group
+        loop_for_ss : dict of pd.DataFrames of atoms in the loop following each ss group
+        original_order : dict
+        ss_type : dict
+        leading_trailing_residues : dict
+        number_ss : int
         """
         assert not self.coarse_grained
 

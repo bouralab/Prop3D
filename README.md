@@ -38,7 +38,7 @@ https://docs.sylabs.io/guides/3.5/user-guide/quick_start.html#quick-installation
 
 ### 2. Download & Install Prop3D
 ```
-git clone https://github.com/boura/Prop3D.git
+git clone https://github.com/bouralab/Prop3D.git
 cd Prop3D
 git submodule init
 git submodule update

@@ -11,6 +11,8 @@ from joblib import Parallel, delayed
 from toil.realtimeLogger import RealtimeLogger
 
 from Prop3D.util.toil import map_job
+from Prop3D.generate_data.create_data_splits import split_dataset_at_level
+from Prop3D.generate_data.update_pdb import get_all_pdbs, get_custom_pdbs
 
 try:
     import h5pyd as h5py
@@ -24,85 +26,35 @@ except ImportError:
 
 def split_superfamily_at_level(job, cath_full_h5, superfamily, sfam_df, level_key, level_name,
   split_size={"train":0.8, "validation":0.1, "test":0.1}):
-    if isinstance(split_size, (list, tuple)):
-        if len(split_size)==1:
-            assert split_size[0]<1
-            other_size = (1-split_size[0])/2
-            split_size = dict(zip(["train", "validation", "test"],
-                sorted([split_size[0], other_size, other_size])))
-        else:
-            assert sum(split_size) == 1
-            split_size = {f"split{i}":s for i, s in enumerate(split_size)}
-    elif isinstance(split_size, Number) and split_size<1:
-        other_size = (1-split_size)/2
-        split_size = {"train":split_size, "validation":other_size, "test":other_size}
-    elif isinstance(split_size, dict) and sum(split_size.values()) == 1:
-        #Correct
-        pass
-    else:
-        raise RuntimeError("Invalid split_size. Must be dict {split_name:split_pct}, a list of split sizes (names automatically assinged), or a single number")
-
-    start = 0
-    subsets = []
-
-    RealtimeLogger.info(f"Start splits for {superfamily} at level {level_name}")
-
-    split_sizes = sorted(split_size.items(), key=lambda x: x[1], reverse=True)
-
-    clusters = sfam_df.groupby(level_key)
-    sorted_cluster_indices = list(sorted(clusters.indices.keys()))
-    split_index_start = 0
-    last_size = [None, None]
-
-    for split_num, (split_name, split_pct) in enumerate(split_sizes):
-        if split_num < len(split_sizes)-1:
-            ideal_set1_size = int(clusters.ngroups*split_pct)
-
-            while True:
-                set1_clusters = sorted_cluster_indices[split_index_start:split_index_start+ideal_set1_size]
-                set1 = [idx for cluster in set1_clusters for idx in clusters.get_group(cluster).index] #.indices[cluster]]
-                size_pct = len(set1)/(len(sfam_df))
-                print("size", len(set1), len(sfam_df), size_pct, ideal_set1_size)
-                if size_pct in last_size:
-                    break
-                if size_pct > split_pct+.01:
-                    ideal_set1_size -= 1
-                elif size_pct < split_pct-.01:
-                    ideal_set1_size += 1
-                else:
-                    break
-
-                last_size[0] = last_size[1]
-                last_size[1] = size_pct
-
-            subset_idx = list(sorted(set1))
-            subset = sfam_df[sfam_df.index.isin(set1)]["cath_domain"]
-
-            #Reset index for next iteration to skip current domains
-            split_index_start += ideal_set1_size
-        else:
-            set1_clusters = sorted_cluster_indices[split_index_start:]
-            set1 = [idx for cluster in set1_clusters for idx in clusters.get_group(cluster).index] #.indices[cluster]]
-            size_pct = len(set1)/(len(sfam_df))
-            subset = sfam_df[sfam_df.index.isin(set1)]["cath_domain"]
-
-        with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
-            store.require_group(f"{superfamily}/data_splits/{level_name}")
-            group = store.require_group(f"{superfamily}/data_splits/{level_name}/{split_name}")
-            group.attrs["percent"] = size_pct
-
-            RealtimeLogger.info(f'subset {subset}')
-
-            for domain in subset:
-                RealtimeLogger.info(f'{superfamily}/domains/{domain}')
-                group[domain] = store[f'{superfamily}/domains/{domain}']
+    """Split a dataset into train/validation/test sets, saving the splits into new h5 groups with
+    links back to the the main dataset.
+    
+    Paramters:
+    ----------
+    job : toi.job.Job
+        Toil job
+    cath_full_h5 : str
+        Path to H5 file on HSDS enpoint
+    superfamily : str
+        Group prefix, can be empty ('') for h5 file
+    sfam_df : pd.DataFrame
+        The data frame to split. Each row must a single protein and the df M\must contain 2 columns: 
+            (i) "cath_domain", the column of protein domain names, must match groups of the same name in this 'superfamily' group;
+            (ii) level_key, custom variable name for the name of the cluster the protein domain belongs to
+    level_name : str
+        Name of the column that contains cluster names
+    split_size : Dict [split_name->split perecent]
+        A dictionary containing the total number of splits
+    """
+    return split_dataset_at_level(job, cath_full_h5, superfamily, sfam_df, level_key, level_name,
+  split_size={"train":0.8, "validation":0.1, "test":0.1})
 
 
 def create_splits_for_superfamily_levels(job, sfam, cath_full_h5):
     superfamily, sfam_df = sfam
     RealtimeLogger.info(f"Start splits for {superfamily}")
 
-    with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
+    with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
         store.require_group(f"{superfamily}/data_splits")
 
     for level_key, level_name in [("S", "S35"), (list("SO"), "S60"), (list("SOL"), "S95"), (list("SOLI"), "S100")]:
@@ -118,11 +70,10 @@ def create_representatives_for_superfamily(job, sfam, cath_full_h5):
 
     missing_domains = []
 
-    with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
+    with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
         group = store.require_group(key)
 
         for domain in representatives:
-            RealtimeLogger.info(f"Adding {domain} from {sfam.replace('.', '/')}/domains/{domain} to {key}/{domain}")
             try:
                 group[domain] = store[f"{sfam.replace('.', '/')}/domains/{domain}'"]
             except KeyError:
@@ -135,7 +86,6 @@ def create_representatives_for_superfamily(job, sfam, cath_full_h5):
 def create_splits(job, cath_full_h5, all_superfamilies):
     RealtimeLogger.info(f"Start all splits {all_superfamilies}")
     sfams = [g for g in all_superfamilies.groupby("h5_key")]
-    RealtimeLogger.info(f"sfam splits {sfams}")
     map_job(job, create_splits_for_superfamily_levels, sfams, cath_full_h5)
     map_job(job, create_representatives_for_superfamily, [s.iloc[0].cath_code for _, s in sfams], cath_full_h5)
     job.addFollowOnJobFn(finish_section, cath_full_h5, "completed_domain_splits")
@@ -143,9 +93,8 @@ def create_splits(job, cath_full_h5, all_superfamilies):
 
 def process_cath_domain_list_for_group(job, group, cath_full_h5):
     name, group_df = group
-    RealtimeLogger.info(f"process_cath_domain_list_for_group {name}")
 
-    with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
+    with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
         for _, row in group_df.iterrows():
             group = store.require_group(f"{row.h5_key}/domains/{row.cath_domain}")
             group.domain_length = row.domain_length
@@ -163,7 +112,7 @@ def process_cath_domain_list(job, cath_full_h5, cathcode=None, skip_cathcode=Non
 
     if isinstance(force, bool) or (is_num(force) and int(force)<3):
         try:
-            with h5py.File(cath_full_h5, mode="r", use_cache=False) as store:
+            with h5py.File(cath_full_h5, mode="r", use_cache=False, retries=100) as store:
                 run_domain_names = not store.attrs.get("completed_domain_list", False)
                 run_splits = not store.attrs.get("completed_domain_splits", False)
         except IOError:
@@ -187,8 +136,6 @@ def process_cath_domain_list(job, cath_full_h5, cathcode=None, skip_cathcode=Non
     names = names.assign(h5_key="/"+names["cath_code"].str.replace(".","/"))
     names = names.assign(group=names["cath_code"].str.split(".", expand=True)[[0,1]].fillna("").agg('.'.join, axis=1))
 
-    RealtimeLogger.info(names)
-
     if cathcode is not None:
         if not isinstance(cathcode, (list, tuple)):
             cathcode = [cathcode]
@@ -208,7 +155,7 @@ def process_cath_domain_list(job, cath_full_h5, cathcode=None, skip_cathcode=Non
         names = names[~(names["cath_code"]+".").str.startswith(skip_sfams)]
 
     if run_domain_names:
-        groups = [g for g in names.groupby("group")]
+        groups = [g for g in names.groupby("cath_code")]
         map_job(job, process_cath_domain_list_for_group, groups, cath_full_h5)
 
         job.addFollowOnJobFn(finish_section, cath_full_h5, "completed_domain_list")
@@ -217,19 +164,29 @@ def process_cath_domain_list(job, cath_full_h5, cathcode=None, skip_cathcode=Non
     all_superfamilies = names[names['cath_code'].str.split('.').agg(len)==4]
     job.addFollowOnJobFn(create_splits, cath_full_h5, all_superfamilies)
 
-def process_cath_names_for_group(job, group, cath_full_h5):
+def process_cath_names_for_group(job, group, cath_full_h5, level=2):
     name, group_df = group
-    RealtimeLogger.info(f"process_cath_names_for_group {name}")
+    RealtimeLogger.info(f"Adding group under {name}")
 
-    with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
+    group_df = group_df[group_df.cath_code.str.count(".")==level-1]
+
+    with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
         for _, row in group_df.iterrows():
             group = store.require_group(row.h5_key)
-            group.description = row.description
-            group.representativeDomain = row.representative
+            try:
+                group.description = row.description
+                group.representativeDomain = row.representative
+            except KeyError:
+                #likely from direcotry
+                group.description.description = None
+                group.representativeDomain = None
+
             if row.cath_code.count(".") == 3:
                 store.require_group(f"{row.h5_key}/domains")
-                RealtimeLogger.info(f"Create domains for {row.h5_key}")
-        store.flush()
+    
+    if level < 4:
+        group_df.group = group_df["cath_code"].str.split(".", expand=True)[:level+1].fillna("").agg('.'.join, axis=1)
+        map_job(job, process_cath_names_for_group, group_df.groupby("group"), cath_full_h5, level=level+1)
 
 def delete_groups(root):
     if hasattr(root, "keys"):
@@ -240,7 +197,6 @@ def delete_groups(root):
 
 def process_cath_names(job, cath_full_h5, cathcode=None, skip_cathcode=None, force=False, work_dir=None):
     """Will overwrite all files"""
-    RealtimeLogger.info("process_cath_names")
     if work_dir is None:
         if job is not None and hasattr(job, "fileStore"):
             work_dir = job.fileStore.getLocalTempDir()
@@ -253,7 +209,7 @@ def process_cath_names(job, cath_full_h5, cathcode=None, skip_cathcode=None, for
         RealtimeLogger.info(f"Removing all previous data from {cath_full_h5}")
         try:
             #Empty file if it has been created before
-            with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
+            with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
                 delete_groups(store)
                 store.flush()
                 RealtimeLogger.info(f"Deleted {cath_full_h5}")
@@ -281,8 +237,6 @@ def process_cath_names(job, cath_full_h5, cathcode=None, skip_cathcode=None, for
     names["description"] = names["description"].str[1:]
     names = names.assign(h5_key="/"+names["cath_code"].str.replace(".","/"))
     names = names.assign(group=names["cath_code"].str.split(".", expand=True)[[0,1]].fillna("").agg('.'.join, axis=1))
-
-    RealtimeLogger.info(f"Read cath names file")
 
     if cathcode is not None:
         if not isinstance(cathcode, (list, tuple)):
@@ -320,9 +274,7 @@ def process_cath_names(job, cath_full_h5, cathcode=None, skip_cathcode=None, for
 
         names = names.drop(skip_names)
 
-    RealtimeLogger.info(f"Names Running {len(names[names['cath_code'].str.split('.').agg(len)==4])} and {len(names)} nodes")
-
-    root_nodes = names[names["cath_code"].str.split(".").agg(len)==1]
+    root_nodes = names[names["cath_code"].str.split(".").agg(len)==1] #1,2,3,4
     process_cath_names_for_group(job, ("root", root_nodes), cath_full_h5)
 
     groups = [g for g in names[~names.index.isin(root_nodes.index)].groupby("group")]
@@ -330,19 +282,28 @@ def process_cath_names(job, cath_full_h5, cathcode=None, skip_cathcode=None, for
 
     job.addFollowOnJobFn(finish_section, cath_full_h5, "completed_names")
 
-def setup_custom_file(cath_full_h5, pdbs, force=False):
+def setup_custom_cath_file_for_sfam(job, full_sfam_path, cath_full_h5):
+    with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
+        for _, row in group_df.iterrows():
+            group = store.require_group(row.h5_key)
+            group.description = row.description
+            group.representativeDomain = row.representative
+            if row.cath_code.count(".") == 3:
+                store.require_group(f"{row.h5_key}/domains")
+
+def setup_custom_file(job, cath_full_h5, pdbs, update=False, force=False):
     RealtimeLogger.info(f"Creating file {cath_full_h5}")
 
     if is_num(force) and int(force)==3:
         RealtimeLogger.info(f"Removing all previous data from {cath_full_h5}")
         try:
             #Empty file if it has been created before
-            with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
+            with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
                 delete_groups(store)
                 store.flush()
                 RealtimeLogger.info(f"Deleted {cath_full_h5}")
 
-            with h5py.Folder(os.path.dirname(cath_full_h5)+"/", mode="a") as hparent:
+            with h5py.Folder(os.path.dirname(cath_full_h5)+"/", mode="a", retries=100) as hparent:
                 del hparent[os.path.basename(cath_full_h5)]
         except IOError:
             raise
@@ -357,6 +318,41 @@ def setup_custom_file(cath_full_h5, pdbs, force=False):
     with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
         pass
 
+    if isinstance(pdbs, bool) and pdbs:
+        #Use entire PDB database
+        job.addFollowOnJob(get_all_pdbs, cath_full_h5, update=update)
+    elif isinstance(pdbs, (list,tuple)) and isinstance(pdbs[0], str)
+        if Path(pdbs[0]).is_file():
+            #Ceate custom files, not implemented
+            pass
+        elif len(pdbs[0]) < 9:
+            #Is PDB_entity or PDB.chain or just PDB
+            job.addFollowOnJob(get_custom_pdbs, pdbs, cath_full_h5)
+    else:
+        pdbs = Path(pdbs)
+        if pdbs.is_dir():
+            child_files = list(pdbs.iterdir())
+            if all([f.is_dir() for f in child_files]):
+                if all([f.stem.count(".")==3 for f in child_files]):
+                    #Are all CATH directories
+                    names = pd.DataFrame([(*f.stem.split(), str(f)) for f in child_files], columns=["C", "A", "T", "H", "full_path"])
+                    names = names.assign(group=names["cath_code"].str.split(".", expand=True)[[0,1]].fillna("").agg('.'.join, axis=1))
+
+                    with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
+                        for className in names.C.drop_duplicates():
+                            #Only max 4
+                            store.require_group(className)
+                        for class_arch, _ in names.groupby(["C", "A"]):
+                            #only max 41
+                            store.require_group(f"{class_arch[0]}/{class_arch[1]}")
+
+                    map_job(job, setup_custom_cath_file_for_sfam, child_files, cath_full_h5)
+                else:
+                    #Follow direcotry structure
+                    raise NotImplementedError
+            else:
+                #All PDB files in single direcotry
+
 
 def create_h5_hierarchy(job, cath_full_h5, cathcode=None, skip_cathcode=None, pdbs=None, work_dir=None, force=False):
     if work_dir is None:
@@ -366,13 +362,14 @@ def create_h5_hierarchy(job, cath_full_h5, cathcode=None, skip_cathcode=None, pd
             work_dir = os.getcwd()
 
     if pdbs is not None:
-        return setup_custom_file(cath_full_h5, pdbs, force=force)
+        #Just makes sure file exists, and let the start_domain_and_features in main to add info
+        return setup_custom_file(job, cath_full_h5, pdbs, force=force)
 
     run_names = True
 
     if isinstance(force, bool) or (is_num(force) and int(force)<3):
         try:
-            with h5py.File(cath_full_h5, mode="r", use_cache=False) as store:
+            with h5py.File(cath_full_h5, mode="r", use_cache=False, retries=100) as store:
                 run_names = not store.attrs.get("completed_names", False)
         except IOError:
             #Never created, ignore
@@ -386,7 +383,7 @@ def create_h5_hierarchy(job, cath_full_h5, cathcode=None, skip_cathcode=None, pd
     job.addFollowOnJobFn(process_cath_domain_list, cath_full_h5, cathcode=cathcode, skip_cathcode=skip_cathcode, force=force)
 
 def finish_section(job, cath_full_h5, attribute):
-    with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
+    with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
         store.attrs[attribute] = True
 
 def is_num(a):

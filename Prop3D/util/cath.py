@@ -192,7 +192,7 @@ def run_cath_hierarchy_h5(job, cathcode, func, path, *args, **kwds):
         if len(cathcode)>1 and isinstance(cathcode[0], (list, tuple)):
             #Multiple CATH codes
             RealtimeLogger.info("Run Mult Hierachy")
-            map_job(job, run_cath_hierarchy, cathcode, func, path, *args, **kwds)
+            map_job(job, run_cath_hierarchy_h5, cathcode, func, path, *args, **kwds)
             return
         if len(cathcode)==1 and isinstance(cathcode[0], (list, tuple)):
             run_cath_hierarchy(job, cathcode[0], func, path, *args, **kwds)
@@ -206,7 +206,7 @@ def run_cath_hierarchy_h5(job, cathcode, func, path, *args, **kwds):
             #    or all superfamilies: []
             RealtimeLogger.info("Run correct Hierachy: {}".format(cathcode))
             try:
-                cathcode = list(map(int, cathcode))
+                cathcode = list(map(str, map(int, cathcode)))
                 RealtimeLogger.info("Run correct fixed Hierachy: {}".format(cathcode))
             except ValueError:
                 raise ValueError("Invaid cathcode: {}".format(cathcode))
@@ -221,22 +221,22 @@ def run_cath_hierarchy_h5(job, cathcode, func, path, *args, **kwds):
 
     cath_names = ["class", "architechture", "topology", "homology"]
     if len(cathcode) < level:
-        cath_file = h5pyd.File(path, 'r', cache=False)
-
         RealtimeLogger.info("Loading cathcide {}".format(cathcode))
-        cathcode = dict(zip(cath_names, cathcode))
-        RealtimeLogger.info("Loading cathcide 2 {}".format(cathcode))
-        RealtimeLogger.info("Using logger {}".format(RealtimeLogger.getLogger()))
+        #cathcode = dict(zip(cath_names, cathcode))
+        #RealtimeLogger.info("Loading cathcde 2 {}".format(cathcode))
 
-        cathcodes = pd.DataFrame(
-            [c[1:].split("/") for c in cath_file["/"+"/".join(cathcode)].keys()],
-            columns=cath_names[:len(cathcode)+1])
+        with h5pyd.File(path, 'r', use_cache=False, retries=100) as cath_file:
+            cathcodes = pd.DataFrame(
+                [cathcode+[c] for c in cath_file["/"+"/".join(cathcode)].keys()],
+                columns=cath_names[:len(cathcode)+1])
+
+        RealtimeLogger.info("Using cathcodes {}".format(cathcodes))
 
     else:
         cathcodes = pd.DataFrame([cathcode], columns=cath_names)
 
     if cathcodes.shape[1] < level:
-        map_job(job, run_cath_hierarchy, cathcodes.values.tolist(), func,
+        map_job(job, run_cath_hierarchy_h5, cathcodes.values.tolist(), func,
             path, *args, **kwds)
     else:
         RealtimeLogger.info("Running sfam {}".format(cathcodes))
@@ -263,7 +263,7 @@ def run_cath_hierarchy_h5(job, cathcode, func, path, *args, **kwds):
         RealtimeLogger.info("Using logger {}".format(id(RealtimeLogger.getLogger())))
 
         RealtimeLogger.info("Successors0: {}".format(list(job.description.allSuccessors())))
-        map_job(job, func, sfams, cathFileStoreID, *args, **kwds)
+        map_job(job, func, sfams, path, *args, **kwds)
         RealtimeLogger.info("Successors1: {}".format(list(job.description.allSuccessors())))
 
     del cathcodes

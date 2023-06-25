@@ -84,7 +84,7 @@ class DistributedVoxelizedStructure(DistributedStructure):
         super().orient_to_pai(random_flip=random_flip, flip_axis=flip_axis)
         self.shift_coords_to_volume_center()
 
-    def get_features_per_atom(residue_list):
+    def get_features_per_atom(self, residue_list):
         """Get features for eah atom, but not organized in grid"""
         return self.data[self.data[:,"residue_id"].isin(residue_list)]
 
