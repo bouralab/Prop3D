@@ -12,6 +12,15 @@ from toil.realtimeLogger import RealtimeLogger
 
 from Prop3D.generate_data.create_data_splits import split_dataset_at_level
 
+def chain2entity(pdbs):
+    values = []
+    for pdb in pdbs:
+        chain_query = FieldQuery("rcsb_polymer_entity_instance_container_identifiers.rcsb_id", exact_match=pdb)
+        chains_result = [(pdb, entity) for entity in search(chain_query, return_type="polymer_instance")]
+        values += chains_result
+    values = pd.DataFrame(values, columns=["cath_domain", "entity_id"])
+    return values
+
 def update_pdbs(job, full_pdb_h5):
     with h5pyd.open(full_pdb_h5, use_cache=False) as f:
         try:
@@ -48,58 +57,77 @@ def get_all_pdbs(job, full_pdb_h5, update=False):
         experimental_query = FieldQuery("rcsb_entry_info.structure_determination_methodology", exact_match="experimental")
         #entity_query = FieldQuery("rcsb_entry_info.polymer_entity_count_protein", greater=0)
         #query = CompositeQuery(experimental_query, entity_query)
-        pdbs = search(experimental_query, return_type="polymer_entity")
+        pdbs = search(experimental_query, return_type="polymer_instance")
     
     with h5pyd.File(full_pdb_h5, mode="a", use_cache=False, retries=100) as store:
         store.require_group("domains")
         for pdb in pdbs:
             store.require_group(f"domains/{pdb}")
+    job.addFollowOnJobFn(finish_section, full_pdb_h5, "completed_names")
+
+    #Map chains to entity ids
+    pdb_chains = chain2entity(pdb_chains)
     
-    job.addFollowOnJobFn(create_splits_for_levels, full_pdb_h5)
+    job.addFollowOnJobFn(create_splits_for_levels, full_pdb_h5, pdb_chains)
     
 def get_custom_pdbs(job, pdbs, full_pdb_h5, update=False):
     if not isinstance(pdbs, (list, tuple)):
         pdbs = [pdbs]
+
+    pdb_chains = set()
+
+    #Then try old chains names (polymer_instance or asym id) (e.g. 1XYZ.A)
+    possible_chains = [p for p in pdbs if "." in p]
+    if len(possible_chains) > 0:    
+        chain_query = FieldQuery("rcsb_polymer_entity_instance_container_identifiers.rcsb_id", is_in=pdbs)
+        chains_result = set(search(chain_query, return_type="polymer_instance"))
+        pdb_chains |= chains_result
     
-    #Try polymer_entity first:
-    entity_query = FieldQuery("rcsb_entry_info.polymer_entity", is_in=pdbs)
-    entities = search(entity_query, return_type="polymer_entity")
+    #Try polymer_entity first (e.g. 1XYZ_1)    
+    possible_entities = [p.split("_") for p in pdbs if "_" in p]
+    if len(possible_entities) > 0:
+        # pdb_codes, pdb_entities = zip(*possible_entities)
+        # entity_query = FieldQuery("rcsb_entry_container_identifiers.entry_id", is_in=list(set(pdb_codes))) & FieldQuery("rcsb_polymer_entity_instance_container_identifiers.entity_id", is_in=list(set(pdb_entities)))
 
-    if len(entities) != len(pdbs):
-        #Then try old chains names (polymer_instance or asym id)
-        chain_query = FieldQuery("rcsb_entry_info.polymer_instance", is_in=pdbs)
-        chains = search(entity_query, return_type="polymer_entity")
-
-        if len(chains) != len(pdbs):
-            #Not sure why, but might've used just the 4-letter PDB codes?
-            entry_query = FieldQuery("rcsb_entry_container_identifiers.entry_id", is_in=pdbs)
-            entries = search(entity_query, return_type="polymer_entity")
-
-            if len(entries) < len(pdbs):
-                #Maybe combined the three types?
-                entities = set(entities).intersection(chains).intersection(entries)
-                RealtimeLogger.info(f"Unable to match all chains (polymer_instance or asym id) to polymer_entity. Using {len(entities)/len(pdbs)}: {entities}")
+        entity_query = None
+        for pdb_code, pdb_entity in possible_entities:
+            q1 = FieldQuery("rcsb_entry_container_identifiers.entry_id", exact_match=pdb_code)
+            q2 = FieldQuery("rcsb_polymer_entity_instance_container_identifiers.entity_id", exact_match=pdb_entity)
+            q3 = q1 & q2
+            if entity_query is None:
+                entity_query = q3
             else:
-                entities = entries
-        else:
-            entities = chains
-            
-    assert len(entities) > 0
+                entity_query |= q3
+        entity_result = set(search(entity_query, return_type="polymer_entity"))
+        pdb_chains |= entity_result
+
+    #Might've used just the 4-letter PDB codes? (e.g. 1XYZ -> 1XYZ_1,1XYZ_2)
+    possible_ids = [p for p in pdbs if len(p) == 4]
+    if len(possible_ids) > 0:
+        entry_query = FieldQuery("rcsb_entry_container_identifiers.entry_id", is_in=pdbs)
+        entry_results = set(search(entry_query, return_type="polymer_instance"))
+        pdb_chains |= entry_results
+
+    if len(pdb_chains) < len(pdbs):
+        RealtimeLogger.info(f"Unable to match all inputs to PDB.CHAIN. Using {len(pdb_chains)/len(pdbs)}: {pdb_chains}")
+
+    pdb_chains = list(pdb_chains)
 
     with h5pyd.File(full_pdb_h5, mode="a", use_cache=False, retries=100) as store:
         store.require_group("domains")
-        for pdb in entities:
+        for pdb in pdb_chains:
             store.require_group(f"domains/{pdb}")
+
+    pdb_chains = chain2entity(pdb_chains)
         
-    job.addFollowOnJobFn(create_splits_for_levels, full_pdb_h5, custom_pdbs=entities)
+    job.addFollowOnJobFn(create_splits_for_levels, full_pdb_h5, pdb_chains, custom=False)
 
 def create_representatives(job, clusters, full_pdb_h5):
-    key = "representatives"
-    representatives = clusters["representatives"].drop_duplicates()
+    representatives = clusters["representative"].drop_duplicates()
     missing_domains = []
 
-    with h5py.File(full_pdb_h5, mode="a", use_cache=False, retries=100) as store:
-        group = store.require_group(key)
+    with h5pyd.File(full_pdb_h5, mode="a", use_cache=False, retries=100) as store:
+        group = store.require_group("representatives")
 
         for domain in representatives:
             try:
@@ -108,10 +136,12 @@ def create_representatives(job, clusters, full_pdb_h5):
                 missing_domains.append(domain)
 
         if len(missing_domains) > 0:
-            store[key].attrs["missing_domains"] = missing_domains
-        store[key].attrs["total_domains"] = len(representatives)
+            store["representatives"].attrs["missing_domains"] = missing_domains
+        store["representatives"].attrs["total_domains"] = len(representatives)
+    
+    job.addFollowOnJobFn(finish_section, full_pdb_h5, "completed_representatives")
 
-def update_clusters(job, full_pdb_h5, pct_id=30, update=False, custom_pdbs=None):
+def update_clusters(job, full_pdb_h5, pdbs, pct_id=30, custom=False, update=False):
     assert pct_id in [30, 40, 50, 70, 90, 95, 100]
     
     if False:
@@ -142,26 +172,37 @@ def update_clusters(job, full_pdb_h5, pct_id=30, update=False, custom_pdbs=None)
                         clusters = cluster
             clusters.reset_index()
     
-    query = rcsb.FieldQuery("rcsb_entry_info.structure_determination_methodology", exact_match="experimental")
+    query = FieldQuery("rcsb_entry_info.structure_determination_methodology", exact_match="experimental")
     # entity_query = rcsb.FieldQuery("rcsb_entry_info.polymer_entity_count_protein", greater=0)
     # query = experimental_query & entity_query
-    if custom_pdbs is not None:
-        entity_query = FieldQuery("rcsb_entry_info.polymer_entity", is_in=custom_pdbs)
-        query = query & entity_query
-    pdbs = search(query, group_by=IdentityGrouping(30), return_groups=True, return_type="polymer_entity")
-    clusters = pd.DataFrame([
-        (pdb,group_name,group[0]) for group_name, group in pdbs.items() for pdb in group], 
-        columns=["cath_domain", "cluster_name", "representative"])
+    # if custom_pdbs is None:
+    #     custom_pdbs = search(query, return_type="polymer_instance")
+    if custom:
+        query &= FieldQuery("rcsb_polymer_entity_instance_container_identifiers.rcsb_id", is_in=pdbs)
 
-    job.addFollowOnJob(split_dataset_at_level, full_pdb_h5, "", clusters, pct_id, str(pct_id),
+
+    search_results = search(query, group_by=IdentityGrouping(pct_id), return_groups=True, return_type="polymer_entity")
+    clusters = pd.DataFrame([
+        (pdb,group_name,group[0]) for group_name, group in search_results.items() for pdb in group], 
+        columns=["entity_id", "cluster_name", "representative"])
+    
+    clusters = pd.merge(pdbs, clusters, how="left", on="entity_id")
+
+    job.addFollowOnJobFn(split_dataset_at_level, full_pdb_h5, "", clusters, "cluster_name", str(pct_id),
         split_size={"train":0.8, "validation":0.1, "test":0.1})
     
     if pct_id == 30:
-        job.addFollowOnJob(create_representatives, clusters, full_pdb_h5)
+        job.addFollowOnJobFn(create_representatives, clusters, full_pdb_h5)
 
-def create_splits_for_levels(job, full_pdb_h5, custom_pdbs=None):
+def create_splits_for_levels(job, full_pdb_h5, pdbs, custom=False):
     with h5pyd.File(full_pdb_h5, mode="a", use_cache=False, retries=100) as store:
         store.require_group(f"data_splits")
 
-    for level in [30, 40, 50, 70, 90, 95, 100]:
-        job.addChildJobFn(update_clusters, full_pdb_h5, level, custom_pdbs=custom_pdbs)
+    for level in [100, 95, 90, 70, 50, 30]:#[30, 40, 50, 70, 90, 95, 100]:
+        job.addChildJobFn(update_clusters, full_pdb_h5, pdbs, level, custom=custom)
+    
+    job.addFollowOnJobFn(finish_section, full_pdb_h5, "completed_domain_splits")
+
+def finish_section(job, cath_full_h5, attribute):
+    with h5pyd.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
+        store.attrs[attribute] = True

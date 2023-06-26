@@ -3,6 +3,7 @@ import re
 import sys
 import urllib.request
 import multiprocessing
+from pathlib import Path
 from numbers import Number
 from collections import defaultdict
 
@@ -320,14 +321,14 @@ def setup_custom_file(job, cath_full_h5, pdbs, update=False, force=False):
 
     if isinstance(pdbs, bool) and pdbs:
         #Use entire PDB database
-        job.addFollowOnJob(get_all_pdbs, cath_full_h5, update=update)
-    elif isinstance(pdbs, (list,tuple)) and isinstance(pdbs[0], str)
+        job.addFollowOnJobFn(get_all_pdbs, cath_full_h5, update=update)
+    elif isinstance(pdbs, (list,tuple)) and isinstance(pdbs[0], str):
         if Path(pdbs[0]).is_file():
             #Ceate custom files, not implemented
             pass
         elif len(pdbs[0]) < 9:
             #Is PDB_entity or PDB.chain or just PDB
-            job.addFollowOnJob(get_custom_pdbs, pdbs, cath_full_h5)
+            job.addFollowOnJobFn(get_custom_pdbs, pdbs, cath_full_h5, update=update)
     else:
         pdbs = Path(pdbs)
         if pdbs.is_dir():
@@ -352,7 +353,7 @@ def setup_custom_file(job, cath_full_h5, pdbs, update=False, force=False):
                     raise NotImplementedError
             else:
                 #All PDB files in single direcotry
-
+                raise NotImplementedError
 
 def create_h5_hierarchy(job, cath_full_h5, cathcode=None, skip_cathcode=None, pdbs=None, work_dir=None, force=False):
     if work_dir is None:
@@ -361,12 +362,7 @@ def create_h5_hierarchy(job, cath_full_h5, cathcode=None, skip_cathcode=None, pd
         else:
             work_dir = os.getcwd()
 
-    if pdbs is not None:
-        #Just makes sure file exists, and let the start_domain_and_features in main to add info
-        return setup_custom_file(job, cath_full_h5, pdbs, force=force)
-
     run_names = True
-
     if isinstance(force, bool) or (is_num(force) and int(force)<3):
         try:
             with h5py.File(cath_full_h5, mode="r", use_cache=False, retries=100) as store:
@@ -376,6 +372,10 @@ def create_h5_hierarchy(job, cath_full_h5, cathcode=None, skip_cathcode=None, pd
             pass
 
     RealtimeLogger.info(f"Force is {force}, run_names={run_names}")
+
+    if pdbs is not None:
+        #Just makes sure file exists, and let the start_domain_and_features in main to add info
+        return setup_custom_file(job, cath_full_h5, pdbs, force=force)
 
     if run_names:
         job.addChildJobFn(process_cath_names, cath_full_h5, cathcode=cathcode, skip_cathcode=skip_cathcode, force=force)

@@ -254,13 +254,20 @@ def start_domain_and_features(job, cathFileStoreID, cathcode=None, skip_cathcode
     elif pdbs is not None:
         assert use_hsds
         with h5pyd.File(cathFileStoreID, mode="r", use_cache=False) as store:
+            all_domains = list(store["domains"].keys()) 
             try:
-                done_domains = [k for k in store.keys() if len(store[k].keys())==3]
+                done_domains = [k for k in all_domains if len(store[f"domains/{k}"].keys())==3]
             except KeyError:
                 raise RuntimeError(f"Must create hsds file first.")
+            
+        if not force: # and (isinstance(pdbs, bool) and pdbs):
+            domains_to_run = list(set(all_domains)-set(done_domains))
+        else:
+            domains_to_run = all_domains
+        # elif isinstance(pdbs, (list, tuple)):
 
-        domains_to_run = [f for f in pdbs if os.path.splitext(os.path.basename(f))[0] \
-            not in done_domains]
+        #     domains_to_run = [f for f in pdbs if os.path.splitext(os.path.basename(f))[0] \
+        #     not in done_domains]
         RealtimeLogger.info(f"Running domains: {domains_to_run}")
         map_job(job, get_domain_structure_and_features, domains_to_run, None, cathFileStoreID,
             update_features=update_features, force=force, further_parallelize=True, use_hsds=use_hsds)

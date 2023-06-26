@@ -352,14 +352,16 @@ def get_bfactor_norm_mean(pdb_dir, force=False):
 
     return mean, std
 
-def s3_download_pdb(pdb, work_dir=None, remove=False):
+def s3_download_pdb(pdb, work_dir=None, remove=False, job=None):
     if work_dir is None:
         work_dir = os.getcwd()
 
-    from Prop3D.generate_data.data_stores import raw_pdb_store as store
+    from Prop3D.generate_data.data_stores import data_stores
     from Prop3D.parsers.pdbe import PDBEApi
 
-    if len(pdb) == 6 and pdb[4] == ".":
+    store = data_stores(job).raw_pdb_store
+
+    if len(pdb) >= 6 and pdb[4] == ".":
         pdb, chain = pdb.split(".")
     if len(pdb) != 4:
         #UniProt -> get alphafold or best pdb
@@ -409,7 +411,7 @@ def s3_download_pdb(pdb, work_dir=None, remove=False):
 
         try:
             store.read_input_file(_pdb_file_base, _pdb_file)
-        except ClientError:
+        except (ClientError, RuntimeError):
             continue
 
         if os.path.isfile(_pdb_file):

@@ -6,6 +6,7 @@ import glob
 import re
 import time
 import traceback
+import requests
 import itertools as it
 from collections import defaultdict
 from multiprocessing.pool import ThreadPool
@@ -141,7 +142,25 @@ def extract_domain(pdb_file, cath_domain, sfam_id, chain=None, rename_chain=None
         commands.append([sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-"+chain[:1]])
         prep_steps.append( "pdb_chain.py -{}".format(chain[:1]))
     else:
-        raise RuntimeError("Invalid PDB, chain specified ({}) not in chains ({})".format(chain, all_chains))
+        #Get Auth chain instead of PDB chain
+        try:
+            with requests.get(f"https://data.rcsb.org/rest/v1/core/polymer_entity_instance/{cath_domain[:4]}/{chain}") as r:
+                result = r.json()
+        except:
+            raise RuntimeError("Invalid PDB, chain specified ({}) not in chains ({})".format(chain, all_chains))
+        try:
+            auth_chain = result["rcsb_polymer_entity_instance_container_identifiers"]["auth_asym_id"]
+        except KeyError:
+            raise RuntimeError("Invalid PDB, chain specified ({}) not in chains ({})".format(chain, all_chains))
+        
+        if auth_chain in all_chains:
+            #Replace auth chain with pdb chain
+            commands.append([sys.executable, os.path.join(PDB_TOOLS, "pdb_selchain.py"), "-{}".format(auth_chain)])
+            commands.append([sys.executable, os.path.join(PDB_TOOLS, "pdb_chain.py"), "-"+chain[:1]])
+            prep_steps.append("pdb_selchain.py -{}".format(chain))
+            prep_steps.append("pdb_chain.py -{}".format(chain[:1]))
+        else:
+            raise RuntimeError("Invalid PDB, chain specified ({}) not in chains ({})".format(chain, all_chains))
 
     commands += [
         #Remove altLocs
@@ -325,8 +344,6 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
 
     files_to_remove = []
 
-
-
     cath_key = ""
 
     if os.path.isfile(cath_domain):
@@ -368,7 +385,7 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
 
                 try:
                     domain_file, chain, file_type = s3_download_pdb(cath_domain,
-                        work_dir=work_dir)
+                        work_dir=work_dir, job=job)
                     local_file = True
                 except (SystemExit, KeyboardInterrupt):
                     raise

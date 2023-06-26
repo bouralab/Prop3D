@@ -4,9 +4,18 @@ from toil.job import Job
 from Prop3D.util.iostore import IOStore
 
 class data_stores(object):
-    def __init__(self, prefix):
+    """
+    Parameters:
+    -----------
+    prefix : str, toil.Job, or None
+        Where to save or read data store from. If None, current working directory, not recommended
+    """
+    def __init__(self, prefix=None):
         self.use_s3 = False
         self.use_file = False
+        if prefix is None:
+            prefix = ""
+            
         if isinstance(prefix, Job):
             prefix = prefix._fileStore.jobStore.config.jobStore
 

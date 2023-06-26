@@ -167,13 +167,48 @@ def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features
                 except OSError:
                     pass
 
-            if f"{cath_key}/{ext}" not in store.keys():
+            if f"{cath_key}/{ext}" in store.keys():
+                try:
+                    del store[f"{cath_key}/{ext}"]
+                except:
+                    pass
+            try:
                 ds1 = store.create_table(f"{cath_key}/{ext}", data=rec_arr, dtype=list(column_dtypes.items()),
                     chunks=True, compression="gzip", compression_opts=9)
-            else:
-                ds1 = store[f"{cath_key}/{ext}"]       # load the data
-                RealtimeLogger.info(f"OLD DS is: {ds1}")
-                ds1[...] = rec_arr                     # assign new values to data
+            except OSError as e:
+                if "Request Entity Too Large" in str(e):
+                    #Dataset too lareg to pass over http PUT
+                    span = 500 #atoms in structure int(len(rec_arr)/4)
+                    for i, start in enumerate(range(0, len(rec_arr), span)):
+                        small_data = rec_arr[start:start+span]
+                        if i==0:
+                            RealtimeLogger.info(f"Create small data: with: {len(small_data)}")
+                            store.create_table(f"{cath_key}/{ext}", data=small_data, dtype=list(column_dtypes.items()),
+                                chunks=True, compression="gzip", compression_opts=9)
+                        else:
+                            RealtimeLogger.info(f"Add small data: with: {len(small_data)}")
+                            store[f"{cath_key}/{ext}"].resize((store[f"{cath_key}/{ext}"].shape[0] + small_data.shape[0]), axis=0)
+                            store[f"{cath_key}/{ext}"][-small_data.shape[0]:] = small_data
+                        
+            # else:
+                # ds1 = store[f"{cath_key}/{ext}"]       # load the data
+                # RealtimeLogger.info(f"OLD DS is: {ds1}")
+                # try:
+                #     ds1[...] = rec_arr                     # assign new values to data
+                # except OSError as e:
+                #     if "Request Entity Too Large" in str(e):
+                #         #Dataset too lareg to pass over http PUT
+                #         span = 500 #atoms in structure int(len(rec_arr)/4)
+                #         for i, start in enumerate(range(0, len(rec_arr), span)):
+                #             small_data = rec_arr[start:start+span]
+                #             if i==0:
+                #                 RealtimeLogger.info(f"Create small data: with: {len(small_data)}")
+                #                 store.create_table(f"{cath_key}/{ext}", data=small_data, dtype=list(column_dtypes.items()),
+                #                     chunks=True, compression="gzip", compression_opts=9)
+                #             else:
+                #                 RealtimeLogger.info(f"Add small data: with: {len(small_data)}")
+                #                 store[f"{cath_key}/{ext}"].resize((store[f"{cath_key}/{ext}"].shape[0] + small_data.shape[0]), axis=0)
+                #                 store[f"{cath_key}/{ext}"][-small_data.shape[0]:] = small_data
 
         RealtimeLogger.info("Finished {} features for: {} {}".format(ext, cathcode, output_name))
 

@@ -20,4 +20,5 @@ awscli
 spython
 h5py
 h5pyd
-Toil
+toil
+biotite

@@ -737,7 +737,7 @@ class ProteinFeaturizer(LocalStructure):
         col = residue.get_resname() if residue.get_resname() in PDB.Polypeptide.aa3 \
             else "Unk_element"
 
-        all_aas = PDB.Polypeptide.aa3+["Unk_element"]
+        all_aas = list(PDB.Polypeptide.aa3)+["Unk_element"]
 
         if is_atom:
             self.atom_features.loc[atom.serial_number, all_aas] = 0.

@@ -63,7 +63,8 @@ def robust_makedirs(directory):
     if not os.path.exists(directory):
         try:
             # Make it if it doesn't exist
-            os.makedirs(directory)
+            os.makedirs(directory, mode=0o777)
+            os.chmod(directory, 0o777)
         except OSError:
             # If you can't make it, maybe someone else did?
             pass
@@ -539,9 +540,14 @@ class FileIOStore(IOStore):
         # Make a temporary file
         temp_handle, temp_path = tempfile.mkstemp(dir=self.path_prefix)
         os.close(temp_handle)
+        os.unlink(temp_path)
 
-        # Copy to the temp file
-        shutil.copy2(local_path, temp_path)
+        try:
+            # Copy to the temp file with metadata
+            shutil.copy2(local_path, temp_path)
+        except PermissionError:
+            #copy file to tempfile without metadata
+            shutil.copyfile(local_path, temp_path)
 
         if os.path.exists(real_output_path):
             try:
