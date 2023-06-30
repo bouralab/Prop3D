@@ -9,6 +9,33 @@ from Prop3D.common.ProteinTables import vdw_aa_radii
 from Prop3D.common.features import default_atom_features, default_residue_features
 
 class DistributedVoxelizedStructure(DistributedStructure):
+    """A structure class to deal with structures originating from a distributed
+    HSDS instance. This class also handles proteins in voxelized volumes
+
+    Parameters:
+    -----------
+    path : str
+        Path to h5 file in HSDS endpoint
+    key : str
+        Key to access speficic protein inside the HDF file
+    cath_domain_dataset : str
+        The CATH superfamily if endpoint is setup to use CATH (use '/' instead of '.')
+    coarse_grained : boolean
+        Use a residue only model instead of an all atom model. Defualt False. Warning, not fully implemented.
+    volume : float
+        Size in Angstroms^3 of the entire volume. Defualt is 264. 
+    voxel_size : float
+        Resolution to map atoms to inside volume. Default is 1.0.
+    rotate : None, bool, np.array
+        Rotate moleule randomly (set to True) or using a given roation matrix. If None, no rotations will be perfomed. Defualt None.
+    use_features : list of str
+        Features to include for trianing a model.
+    predict_features : list of str
+    replace_na : bool
+        Replace "Not a number" values with defualt values. Defualt is False.
+    ligand : bool
+        Not used often. Only used in simple_fft_scoring_features for specyng if protein is interacting partner. Defualt is False.
+    """
     def __init__(self, path, key, cath_domain_dataset, coarse_grained=False,
       volume=264, voxel_size=1.0, rotate=None, use_features=None, predict_features=None,
       replace_na=False, ligand=False):
@@ -58,7 +85,21 @@ class DistributedVoxelizedStructure(DistributedStructure):
             #     print(k, v)
             #     setattr(result, k, copy.deepcopy(v, memo))
     
-    def create_full_volume(self, input_shape=(96, 96, 96)):
+    def create_full_volume(self, input_shape=None):
+        """Create a dense representation of the protein
+
+        Parameters:
+        -----------
+        input_shape : 3-tuple
+            New volume size. If None, use given volume size. Defualt is None.
+        
+        Returns:
+        --------
+        A dense grid with the protein in the center
+        """
+        if input_shape is None:
+            input_shape = [self.volme]*3
+
         truth_grid = np.zeros(list(input_shape)+[1])
         for atom in self.get_atoms():
             for grid in self.get_vdw_grid_coords_for_atom(atom["X", "Y", "Z"]):
@@ -66,14 +107,52 @@ class DistributedVoxelizedStructure(DistributedStructure):
         return truth_grid
 
     def shift_coords_to_volume_center(self):
+        """Shift coordinatesto the center of the volume
+
+        Returns:
+        --------
+        The new center coordinate
+        """
         return self.shift_coords(np.array([self.volume/2]*3))
 
     def resize_volume(self, new_volume, shift=True):
+        """Increase or decrease the volume and move the protein to its new center
+
+        Parameters:
+        -----------
+        new_volume : 3-tuple
+            New volume size. If None, use given volume size. Defualt is None
+        shift : bool
+            Move protein to volume's new center. Defualt is True
+        """
         self.volume = new_volume
         if shift:
             self.shift_coords_to_volume_center()
+        self.set_voxel_size(self.voxel_size)
 
     def rotate(self, rvs=None, num=1, return_to=None):
+        """Rotate structure by either randomly in place or with a set rotation matrix. 
+        Random rotations matrices are drawn from the Haar distribution (the only uniform 
+        distribution on SO(3)) from scipy.
+
+        This method automatically recenters the protein in the current volume size.
+
+        Parameters:
+        -----------
+        rvs : np.array (3x3)
+            A rotation matrix. If None, a randome roation matrix is used. Default is None.
+        num : int
+            Number of rotations to perfom
+        return_to : None or XYZ coordinate
+            When finsihed rotating, move structure to this coordinate. Defualt is to the center volume center
+
+        Yields:
+        -------
+        r : int
+            Rotation number
+        M : np.array (3x3)
+            Rotation matrix
+        """
         if return_to is None:
             return_to=[self.volume/2]*3
         for r in super().rotate(rvs=rvs, num=num, return_to=return_to):
@@ -81,16 +160,39 @@ class DistributedVoxelizedStructure(DistributedStructure):
             yield r
 
     def orient_to_pai(self, random_flip=False, flip_axis=(0.2, 0.2, 0.2)):
+        """Orient structure to the Principle Axis of Interertia and optionally flip. Modified from EnzyNet.
+
+        This method automatically recenters the protein in the current volume size.
+
+        Parameters:
+        -----------
+        random_flip : bool
+            Randomly flip around axis. Defualt is False.
+        flip_axis: 3-tuple of floats
+            New axis to flip.
+        """
         super().orient_to_pai(random_flip=random_flip, flip_axis=flip_axis)
         self.shift_coords_to_volume_center()
 
     def get_features_per_atom(self, residue_list):
-        """Get features for eah atom, but not organized in grid"""
+        """Get features for each atom, but not organized in grid
+        
+        Parameters:
+        -----------
+        residue_list : list
+            A list of residue ids
+        
+        Returns:
+        --------
+        A numpy array of atoms in selected residues
+        """
         return self.data[self.data[:,"residue_id"].isin(residue_list)]
 
     def get_features(self, residue_list=None, only_aa=False, only_atom=False,
       non_geom_features=False, use_deepsite_features=False, expand_atom=False,
       undersample=False, autoencoder=False):
+        """Deprecated. not used
+        """
         if self.coarse_grained:
             return self.map_residues_to_voxel_space(
                 truth_residues=residue_list,
@@ -117,16 +219,35 @@ class DistributedVoxelizedStructure(DistributedStructure):
 
         Parameters
         ----------
-        truth_residues : list of Bio.PDB.Residue objects or None
-            If a binding is known, add the list of Bio.PDB.Residue objects, usually
-            obtained by Structure.align_seq_to_struc()
-        include_full_protein : boolean
-            If true, all atoms from the protein are used. Else, just the atoms from the
-            defined binding site. Only makes sense if truth_residues is not None
+        truth_residues : list of residue_ids or None
+            If a binding site (or other site of interest) is known, add the list of residue_ids
+        only_surfae : bool
+            Only return voxels for atoms present on the surface of the protein. Default False.
+        autoencoder : bool
+            Use same features for input and output. Default is False.
+        return_voxel_map : bool
+            Return a mapping to back from voxels to atoms. Defualt is False.
+        reutrn_serial : bool
+            Return atoms serials present in each voxel. Defualt is False.
+        return_b : bool
+            Return all bfactors used in each voxel. Default is False.
+        nClasses : int [1,2]
+            Rerely used. If only predicited one feature, create nClasses number of features. E.g. for 2: a feature would be [is_false, is_true]
+        simple_fft : None or str ["simple", "zdock"]
+            Type of fft features to use. Defualt is None.
+        verbose : bool
+            Print out logs while running. Defualt is False.
+        use_raw_atom_coords : bool
+            Instead of mapping atoms to voxel, attach features to raw atom coords. Default is False.
+
         Returns
         -------
-        indices : np.array((nVoxels,3))
-        data : np.array((nVoxels,nFeatures))
+        coords : np.array((nVoxels,3))
+        feats : np.array((nVoxels,nFeatures))
+        truth : np.array((nVoxels,nFeatures))
+        voxel_map : Dictionary of voxels to atoms
+        serial : Dictionary of voxels to serials
+        b : Dictionary of voxels to b factors
         """
         assert not self.coarse_grained, "Cannot be used with the coarse graned model"
         assert [isinstance(truth_residues, (list, tuple)), autoencoder, isinstance(self.predict_features, (list, tuple))].count(True) == 1, \
@@ -257,12 +378,24 @@ class DistributedVoxelizedStructure(DistributedStructure):
             verbose=verbose)
 
     def simple_fft_scoring_features(self, atom_or_residue, mode="simple", b=3):
-        """Rp=−1  on a surface layer and Rp=1 on the core of the receptor,
+        """If voxelized proteins will be used in FFT docking type algorithms, use these features.
+        
+        Rp=−1  on a surface layer and Rp=1 on the core of the receptor,
         Lp=1 on the entire ligand, and Rp=Lp=0 everywhere else. It is clear that
         this scoring function, which is essentially the one used by
         Katchalski-Katzir et al. (5), reaches its minimum on a conformation in
         which the ligand maximally overlaps with the surface layer of the receptor,
-        thus providing optimal shape complementarity. https://doi.org/10.1073/pnas.1603929113"""
+        thus providing optimal shape complementarity. https://doi.org/10.1073/pnas.1603929113
+        
+        Paramerters:
+        ------------
+        atom_or_residue : int
+            Index of atom or residue in data table
+        mode : str or bool ["simple", "zdock", True]
+            Type of features to use. Defualt is simple.
+        b : int
+            Not used.
+        """
 
         if not self.coarse_grained:
             residue_buried = self.atom_features[atom_or_residue, "residue_rasa"]<0.5
@@ -319,22 +452,26 @@ class DistributedVoxelizedStructure(DistributedStructure):
             yield self.voxel_tree.data[idx]
 
     def get_closest_grid_coord_for_residue(self, residue):
+        """Yields all grid points that are near any atom inside the given residue
+        """
         center = np.nanmean([a.get_coord() for a in residue], axis=0)
         _, neighbors = self.voxel_tree.query([center])
         for idx in neighbors:
             yield self.voxel_tree.data[idx]
 
-    # def rotate(self, rvs=None, num=1):
-    #     for r, M in super().rotate(rvs=rvs, num=num):
-    #         self.set_voxel_size(self.voxel_size)
-    #         yield r, M
+    def set_voxel_size(self, voxel_size=1.0, full_grid=True):
+        """Set the voxel size or resultion of the mapping the structure to the volume.
 
-    def resize_volume(self, new_volume, shift=True):
-        super().resize_volume(new_volume, shift=shift)
-        self.set_voxel_size(self.voxel_size)
+        This method calculates the entire grid used to search over while mapping atoms.
 
-    def set_voxel_size(self, voxel_size=None, full_grid=True):
-        self.voxel_size = voxel_size or 1.0
+        Parameters:
+        -----------
+        voxel_size : float
+            New voxel size in angstroms
+        full_grid : bool
+            Create coords for the entire volume. If False, only save grid point closest to the protein. Default True.
+        """
+        self.voxel_size = voxel_size
 
         coords = self.get_coords()
         min_coord = np.floor(np.nanmin(coords, axis=0))-5
@@ -367,6 +504,15 @@ class DistributedVoxelizedStructure(DistributedStructure):
 
     def convert_voxels(self, grid, radius=2.75, level="A"):
         """Convert grid points to atoms
+
+        Parameters:
+        -----------
+        grid : 3-tuple
+            grid point
+        radius : float
+            Find atoms within a certain radius in angstroms from the grid point. Default 2.7.
+        level : str
+            Deprecated. not used
         """
         if self.atom_tree is None:
             self.atom_tree = spatial.cKDTree(list(self.get_atoms()))
@@ -375,6 +521,17 @@ class DistributedVoxelizedStructure(DistributedStructure):
         return self.data[idx]
 
     def get_overlapping_voxels(self):
+        """For all pairs on interacting atoms (<5 Angstroms), get the overlapping voxels
+
+        Yields:
+        -------
+        a1 : int
+            atom serial 1
+        a2 : int
+            atom serial 2
+        overlap : list
+            list of overlapping voxels coorindates    
+        """
         neighbor_atoms = self.calculate_neighbors(d_cutoff=5.0, level="A")
         for a1, a2 in neighbor_atoms:
             v1 = set(self.get_vdw_grid_coords_for_atom(a1))

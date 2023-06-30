@@ -16,6 +16,9 @@ packages = [
     "Prop3D.parsers.superpose",
     "Prop3D.util",
     "Prop3D.visualize",
+    "Prop3D.ml",
+    "Prop3D.ml.datasets",
+    "Prop3D.ml.examples"
 #    "prodigy",
 #    "prodigy.lib",
 #    "prodigy.data"

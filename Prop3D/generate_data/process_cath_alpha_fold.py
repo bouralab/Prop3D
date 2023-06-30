@@ -19,7 +19,7 @@ def run_custom_hierarchy(job, prefix, func, full_h5_path, *args, **kwds):
             map_job(job, run_custom_hierarchy, keys, func, full_h5_path, *args, **kwds)
 
 def split_superfamily_at_level(job, cath_full_h5, superfamily, input_store_name, seq_id=.35, work_dir=None, 
-  split_size={"train":0.8, "validation":0.1, "test":0.1}, work_dir=None):
+  split_size={"train":0.8, "validation":0.1, "test":0.1}):
     from Prop3D.generate_data.set_cath_h5_toil import split_superfamily_at_level as split_superfamily_at_level_main
     
     if work_dir is None:

@@ -4,7 +4,8 @@ from toil.job import Job
 from Prop3D.util.iostore import IOStore
 
 class data_stores(object):
-    """
+    """Gets a data store depending on your JobStore type. Can be eiher a local FileIOStore or an S3IOStore
+
     Parameters:
     -----------
     prefix : str, toil.Job, or None
@@ -25,6 +26,10 @@ class data_stores(object):
                     #Save data to S3 bucket even if using file jobStore if you are using a custom S3 server suchas as MinIO
                     prefix = f"aws:us-east-1:{os.environ['USER']}-"
                     self.use_s3 = True
+                elif "PROP3D_DATA_STORE_PATH" in os.environ:
+                    localPath = Path(os.environ["PROP3D_DATA_STORE_PATH"])
+                    prefix = f"file:{localPath}/"
+                    self.use_file = True
                 else:
                     localPath = Path(prefix.split(":")[1]).parent
                     prefix = f"file:{localPath}/"

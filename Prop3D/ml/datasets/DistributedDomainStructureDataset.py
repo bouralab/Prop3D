@@ -45,9 +45,9 @@ class DistributedDomainStructureDataset(DistributedDataset):
             if isinstance(predict_features, (list, tuple)) and len(predict_features)>0:
                 print("ignoring predict_features")
         elif isinstance(predict_features, (list, tuple)) and len(predict_features)>0:
-            assert isinstance(use_features, (list, tuple)) and len(use_features) > 0, \
+            assert (use_features is None) or (isinstance(use_features, (list, tuple)) and len(use_features) > 0), \
                 "Cannot train on all features and predict a feature in that set"
-            assert len(set(predict_features).intersection(set(use_features)))==0, \
+            assert (use_features is None) or (isinstance(use_features, (list, tuple)) and len(set(predict_features).intersection(set(use_features)))==0), \
                 "Cannot train on and predict the same features"
 
         assert [isinstance(domains,(str,list,tuple)), all_domains, representatives].count(True)<2

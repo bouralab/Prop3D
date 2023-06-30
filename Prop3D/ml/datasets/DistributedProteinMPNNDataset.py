@@ -11,7 +11,7 @@ from scipy.stats import special_ortho_group
 from Prop3D.ml.datasets.DistributedDataset import DistributedDataset
 from Prop3D.common.DistributedVoxelizedStructure import DistributedVoxelizedStructure
 
-class DistributedDomainStructureDataset(DistributedDataset):
+class DistributedProteinMPNNDataset(DistributedDataset):
     hierarchy = ["C", "A", "T", "H", "S35", "S60", "S95", "S100"]
     rvs = np.eye(3)
 
@@ -37,9 +37,9 @@ class DistributedDomainStructureDataset(DistributedDataset):
             if isinstance(predict_features, (list, tuple)) and len(predict_features)>0:
                 print("ignoring predict_features")
         elif isinstance(predict_features, (list, tuple)) and len(predict_features)>0:
-            assert isinstance(use_features, (list, tuple)) and len(use_features) > 0, \
+            assert (use_features is None) or (isinstance(use_features, (list, tuple)) and len(use_features) > 0), \
                 "Cannot train on all features and predict a feature in that set"
-            assert len(set(predict_features).intersection(set(use_features)))==0, \
+            assert (use_features is None) or (isinstance(use_features, (list, tuple)) and len(set(predict_features).intersection(set(use_features)))==0), \
                 "Cannot train on and predict the same features"
 
         assert [isinstance(domains,(str,list,tuple)), all_domains, representatives].count(True)<2
@@ -88,33 +88,40 @@ class DistributedDomainStructureDataset(DistributedDataset):
         # coords_dict_chain['O_chain_'+letter]=all_atoms[:,3,:].tolist()
         # my_dict['coords_chain_'+letter]=coords_dict_chain
 
+        cath_domain_dataset = super().__getitem__(index)
+        key = self.order[index]
+
+        
+
         voxelizer = DistributedVoxelizedStructure(
-            self.path, key, cath_domain_dataset, 
+            self.path, key, cath_domain_dataset, rotate=False,
             use_features=self.use_features, predict_features=self.predict_features,
             replace_na=True)
         
         coords_dict_chain = {
-            "N_chain_{voxelizer.chain}}": [],
-            "CA_chain_{voxelizer.chain}}": [],
-            "C_chain_{voxelizer.chain}}": [],
-            "O_chain_{voxelizer.chain}}": [],
+            f"N_chain_{voxelizer.chain}": [],
+            f"CA_chain_{voxelizer.chain}": [],
+            f"C_chain_{voxelizer.chain}": [],
+            f"O_chain_{voxelizer.chain}": [],
         }
+        
         feats = []
         for r in voxelizer.get_residues():
             for atom_type in ("N", "CA", "C", "O"):
                 for a in r:
-                    if a[atom_type]:
-                        coords_dict_chain["{atom_type}_chain_{voxelizer.chain}}"].append(a[["X", "Y", "Z"]].tolist())
+                    if a["atom_name"] == atom_type:
+                        coords_dict_chain[f"{atom_type}_chain_{voxelizer.chain}"].append(a[["X", "Y", "Z"]].tolist())
                         feats.append(a[self.predict_features].tolist())
-                    else:
-                        coords_dict_chain["{atom_type}_chain_{voxelizer.chain}}"].append([np.nan]*3)
-                        feats.append([np.nan]*len(self.predict_features))
+                        break
+                else:
+                    coords_dict_chain[f"{atom_type}_chain_{voxelizer.chain}"].append([np.nan]*3)
+                    feats.append([np.nan]*len(self.predict_features))
         
         seq = voxelizer.get_sequence()
         return {
-            "coords_chain_{voxelizer.chain}": coords_dict_chain,
-            "masked_list": np.zeros(len(seq)),
-            "visible_list": np.ones(len(seq)),
+            f"coords_chain_{voxelizer.chain}": coords_dict_chain,
+            "masked_list": [], #np.zeros(len(seq)),
+            "visible_list": [voxelizer.chain], #np.ones(len(seq)),
             "num_of_chains": 1,
             "seq": seq,
             "prop3d_features": feats

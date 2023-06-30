@@ -15,7 +15,7 @@ from Prop3D.common.AbstractStructure import AbstractStructure
 from Prop3D.common.features import default_atom_feature_np, default_residue_feature_np, \
     atom_features, residue_features
 
-residue_columns = ["residue_id", "chain", "bfactor", "occupancy", "X", "Y", "Z"]
+residue_columns = ["residue_id", "chain", "bfactor", "X", "Y", "Z"]
 atom_columns = ["serial_number", "atom_name", "residue_id", "chain", "bfactor",
 "X", "Y", "Z"]
 entity_levels = ["A", "R", "C", "M", "S"]
@@ -27,7 +27,7 @@ class DistributedStructure(AbstractStructure):
     Parameters:
     -----------
     path : str
-        HSDS endpoint to access structures
+        path to h5 file in HSDS endpoint to access structures
     key : str
         Key to access speficic protein inside the HDF file
     cath_domain_dataset : str
@@ -66,9 +66,9 @@ class DistributedStructure(AbstractStructure):
         self.cath_domain_dataset = cath_domain_dataset
 
         self.cath_domain = self.full_key[1:].rsplit('/', 1)[1]
-        self.pdb = key[:4]
-        self.chain = key[4]
-        self.domNo = key[5:]
+        self.pdb = self.cath_domain[:4]
+        self.chain = self.cath_domain[4]
+        self.domNo = self.cath_domain[5:]
         self.coarse_grained = coarse_grained
 
         if coarse_grained:
@@ -143,6 +143,8 @@ class DistributedStructure(AbstractStructure):
             yield a
     
     def get_residues(self):
+        """Yields slices of the data for all atoms in single residue
+        """
         residues = np.unique(np.stack([a["residue_id"] for a in self.data]))
         for r in residues:
             yield self.data[self.data["residue_id"]==r]
@@ -350,10 +352,16 @@ class DistributedStructure(AbstractStructure):
         self.features = new_df #self.data[self.feature_names]
 
     def _to_unstructured(self, x):
-        """Convert a rec array for atom(s) toa  regualr numpy array"""
+        """Convert a rec array for atom(s) toa  regular numpy array
+        
+        Parameters:
+        -----------
+        x : structured numpy array
+        """
         return np.lib.recfunctions.structured_to_unstructured(x)
 
-    def get_coords(self, include_hetatms=False, exclude_atoms=None):
+    def get_coords(self):
+        """Get XYZ coordinates for all atoms as numpy array"""
         if self.coords is None:
             self.coords = self._to_unstructured(
                 self.pdb_info[["X", "Y", "Z"]]).round(decimals=4)
@@ -390,6 +398,7 @@ class DistributedStructure(AbstractStructure):
     #     self.mean_coord_updated = False
 
     def update_bfactors(self, b_factors):
+        """Reset bfactors for all atoms. New numpy array must be same length as the atom array"""
         self.data["bfactor"] = b_factors
 
     def calculate_neighbors(self, d_cutoff=100.0):
@@ -409,9 +418,13 @@ class DistributedStructure(AbstractStructure):
         return ns.query_pairs(d_cutoff)
 
     def get_vdw(self, atom_or_residue):
+        """Get Van der Waals radius for an atom or if its a residue, return an appmate volume as a sphere around all atoms in residue
+        """
         return atom_or_residue["vdw"]
 
     def remove_loops(self, verbose=False):
+        """Remove atoms present in loop regions
+        """
         ss_groups = self.get_secondary_structures_groups(verbose=verbose)
         ss_groups, leading_trailing_residues = ss_groups[0], ss_groups[-2]
         leading_trailing_residues = list(leading_trailing_residues.values())

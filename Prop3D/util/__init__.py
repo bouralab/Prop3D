@@ -252,3 +252,18 @@ def str2bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
+    
+def str2boolorlist(v):
+    if isinstance(v, bool):
+       return v
+    elif isinstance(v, str) and v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif isinstance(v, str) and v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return None
+    if len(v) == 0:
+        return True
+    elif len(v) == 1 and v[0].lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif len(v) == 1 and v[0].lower() in ('no', 'false', 'f', 'n', '0'):
+        return None
+    return v

@@ -38,9 +38,9 @@ class DistributedDomainSequenceDataset(DistributedDataset):
             if isinstance(predict_features, (list, tuple)) and len(predict_features)>0:
                 print("ignoring predict_features")
         elif isinstance(predict_features, (list, tuple)) and len(predict_features)>0:
-            assert isinstance(use_features, (list, tuple)) and len(use_features) > 0, \
+            assert (use_features is None) or (isinstance(use_features, (list, tuple)) and len(use_features) > 0), \
                 "Cannot train on all features and predict a feature in that set"
-            assert len(set(predict_features).intersection(set(use_features)))==0, \
+            assert (use_features is None) or (isinstance(use_features, (list, tuple)) and len(set(predict_features).intersection(set(use_features)))==0), \
                 "Cannot train on and predict the same features"
 
         assert [isinstance(domains,(str,list,tuple)), all_domains, representatives].count(True)<2
@@ -79,30 +79,17 @@ class DistributedDomainSequenceDataset(DistributedDataset):
             embedding.classes_ = labels
         return embedding
 
-    def __getitem__(self, index, voxel_map=False):
+    def __getitem__(self, index):
         cath_domain_dataset = super().__getitem__(index)
         key = self.order[index]
 
-        if self.rotate is None or (isinstance(self.rotate, bool) and not self.rotate):
-            rotate = False
-        elif isinstance(self.rotate, np.ndarray) or (isinstance(self.rotate, str) and self.rotate in ["random", "pai"]):
-            rotate = self.rotate
-        elif isinstance(self.rotate, bool) and self.rotate:
-            #Use Dataset's random roation matrix
-            rotate = self.rvs
-        else:
-            raise RuntimeError("Invalid rotation parameter. It must be True to use this Dataset's random roation matrix updated during each epoch, " + \
-                "(None or False) for no rotation, 'random' for a random rotation matrix from the voxelizer updated during every initalization, " + \
-                "'pai' to rotate to the structure's princple axes, or a rotation matrix given as a numpy array.")
-
         voxelizer = DistributedVoxelizedStructure(
-            self.path, key, cath_domain_dataset, volume=self.volume, rotate=rotate,
+            self.path, key, cath_domain_dataset, rotate=False,
             use_features=self.use_features, predict_features=self.predict_features,
             replace_na=True, coarse_grained=True)
 
         if self.return_structure:
             return voxelizer
-        
 
         sequence = voxelizer.get_sequence()
         predict_features = voxelizer.features[self.predict_features]
@@ -111,6 +98,7 @@ class DistributedDomainSequenceDataset(DistributedDataset):
             use_features = voxelizer.features[self.use_features]
             return (sequence, use_features), predict_features
         else:
+            print(sequence, predict_features)
             return sequence, predict_features
 
 

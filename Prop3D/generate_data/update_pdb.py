@@ -7,18 +7,54 @@ import requests
 import pandas as pd
 from biotite.database.rcsb import FieldQuery, CompositeQuery, search, count, IdentityGrouping
 
+from Prop3D.util.toil import map_job
 from toil.realtimeLogger import RealtimeLogger
 
 
 from Prop3D.generate_data.create_data_splits import split_dataset_at_level
 
-def chain2entity(pdbs):
+def chain2entity_old(pdbs):
+    RealtimeLogger.info("Converting all chain ids to entity ids")
     values = []
     for pdb in pdbs:
         chain_query = FieldQuery("rcsb_polymer_entity_instance_container_identifiers.rcsb_id", exact_match=pdb)
         chains_result = [(pdb, entity) for entity in search(chain_query, return_type="polymer_instance")]
         values += chains_result
     values = pd.DataFrame(values, columns=["cath_domain", "entity_id"])
+    RealtimeLogger.info("Converted all chain ids to entity ids")
+    return values
+
+def _chain2entity(pdbs, attempts=1):
+    query = f"""{{
+    polymer_entity_instances(instance_ids: ["{'", "'.join(pdbs)}"]) {{
+    rcsb_id
+    rcsb_polymer_entity_instance_container_identifiers {{
+        entry_id
+        entity_id
+    }}
+    }}
+}}"""
+    query = query.replace("\n", "")
+    with requests.get(f"https://data.rcsb.org/graphql?query={query}") as r:
+        try:
+            results = r.json()["data"]["polymer_entity_instances"]
+        except (requests.exceptions.JSONDecodeError, KeyError):
+            if attempts > 0:
+                return _chain2entity(pdbs, attempts=attempts-1)
+            else:
+                return []
+
+    return [(entity["rcsb_id"], f'{entity["rcsb_id"][:4]}_{entity["rcsb_polymer_entity_instance_container_identifiers"]["entity_id"]}') for entity in results]
+    
+
+def chain2entity(pdbs, chunk_size=8000):
+    values = []
+    for pdb_chunk_start in range(0, len(pdbs), chunk_size):
+        RealtimeLogger.info(f"Converting all chain ids to entity ids: {pdb_chunk_start}/{len(pdbs)}")
+        pdb_chunk = pdbs[pdb_chunk_start:pdb_chunk_start+chunk_size]
+        values += _chain2entity(pdb_chunk)
+    values = pd.DataFrame(values, columns=["cath_domain", "entity_id"])   
+    RealtimeLogger.info("Converted all chain ids to entity ids")
     return values
 
 def update_pdbs(job, full_pdb_h5):
@@ -49,6 +85,7 @@ def update_pdbs(job, full_pdb_h5):
     return set(new_pdbs)&set(revised_pdbs)
 
 def get_all_pdbs(job, full_pdb_h5, update=False):
+    RealtimeLogger.info("Downloading all PDBs names")
     pdbs = None
     if update:
         pdbs = update_pdbs(job, full_pdb_h5)
@@ -58,18 +95,36 @@ def get_all_pdbs(job, full_pdb_h5, update=False):
         #entity_query = FieldQuery("rcsb_entry_info.polymer_entity_count_protein", greater=0)
         #query = CompositeQuery(experimental_query, entity_query)
         pdbs = search(experimental_query, return_type="polymer_instance")
+
+    assert len(pdbs)>0
     
+    RealtimeLogger.info("Adding all PDB names")
     with h5pyd.File(full_pdb_h5, mode="a", use_cache=False, retries=100) as store:
         store.require_group("domains")
-        for pdb in pdbs:
-            store.require_group(f"domains/{pdb}")
+        run_pdbs = set(pdbs)-set(store['domains'].keys())
+
+    batch_size = 500
+    batches = [pdbs[start:start+batch_size] for start in range(0,len(run_pdbs),batch_size)]
+    map_job(job, create_groups, batches, full_pdb_h5)
+        
+        # for i, pdb in enumerate(run_pdbs):
+        #     if i%500==0:
+        #         RealtimeLogger.info(f"Adding {i}/{len(run_pdbs)}")
+        #     store.require_group(f"domains/{pdb}")
     job.addFollowOnJobFn(finish_section, full_pdb_h5, "completed_names")
 
     #Map chains to entity ids
-    pdb_chains = chain2entity(pdb_chains)
+    pdb_chains = chain2entity(pdbs)
     
     job.addFollowOnJobFn(create_splits_for_levels, full_pdb_h5, pdb_chains)
-    
+
+def create_groups(job, pdbs, full_pdb_h5):
+    with h5pyd.File(full_pdb_h5, mode="a", use_cache=False, retries=100) as store:
+        for i, pdb in enumerate(pdbs):
+            if i%50==0:
+                RealtimeLogger.info(f"Adding {i}/{len(pdbs)}")
+            store.require_group(f"domains/{pdb}")
+         
 def get_custom_pdbs(job, pdbs, full_pdb_h5, update=False):
     if not isinstance(pdbs, (list, tuple)):
         pdbs = [pdbs]
@@ -113,6 +168,8 @@ def get_custom_pdbs(job, pdbs, full_pdb_h5, update=False):
 
     pdb_chains = list(pdb_chains)
 
+    assert len(pdb_chains)>0
+
     with h5pyd.File(full_pdb_h5, mode="a", use_cache=False, retries=100) as store:
         store.require_group("domains")
         for pdb in pdb_chains:
@@ -123,9 +180,14 @@ def get_custom_pdbs(job, pdbs, full_pdb_h5, update=False):
     job.addFollowOnJobFn(create_splits_for_levels, full_pdb_h5, pdb_chains, custom=False)
 
 def create_representatives(job, clusters, full_pdb_h5):
+    #Get representatives as entity id
     representatives = clusters["representative"].drop_duplicates()
-    missing_domains = []
+    
+    #Get representatives as chain id
+    representatives = clusters[clusters.entity_id.isin(representatives)].cath_domain.drop_duplicates()
 
+    
+    missing_domains = []
     with h5pyd.File(full_pdb_h5, mode="a", use_cache=False, retries=100) as store:
         group = store.require_group("representatives")
 

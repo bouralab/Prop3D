@@ -594,6 +594,7 @@ class AbstractStructure(object):
 
 
 class Structure(AbstractStructure):
+    """Not Used. Remove"""
     def __init__(self, path, name, input_format="pdb",feature_mode="r", features_path=None, residue_feature_mode="r", reset_chain=False, coarse_grained=False):
         self.path = path
         if not os.path.isfile(self.path):

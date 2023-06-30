@@ -392,7 +392,3 @@ def is_num(a):
         return True
     except ValueError:
         return False
-
-
-if __name__ == "__main__":
-    force = len(sys.argv)>1 and args[1] in ["-f", "--force"]

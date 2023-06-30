@@ -6,7 +6,7 @@ import h5pyd
 import pandas as pd
 from toil.realtimeLogger import RealtimeLogger
 
-from Prop3D.util import safe_remove
+from Prop3D.util import safe_remove, str2boolorlist
 from Prop3D.util.iostore import IOStore
 from Prop3D.util.cath import run_cath_hierarchy, run_cath_hierarchy_h5
 from Prop3D.util.hdf import get_file, filter_hdf_chunks
@@ -359,7 +359,12 @@ if __name__ == "__main__":
         "-s", "--skip_cathcode",
         nargs='+',
         default=None)
-    parser.add_argument("--pdb", default=None, nargs="+")
+    #parser.add_argument("--pdb", default=None, nargs="+")
+    parser.add_argument(
+        '--pdb', 
+        type=str2boolorlist, 
+        nargs='*', 
+        default=None)
     parser.add_argument(
         "--features",
         nargs="+",
@@ -402,7 +407,12 @@ if __name__ == "__main__":
         options.skip_cathcode = [c.replace(".", "/") for c in options.skip_cathcode if c.count(".")==3]
 
     if options.pdb is not None:
-        if len(options.pdb) == 1:
+        if isinstance(options.pdb, str):
+            options.pdb = [options.pdb]
+        if isinstance(options.pdb, (list, tuple)) and len(options.pdb)==0:
+            #Empty -> use whole pdb
+            options.pdb = True
+        if isinstance(options.pdb, (list, tuple)) and len(options.pdb) == 1:
             if os.path.isfile(options.pdb[0]):
                 for _ in get_atom_lines(options.pdb[0]):
                     break

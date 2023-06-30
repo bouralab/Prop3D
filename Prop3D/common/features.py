@@ -4,6 +4,9 @@ from collections import OrderedDict
 import pandas as pd
 import numpy as np
 
+"""Functions to load in defualt features to pandas DataFrames
+"""
+
 with open(os.path.join(os.path.dirname(__file__), "features.yaml")) as fh:
     features = yaml.safe_load(fh)
 
