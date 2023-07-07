@@ -1,11 +1,13 @@
-===================
-Command-line Options
-===================
+=======================================
+AtomicToil: Massively-parallel workflow 
+=======================================
 
 CATH-based workflow
 -------------------
 
-Prop3D was initially built to process the CATH Hierarchy. 
+Prop3D was initially built to process the CATH Hierarchy. New jobs are created for each entity in the hierarchy, with child Jobs for subsidiary level, e.g. A Job is first created for ``level 2 (All Beta)`` and that job has 21 child jobs. One of those child jobs, say ``level 2.60 (Sandwich)`` has 44 child job. One if its children, e.g. ``level 2.60.40 (Immunoglobulin)`` has 330 child jobs at which you are the superfamily level, which is further enumerated into every domain to prepare each structure and calculate features.
+
+.. image:: ../img/Cath2Toil.png
 
 First we explain how to create a CATH dataset locally, using the cores present on your system. To build a dataset based on the entire CATH hierarchy, run the following command:
 

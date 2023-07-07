@@ -20,6 +20,15 @@ If you plan on building your own datasets, you must you must install `Toil <http
 
     pip install toil #Add specific workflow manager you will be use, e.g. toil[aws]
     pip install prop3D
+    hsconfigure #Set endpoint and user/pass
+
+.. code-block::
+
+    # HDFCloud configuration file
+    hs_endpoint = http://hsds.pods.uvarc.io
+    hs_username = protein
+    hs_password = protein
+    hs_api_key = None
 
 Install with PyTorch (Allows Using Datasets)
 --------------------------------------------
@@ -42,6 +51,8 @@ An example way to install may be:
     #Using pip (no GPU support):
     pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
+    hsconfigure #Set endpoint and user/pass with info from above
+
 Finally, install Prop3D:
 
 .. code-block:: bash
@@ -59,3 +70,5 @@ If you are using MinIO underlying HSDS, you should install Prop3D with the ``s3`
 .. code-block:: bash
 
     pip install prop3D[s3]
+
+

@@ -1,5 +1,5 @@
-Structure Processing Workflow
-=============================
+Meadowlark: Structure Processing Workflow
+=========================================
 
 .. image:: img/PrepProtein.png
     :width: 300

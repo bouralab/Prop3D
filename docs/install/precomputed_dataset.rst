@@ -1,7 +1,7 @@
 Install Pre-computed Dataset
 ----------------------------
 
-**Note: If you only want to use the dataset, this is unnecessary. See instructions on how to use the `Pre-computed Dataset <precomputed_datasets>`
+**Note: If you only want to use the dataset, this is unnecessary.**
 
 *Note: Make sure you install HSDS before running this step*
 

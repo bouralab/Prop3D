@@ -1,5 +1,5 @@
-Dataset Organization
-====================
+Prop3D Dataset Organization
+===========================
 
 CATH-based Dataset
 ------------------

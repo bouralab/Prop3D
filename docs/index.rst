@@ -4,24 +4,33 @@
    contain the root `toctree` directive.
 
 .. image:: img/prop3D-logo.png
+   :width: 300
 
 Home
-==================================
-
+====
 Prop3D is a protein structure toolkit designed for machine learning, enabling the generation and utilization of datasets that integrate 3D atomic coordinates with biophysical and evolutionary properties. Due to the massive increase in the number of available protein structures, massively-parallel reproducible workflows to create datasets that run in the cloud are needed. Prop3D is not just a dataset or workflow, it is both; it's a way to reproduce our datatsets or build your own with your own custom proteins.
 
-To use Prop3D, you can (1) use our precomputed datatsets to train an ML model; (2) build your own datasets; and (3) use your new datasets to train an ML model.
+To use Prop3D, you can:
 
-We provide two precalculated datasets: (1) Prop3D-20 (20 highly populated superfamilies) and (2) The entire PDB. In the future, we will provide AlphaFold-CATH -- CATH mappings for all domains in AlphaFold2.
+#. Use our precomputed datasets to train an ML model; 
+#. Build your own datasets; and 
+#. Use your new datasets to train an ML model.
 
-If you want to generate your own datasets, please follow the installation steps for using the `Highly Scalable Data Service (HSDS) <https://github.com/HDFGroup/hsds>`_
+We provide two precalculated datasets: 
+
+#. Prop3D-20 (20 highly populated superfamilies) and 
+#. The entire PDB. In the future.
+
+We will provide the entire CATH database and AlphaFold-CATH -- CATH mappings for all domains in AlphaFold2.
+
+If you want to generate your own datasets, please follow the installation steps for using the :doc:`./install/hsds.rst`
 
 .. image:: img/Prop3D_overview.png
 
 Building Prop3D Datasets
 ------------------------
 
-First, we created AtomicToil [based on `Toil <https://github.com/DataBiosphere/toil>`_] to create a massively-parallel workflow following the CATH hierarchy or any sets of proteins. New jobs are created for each entity in the hierarchy, with child Jobs for subsidiary level, e.g. A Job is first created for ``level 2 (All Beta)`` and that job has 21 child jobs. One of those child jobs, say ``level 2.60 (Sandwich)`` has 44 child job. One if its children, e.g. ``level 2.60.40 (Immunoglobulin)`` has 330 child jobs at which you are the superfamily level, which is further enumerated into every domain to prepare each structure and calculate features. We also create reproducible training set splits using either the CATH S35 clusters, PDB clusters based on mmseqs, or a calculate new clusters using foldseek.
+First, we created AtomicToil [based on `Toil <https://github.com/DataBiosphere/toil>`_] to create a massively-parallel workflow following the CATH hierarchy or any sets of proteins to clean () each protein and calcuate its biophyscal propteris.  We also create reproducible training set splits using either the CATH S35 clusters, PDB clusters based on mmseqs, or a calculate new clusters using foldseek.
 
 Next, we built Meadowlark to process individual protein structures for use ML. Specifically, we "clean" each structure by adding missing atoms or residues (SCWRL, MODELLER) and add hydrogens and perform a simple energy-minimization, or 'debump' (Pdb2Pqr). We then calculate biophysical properties for the cleaned structures. All of the cleaned structures and biophysical properties are added into HDF file on an HSDS endpoint create and share the dataset.
 
@@ -86,14 +95,3 @@ Prop3D is not meant replace (better) tools such as `Biotite <https://github.com/
    Prop3D.generate_data
    Prop3D.parsers
    Prop3D.util
-
-
-
-
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`minds`
-* :ref:`search`
