@@ -10,12 +10,12 @@ from scipy import spatial
 from Bio import PDB
 from Bio.PDB.NeighborSearch import NeighborSearch
 
-from Prop3D.common.LocalStructure import Structure
+from Prop3D.common.LocalStructure import LocalStructure
 from Prop3D.common.ProteinTables import vdw_radii, vdw_aa_radii
 from Prop3D.common.features import atom_features_by_category, number_of_features, \
     default_atom_features, default_residue_features
 
-class ProteinVoxelizer(Structure):
+class LocalVoxelizedStructure(LocalStructure):
     """DEPRECATED use DistributedVoxelizedStructure. Maintined for legacy code.
     
     A Structure object that handles voxelized volumes. Atoms (with there fill Van der Waals density) 
@@ -24,8 +24,8 @@ class ProteinVoxelizer(Structure):
     bonding) receive a combined feature set according to the features 'combine' rule: Boolean features
     reiecve the max feature vector.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     path : str
     cath_domain : str
     input_format : str
@@ -795,3 +795,5 @@ if __name__ == "__main__":
   for atom in structure.get_atoms():
       print(atom.get_full_id(), atom.serial_number, "of", num_atoms, features, len(features))
       features = structure.get_features_for_atom(atom)
+
+ProteinVoxelizer = LocalVoxelizedStructure

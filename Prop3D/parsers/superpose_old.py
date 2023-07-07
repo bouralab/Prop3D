@@ -62,7 +62,7 @@ class SuperposeOld(object):
             except OSError:
                 pass
 
-class TMAlign(Container, Superpose):
+class TMAlign(Container, SuperposeOld):
     IMAGE = "docker://edraizen/tmalign:latest"
     PARAMETERS = [
         ("moving_pdb_file", "path:in", ""),
@@ -127,7 +127,7 @@ class TMAlign(Container, Superpose):
     def _get_ending(self):
         return ".sup_all_atm_lig"
 
-class MMAlign(TMAlign, Superpose):
+class MMAlign(TMAlign, SuperposeOld):
     IMAGE = "edraizen/mmalign:latest"
     PARAMETERS = [
         ("moving_pdb_file", "path:in", ""),
@@ -156,7 +156,7 @@ class MMAlign(TMAlign, Superpose):
     def _get_ending(self):
         return ".sup_all"
 
-class CEAlign(Container, Superpose):
+class CEAlign(Container, SuperposeOld):
     IMAGE = "edraizen/ce:latest"
     PARAMETERS = [
         ("fixed_pdb_file", "path:in", "file1"),

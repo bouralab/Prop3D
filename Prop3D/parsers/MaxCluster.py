@@ -10,7 +10,7 @@ from joblib import Parallel, delayed
 import pandas as pd
 
 from Prop3D.parsers.container import Container
-from Prop3D.parsers.superpose import TMAlign
+from Prop3D.parsers.superpose.tmalign import TMAlign
 from Prop3D.util import safe_remove
 from Prop3D.util.toil import partitions, map_job, map_job_rv, map_job_rv_list, loop_job_rv
 from Prop3D.util.iostore import IOStore

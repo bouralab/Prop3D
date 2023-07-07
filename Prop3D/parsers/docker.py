@@ -7,14 +7,17 @@ import subprocess
 if "USE_SINGULARITY" in os.environ:
     USE_SINGULARITY = os.environ["USE_SINGULARITY"][0].lower()=="t"
 else:
-    USE_SINGULARITY = subprocess.check_output(["singularity"]).starts_with(
-        "USAGE: singularity")
+    try:
+        USE_SINGULARITY = subprocess.check_output(["singularity"]).starts_with(
+            "USAGE: singularity")
+    except OSError:
+        USE_SINGULARITY = False
 
-if not USE_SINGULARITY:
-    from toil.lib._docker import apiSingularityCall, singularityKill, \
+if USE_SINGULARITY:
+    from Prop3D.parsers.singularity import apiSingularityCall, singularityKill, \
         singularityStop, containerIsRunning
 else:
-    from toil.lib._docker import apiDockerCall, dockerKill, dockerStop, \
+    from toil.lib.docker import apiDockerCall, dockerKill, dockerStop, \
         containerIsRunning
 
 def dockerCheckOutput(*args, **kwargs):

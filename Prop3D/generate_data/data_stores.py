@@ -6,8 +6,8 @@ from Prop3D.util.iostore import IOStore
 class data_stores(object):
     """Gets a data store depending on your JobStore type. Can be eiher a local FileIOStore or an S3IOStore
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     prefix : str, toil.Job, or None
         Where to save or read data store from. If None, current working directory, not recommended
     """

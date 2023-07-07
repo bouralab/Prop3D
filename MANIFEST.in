@@ -1,4 +1,5 @@
 include Prop3D/common/features.yaml
+include Prop3D/custom_featurizers/features.yaml
 include Prop3D/parsers/CNS-Templates/*.inp
 include Prop3D/generate_data/*.csv
 include Prop3D/prodigy/data/naccess.config

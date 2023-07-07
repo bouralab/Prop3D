@@ -1,0 +1,5 @@
+log_level: ERROR
+bucket_name: hsds
+server_name: K3s test HSDS
+root_dir: /tmp
+password_file: /etc/hsds/passwd.txt

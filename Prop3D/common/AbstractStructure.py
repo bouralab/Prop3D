@@ -1,18 +1,26 @@
 import os
 import copy
+from typing import Any, Union, IO, AnyStr, TypeVar
+
+from collections.abc import Iterator
+
 import numpy as np
 import pandas as pd
+from sklearn import preprocessing
+from sklearn.decomposition import PCA
 from scipy.stats import special_ortho_group
 
 from Prop3D.common.ProteinTables import three_to_one
+
+_Self = TypeVar('_Self', bound='AbstractStructure')
 
 class AbstractStructure(object):
     """A base structure class that holds default methods for dealing with structures.
     Subclasses can be created to use different protein libraires, e.g. BioPython, BioTite,
     our own HDF/HSDS distributed stucture.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     name: str
         Name of proten, e.g. PDB or CATH id
     file_mode: str (r, w, r+, w+, etc)
@@ -20,7 +28,7 @@ class AbstractStructure(object):
     coarse_grained: boolean
         Use a residue only model instead of an all atom model. Defualt False. Warning, not fully implemented.
     """
-    def __init__(self, name, file_mode="r", coarse_grained=False):
+    def __init__(self, name: str, file_mode: str = "r", coarse_grained: bool = False) -> None:
         assert hasattr(self, "features"), "Must sublass and instialize features as a recarray or pd.DataFrame"
         self.name = name
         self.file_mode = file_mode
@@ -35,22 +43,22 @@ class AbstractStructure(object):
 
         self.mean_coord_updated = False
 
-    def copy(self, empty=False):
+    def copy(self, empty: bool = False) -> _Self:
         """Create a deep copy of current structure.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         (deprecated) empty: bool
             Don't copy features
         """
         new = copy.deepcopy(self)
         return new
 
-    def deep_copy_feature(self, feature_name):
+    def deep_copy_feature(self, feature_name: str) -> Any:
         """Subclass this method to handle custom copying of specific features
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         feature_name: str
             Feature name to copy
 
@@ -60,7 +68,7 @@ class AbstractStructure(object):
         """
         raise NotImplementedError
 
-    def __deepcopy__(self, memo):
+    def __deepcopy__(self, memo: dict) -> Any:
         """
         """
         cls = self.__class__
@@ -77,14 +85,14 @@ class AbstractStructure(object):
             
         return result
 
-    def __abs__(self):
+    def __abs__(self) -> _Self:
         """Take the absolue value of all features
         """
         new = self.copy()
         new.features = new.features.abs()
         return new
 
-    def __sub__(self, other):
+    def __sub__(self, other: _Self) -> _Self:
         """Subtract feature values from other structure from this stucture.
         """
         new = self.copy()
@@ -97,7 +105,7 @@ class AbstractStructure(object):
             raise TypeError
         return new
 
-    def __add__(self, other):
+    def __add__(self, other: _Self) -> _Self:
         """Add feature values from other structure from this stucture.
         """
         new = self.copy()
@@ -110,7 +118,7 @@ class AbstractStructure(object):
             raise TypeError
         return new
 
-    def __floordiv__(self, other):
+    def __floordiv__(self, other: _Self) -> _Self:
         """Divide feature values from other structure from this stucture.
         """
         new = self.copy()
@@ -123,18 +131,22 @@ class AbstractStructure(object):
             raise TypeError
         return new
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: _Self) -> _Self:
         """Divide feature values from other structure from this stucture.
         """
         return self.__floordiv__(other)
 
-    def normalize_features(self, columns=None):
+    def normalize_features(self, columns: Union[str, list[str]] = None) -> _Self:
         """Normalize features using min max scaling
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         columns: str or list of strs
             Names of feature columns to normalize
+
+        Returns
+        -------
+        A copy of this AbstractStructure with normalized features in the dataframe
         """
         new = self.copy()
 
@@ -162,11 +174,11 @@ class AbstractStructure(object):
 
         return new
 
-    def get_atoms(self, include_hetatms=False, exclude_atoms=None, include_atoms=None):
+    def get_atoms(self, include_hetatms: bool = False, exclude_atoms: bool = None, include_atoms: bool = None) -> Iterator[Any]:
         """Subclass to enumerate protein model for all atoms with options to filter
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         include_hetatms : boolean
             Inclue hetero atoms or not. Default is False.
         exlude_atoms : list
@@ -176,11 +188,11 @@ class AbstractStructure(object):
         """
         raise NotImplementedError
 
-    def filter_atoms(atoms=None, include_hetatms=False, exclude_atoms=None, include_atoms=None):
+    def filter_atoms(atoms: list[Any] = None, include_hetatms: bool = False, exclude_atoms: list[Any] = None, include_atoms: list[Any] = None)  -> Iterator[Any]:
         """Subclass to enumerate protein model for all atoms with options to filter
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         include_hetatms : boolean
             Inclue hetero atoms or not. Default is False.
         exlude_atoms : list
@@ -191,22 +203,22 @@ class AbstractStructure(object):
         yield from self.get_atoms(atoms, include_hetatms=include_hetatms,
             exclude_atoms=exclude_atoms, include_atoms=include_atoms)
 
-    def get_surface(self):
+    def get_surface(self) -> Any:
         """Returns all surface atoms, using DSSP accessible surface value"
         """
         surface = self.features[self.features["residue_buried"]==0]
         return surface
 
-    def get_bfactors(self):
+    def get_bfactors(self) -> Any:
         """Get bfactors for all atoms
         """
         raise NotImplementedError
 
-    def save_pdb(self, path=None, header=None, file_like=False, rewind=True):
+    def save_pdb(self, path: Union[str, None] = None, header: Union[str, list[str], None] = None, file_like: bool = False, rewind: bool = True) -> Union[str, IO[AnyStr]]:
         """Write PDB to file
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         path : None or str
             Path to save PDB file. If None, file_like needs to be True.
         header : str or list of strs
@@ -216,17 +228,17 @@ class AbstractStructure(object):
         rewind : boolean
             If returning a file-like object, rewind the beginning of the file
 
-        Returns:
-        --------
+        Returns
+        -------
         None or file-like object of PDB file data
         """
         raise NotImplementedError
 
-    def write_features(self, features=None, coarse_grained=False, name=None, work_dir=None):
+    def write_features(self, features: Union[str, list[str], None], coarse_grained: bool = False, name: Union[str, None] = None, work_dir: Union[str, None] = None) -> None:
         """Subclass to write features to a spefic file, depnignd on protein loading class, e.g. HDF
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         features : str or list of strs
             Features to write
         course_grained : boolean
@@ -238,11 +250,11 @@ class AbstractStructure(object):
         """
         raise NotImplementedError
 
-    def write_features_to_pdb(self, features_to_use=None, name=None, coarse_grain=False, work_dir=None, other=None):
+    def write_features_to_pdb(self, features_to_use: Union[str, list[str], None], name: Union[str, None] = None, coarse_grain: bool = False, work_dir: Union[str, None] = None, other: Any = None):
         """Write features to PDB files in the bfactor column. One feature per PDB file.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         features_to_use: str or list of strs
             Features to write
         name : None or str
@@ -287,28 +299,28 @@ class AbstractStructure(object):
 
         return outfiles
 
-    def add_features(self, coarse_grained=False, **features):
+    def add_features(self, coarse_grained: bool = False, **features):
         """Subclass to add a feature column to dataset
         """
         raise NotImplementedError
 
-    def get_coords(self, include_hetatms=False, exclude_atoms=None):
+    def get_coords(self, include_hetatms: bool = False, exclude_atoms: list[Any] = None) -> Any:
         """Subclass to return all XYZ coordinates fro each atom
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         include_hetatms : bool
             Include heteroatoms or not. Default is False.
-        exclude_atoms : bool
+        exclude_atoms : list of atoms
             Atoms to exlude while getting coordinates
 
-        Returns:
-        --------
+        Returns
+        -------
         XYZ coordinates from each atom in a specified format of subclass
         """
         raise NotImplementedError
     
-    def get_sequence(self):
+    def get_sequence(self) -> str:
         """Get amino acid sequence from structure
         """
         sequence = ""
@@ -321,13 +333,13 @@ class AbstractStructure(object):
         
         return sequence
 
-    def update_coords(self, coords):
+    def update_coords(self, coords: np.array) -> None:
         """Sublcass to create method to update XYZ coordinates with a new set of coordinates for the same atoms"""
         self.coords = coords
         self.mean_coord = None
         self.mean_coord_updated = False
 
-    def get_mean_coord(self):
+    def get_mean_coord(self) -> np.array:
         """Get the mean XYZ coordinate or center of mass.
         """
         if not self.mean_coord_updated:
@@ -335,28 +347,28 @@ class AbstractStructure(object):
             self.mean_coord_updated = True
         return self.mean_coord
 
-    def get_max_coord(self):
+    def get_max_coord(self) -> np.array:
         """Get the maximum coordinate in each dimanesion
         """
         return np.nanmax(self.coords, axis=0)
 
-    def get_min_coord(self):
+    def get_min_coord(self) -> np.array:
         """Get the minimum coordinate in each dimanesion
         """
         return np.nanmin(self.coords, axis=0)
 
-    def get_max_length(self, buffer=0, pct_buffer=0):
+    def get_max_length(self, buffer: float = 0., pct_buffer: float = 0.) -> float:
         """Get the length of the protein to create a volume around
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         buffer : float
             Amount of space to incldue around volume in Angstroms. Defualt 0
         pct_buffer : float
             Amount of space to incldue around volume in as percentage of the total legnth in Angstroms. Defualt 0
 
-        Returns:
-        --------
+        Returns
+        -------
         length : float
             Max length of protein
         """
@@ -369,18 +381,18 @@ class AbstractStructure(object):
             length += 1
         return length
 
-    def shift_coords(self, new_center=None, from_origin=True):
+    def shift_coords(self, new_center: Union[np.array, None] = None, from_origin: Union[np.array, None] = True) -> np.array:
         """Shift coordinates by setting a new center of mass value or shift to the origin
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         new_center : 3-tuple of floats or None
             XYZ cooridnate of new center. if new_center is None, it will shift to the origin. Default is None.
         from_origin : bool
             Start shift from the origin by first subratcting center of mass. Defualt is True.
 
-        Returns:
-        --------
+        Returns
+        -------
         The new center coordinate
         """
         coords = self.coords
@@ -394,20 +406,20 @@ class AbstractStructure(object):
         self.mean_coord_updated = False
         return np.nanmean(coords, axis=0)
 
-    def shift_coords_to_origin(self):
+    def shift_coords_to_origin(self) -> float:
         """Center structure at the origin
 
-        Returns:
-        --------
+        Returns
+        -------
         The new center coordinate
         """
         return self.shift_coords()
 
-    def orient_to_pai(self, random_flip=False, flip_axis=(0.2, 0.2, 0.2)):
+    def orient_to_pai(self, random_flip: bool = False, flip_axis: Union[tuple[float], np.array] = (0.2, 0.2, 0.2)) -> None:
         """Orient structure to the Principle Axis of Interertia and optionally flip. Modified from EnzyNet
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         random_flip : bool
             Randomly flip around axis. Defualt is False.
         flip_axis: 3-tuple of floats
@@ -421,13 +433,13 @@ class AbstractStructure(object):
 
         self.update_coords(coords)
 
-    def rotate(self, rvs=None, num=1, return_to=None):
+    def rotate(self, rvs: Union[np.array, None] = None, num: int = 1, return_to: Union[tuple[float], np.array, None] = None) -> Iterator[tuple[int, np.array]]:
         """Rotate structure by either randomly in place or with a set rotation matrix. 
         Random rotations matrices are drawn from the Haar distribution (the only uniform 
         distribution on SO(3)) from scipy.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         rvs : np.array (3x3)
             A rotation matrix. If None, a randome roation matrix is used. Default is None.
         num : int
@@ -435,8 +447,8 @@ class AbstractStructure(object):
         return_to : XYZ coordinate
             When finsihed rotating, move structure to this coordinate. Defualt is to the center of mass
 
-        Yields:
-        -------
+        Yields
+        ------
         r : int
             Rotation number
         M : np.array (3x3)
@@ -456,37 +468,43 @@ class AbstractStructure(object):
 
             yield r, M
 
-    def update_bfactors(self, b_factors):
+    def update_bfactors(self, b_factors: list[Any]) -> None:
         """Sublcass to create method to update bfactors with a new set of bfactors for the same atoms"""
         raise NotImplementedError
 
-    def calculate_neighbors(self, d_cutoff=100.0):
+    def calculate_neighbors(self, d_cutoff: float = 100.0) -> Any:
         """Subclass to find all nearest neighbors within a given radius.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         d_cutoff : float
             Distance cutoff to find neighbors. Deualt is 100 Angtroms
         """
         raise NotImplementedError
 
-    def get_vdw(self, atom_or_residue):
+    def get_vdw(self, element_name: str, residue: bool = False) -> float:
         """Get van der walls radii for an atom or residue
         """
+        if not residue:
+            return np.array([vdw_radii.get(element_name.title(), 1.7)])
+        else:
+            #For coarse graining, not really a vdw radius
+            return np.array([vdw_aa_radii.get(element_name, 3.0)])
+
         raise NotImplementedError
 
-    def get_dihedral_angles(self, atom_or_residue):
+    def get_dihedral_angles(self, atom_or_residue: Any) -> float:
         """Get deidral angle for atom (mapped up to residue) or the residue
         """
         raise NotImplementedError
 
-    def get_secondary_structures_groups(self, verbose=False):
+    def get_secondary_structures_groups(self, verbose: bool = False) -> tuple[list[pd.DataFrame], dict[tuple[str], pd.DataFrame], dict[tuple[str], int], dict[tuple[str], str], dict[int, list[Any]], int]:
         """Get groups of adjecent atom rows the belong to the same secondary structure.
         We use DSSP to assing secondary structures to each reisdue mapped down to atoms. 
         If any segment was <4 residues, they were merged the previous and next groups
 
-        Returns:
-        --------
+        Returns
+        -------
         ss_groups : list of pd.DataFrames of atoms in each group
         loop_for_ss : dict of pd.DataFrames of atoms in the loop following each ss group
         original_order : dict
@@ -589,267 +607,5 @@ class AbstractStructure(object):
 
         return ss_groups, loop_for_ss, original_order, ss_type, leading_trailing_residues, number_ss
 
-    def remove_loops(self, verbose=False):
+    def remove_loops(self, verbose: bool = False) -> None:
         raise NotImplementedError
-
-
-class Structure(AbstractStructure):
-    """Not Used. Remove"""
-    def __init__(self, path, name, input_format="pdb",feature_mode="r", features_path=None, residue_feature_mode="r", reset_chain=False, coarse_grained=False):
-        self.path = path
-        if not os.path.isfile(self.path):
-            raise InvalidPDB("Cannot find file {}".format(self.path))
-
-        if self.path.endswith(".gz"):
-            raise InvalidPDB("Error with {}. Gzipped archives not allowed. Please use constructor or util.get_pdb. File: {}".format(pdb, self.path))
-
-        self.input_format = input_format
-        if self.input_format in ["pdb", "pqr"]:
-            parser = PDB.PDBParser()
-        elif self.input_format == "mmcif":
-            parser = PDB.FastMMCIFParser()
-        elif self.input_format == "mmtf":
-            parser = PDB.MMTFParser()
-        else:
-            raise RuntimeError("Invalid PDB parser (pdb, mmcif, mmtf)")
-
-        if name is not None:
-            self.name = name
-            if len(name) == 7:
-                self.cath_domain = cath_domain
-                self.pdb = cath_domain[:4]
-                self.chain = cath_domain[4]
-                self.domNo = cath_domain[5:]
-            else:
-                self.pdb = name
-                self.domNo = "00"
-                reset_chain = True
-        else:
-            self.name = self.pdb = os.path.splitext(os.path.basename(path))[0]
-            self.domNo = "00"
-            reset_chain = True
-
-        self.volume = volume
-
-        try:
-            self.structure = parser.get_structure(self.name, self.path)
-        except KeyError:
-            #Invalid mmcif file
-            raise InvalidPDB("Invalid PDB file: {} (path={})".format(self.name, self.path))
-
-        try:
-            all_chains = list(self.structure[0].get_chains())
-        except (KeyError, StopIteration):
-            raise InvalidPDB("Error get chains for {} {}".format(self.name, self.path))
-
-        if len(all_chains) > 1:
-            raise InvalidPDB("Only accepts PDBs with 1 chain in {} {}".format(self.name, self.path))
-
-        if reset_chain:
-            self.chain = all_chains[0].id
-
-        self.id = self.name #"{}{}{:02d}".format(self.pdb, self.chain, int(self.domNo))
-        self.n_residue_features = len(residue_features)
-        self.n_atom_features = len(atom_features)
-
-        if features_path is None:
-            features_path = os.environ.get("MOLMIMIC_FEATURES", os.getcwd())
-
-        if features_path.endswith("_atom.h5"):
-            self.features_path = os.path.dirname(features_path)
-            self.atom_features_file = features_path
-            self.residue_features_file = os.path.join(self.features_path,
-                "{}_residue.h5".format(self.id))
-        elif features_path.endswith("_residue.h5"):
-            self.residue_features_file = features_path
-            self.atom_features_file = os.path.join(self.features_path,
-                "{}_atom.h5".format(self.id))
-        else:
-            self.atom_features_file = os.path.join(features_path,
-                "{}_atom.h5".format(self.id))
-            self.residue_features_file = os.path.join(features_path,
-                "{}_residue.h5".format(self.id))
-
-        self.features_path = os.path.dirname(self.atom_features_file)
-
-        if not os.path.isdir(os.path.dirname(os.path.abspath(self.atom_features_file))):
-            os.makedirs(os.path.abspath(os.path.dirname(self.atom_features_file)))
-
-        if False and feature_mode == "r" and not os.path.isfile(self.atom_features_file):
-            self.atom_feature_mode = "w+"
-        else:
-            self.atom_feature_mode = feature_mode
-
-        if False and feature_mode == "r" and not os.path.isfile(self.residue_features_file):
-            self.residue_feature_mode = "w+"
-        else:
-            self.residue_feature_mode = residue_feature_mode
-
-        if self.atom_feature_mode == "r":
-            self.atom_features = pd.read_hdf(self.atom_features_file, "table", mode="r")
-        else:
-            atom_index = [self._remove_altloc(a).serial_number for a in self.structure.get_atoms()]
-            self.atom_features = default_atom_feature_df(len(atom_index)).assign(serial_number=atom_index)
-            self.atom_features = self.atom_features.set_index("serial_number")
-
-        if self.residue_feature_mode == "r" and os.path.isfile(self.residue_features_file):
-            self.residue_features = pd.read_hdf(self.residue_features_file, "table", mode="r")
-        else:
-            het, resi, ins = zip(*[self._remove_inscodes(r).get_id() for r in self.structure.get_residues()])
-            self.residue_features = default_residue_feature_df(len(het)).assign(HET_FLAG=het, resi=resi, ins=ins)
-            self.residue_features = self.residue_features.set_index(["HET_FLAG", "resi", "ins"])
-
-        self.atom_feature_names = copy.copy(atom_features)
-        self.residue_feature_names = copy.copy(residue_features)
-
-
-        self.features = self.atom_features
-        super().__init__(name, file_mode=feature_mode, features_path=features_path,
-            coarse_grained=coarse_grained)
-
-    def copy(self, empty=False):
-        new = super().copy(empty=empty)
-
-        #Make sure original files do not get overwritten
-        new.features_path = os.getcwd()
-        unique_id = int.from_bytes(os.urandom(4), sys.byteorder)
-        new.atom_features_file = os.path.join(new.features_path , f"{os.path.basename(self.atom_features_file)}_{unique_id}.h5")
-        new.residue_feature_file = os.path.join(new.features_path , f"{os.path.basename(self.atom_features_file)}_{unique_id}.h5")
-        return new
-
-    def deep_copy_feature(self, feature_name):
-        if feature_name == "atom_features":
-            return pd.DataFrame(
-                np.nan if empty else np.array(copy.deepcopy(self.atom_features.values.tolist())),
-                index=pd.Index(copy.deepcopy(self.atom_features.index.tolist())),
-                columns=copy.deepcopy(self.atom_features.columns.tolist()))
-        elif feature_name == "residue_features":
-            return pd.DataFrame(
-                np.nan if empty else np.array(copy.deepcopy(self.residue_features.values.tolist())),
-                index=pd.Index(copy.deepcopy(self.residue_features.index.tolist())),
-                columns=copy.deepcopy(self.residue_features.columns.tolist()))
-        else:
-            raise KeyError(feature_name)
-
-    def __deepcopy__(self, memo):
-        result = super().__deepcopy__(memo)
-
-    def get_bfactors(self):
-        return [a.bfactor for a in self.structure.get_atoms()]
-
-    def get_atoms(self, atoms, include_hetatms=False, exclude_atoms=None, include_atoms=None):
-        for a in atoms:
-            hetflag, resseq, icode = a.get_parent().get_id()
-            if not include_hetatms and hetflag != ' ':
-                continue
-            if exclude_atoms is not None and a.get_name().strip() in exclude_atoms:
-                continue
-            if include_atoms is not None and a.serial_number not in include_atoms:
-                continue
-            yield a
-
-    def unfold_entities(self, entity_list, target_level="A"):
-        return _unfold_entities(entity_list, target_level=level)
-
-    def save_pdb(self, path=None, header=None, file_like=False, rewind=True):
-        lines = not path and not file_like
-        if path is None:
-            path = StringIO()
-
-        if header is not None:
-            new_header = ""
-            for line in header.splitlines():
-                if not line.startswith("REMARK"):
-                    line = "REMARK {}\n".format(line)
-                new_header += line
-            old_header = self.structure.header
-            self.structure.header = new_header
-
-        writer = PDB.PDBIO()
-        writer.set_structure(self.structure)
-        writer.save(path)
-
-        if file_like and rewind:
-            path.seek(0)
-
-        if lines:
-            path = path.read()
-
-        if header is not None:
-            self.structure.header = old_header
-
-        return path
-
-    def write_features(self, features=None, coarse_grained=False, name=None, work_dir=None):
-        if work_dir is not None or name is not None:
-            if work_dir is None:
-                work_dir = self.features_path
-
-            if name is not None:
-                residue_features_file = os.path.join(work_dir, name)
-                atom_features_file = os.path.join(work_dir, name)
-            else:
-                residue_features_file = os.path.join(work_dir, os.path.basename(self.residue_features_file))
-                atom_features_file = os.path.join(work_dir, os.path.basename(self.atom_features_file))
-        else:
-            residue_features_file = self.residue_features_file
-            atom_features_file = self.atom_features_file
-
-        if features is not None:
-            if not isinstance(features, (list, tuple)):
-                features = [features]
-        else:
-            features = self.residue_feature_names if coarse_grained else self.atom_feature_names
-
-        print("Feats to save", features, atom_features_file)
-
-        if coarse_grained:
-            self.residue_features = self.residue_features.astype(np.float64)
-            self.residue_features = self.residue_features.drop(columns=
-                [col for col in self.residue_features if col not in \
-                features]) #self.residue_feature_names])
-            self.residue_features.to_hdf(residue_features_file, "table")
-        else:
-            self.atom_features = self.atom_features.astype(np.float64)
-            self.atom_features = self.atom_features.drop(columns=
-                [col for col in self.atom_features if col not in \
-                features]) #self.atom_feature_names])
-            self.atom_features.to_hdf(atom_features_file, "table")
-
-    def write_features_to_pdb(self, features_to_use=None, name=None, coarse_grain=False, work_dir=None, other=None):
-        if work_dir is None:
-            work_dir = os.getcwd()
-
-        if features_to_use is None:
-            features = self.atom_features if not coarse_grain else \
-                self.residue_features
-        else:
-            features = self.atom_features.loc[:, features_to_use] if not coarse_grain \
-                else self.residue_features.loc[:, features_to_use]
-
-        bfactors = [a.bfactor for a in self.structure.get_atoms()]
-
-        path = os.path.join(work_dir, self.name)
-        if name is not None:
-            path += "-"+name
-
-        outfiles = {}
-        for feature in features.columns:
-            self.update_bfactors(features.loc[:, feature]*100)
-            outfile = "{}-{}.pdb".format(path, feature)
-            self.save_pdb(outfile)
-            outfiles[feature] = outfile
-
-        self.update_bfactors(bfactors)
-
-        return outfiles
-
-    def add_features(self, coarse_grained=False, **features):
-        assert [len(f)==len(self.features) for f in features.values()]
-        self.features = self.features.assign(**features)
-        self.atom_feature_names += list(features.keys())
-
-    def update_coords(self, coords):
-        super().update_coords(coords)
-        for atom, coord in zip(self.structure.get_atoms(), coords):
-            atom.set_coord(coord)

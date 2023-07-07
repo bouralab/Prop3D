@@ -60,7 +60,10 @@ For single machine setup, please clone the [HSDS](https://github.com/HDFGroup/hs
 
 ```bash
 wget https://zenodo.org/record/6873024/files/Prop3D-20.h5
-hsload Prop3D.h5 /home/$USER/Prop3D.h5 #Change last path to whatever you want to name the file in HSDS
+python -m Prop3D.generate_data.hsds file:load-Prop3D --maxLocalJobs 96 --load Prop3D-20.h5 $PROP3D_DATA #Change last path to whatever you want to name the file in HSDS
+
+#alternitvaly, you can run the slow non-parallelized version:
+#hsload Prop3D.h5 /home/$USER/Prop3D.h5 #Change last path to whatever you want to name the file in HSDS
 ```
 
 ### b. Recreate dataset
@@ -73,9 +76,9 @@ USE_SINGULARITY=True python -m Prop3D.generate_data.main file:prop3D-run --cathc
 ```
 Make sure to replace `/home/$USER/Prop3D.h5` with the actual path of Prop3D inside HSDS.
 
-To run individual PDB files and not use CATH, add parameter `--pdb` with paths to each PDB file or to a text file with a list of pdb files.
+To run individual PDB files and not use CATH, add parameter `--pdb` with PDB ids, paths to each PDB file, or to a text file with a list of PDB IDs or pdb files. Alternatively, you just add `--pdb` with no parmeters to include the PDB database.
 
-For running on AWS or other cloud providers, follow [Preparing your AWS environment](https://toil.readthedocs.io/en/3.15.0/running/cloud/amazon.html#preparing-your-aws-environment) instruction in the Toil documentation
+For running on AWS or other cloud providers, follow [Preparing your AWS environment](https://toil.readthedocs.io/en/3.15.0/running/cloud/amazon.html#preparing-your-aws-environment) instruction in the Toil documentation.
 
 ## Citation
 

@@ -242,7 +242,7 @@ class _Pdb2pqr(Container):
         remove_ter_lines : bool
             Remove TER lines before running since pdb2pqr may choke on them.
             Default True.
-        **kwds:
+        kwds:
             Paramters to pass to pdb2pqr.
 
         Returns
@@ -281,20 +281,16 @@ class _Pdb2pqr(Container):
         pdb_file : str
             Path to pdb file
         remove_ter_lines : bool
-            Remove TER lines before running since pdb2pqr may choke on them.
-            Default True.
+            Remove TER lines before running since pdb2pqr may choke on them. Default True.
         keep_occ_and_b : None, bool, or 2-tuple
             Replace the new partial charge and radius fields with original
             occupancy and bfactor values and create new occupancy and bfactor
             values for added hydrogens in order to create a valid PDB file with
             standard column sizes.
-                None, False: keep the partial charge and radius fields
-                True: Replace fields with originals and new hydogens get an
-                    occupancy of 1.0 and bfactor of 20.0
-                2-tuple (occupancy, bfactor): Replace fields with originals and
-                    new hydogens get the first tuple value, bfactors get the
-                    second tuple value.
-        **kwds:
+            None, False: keep the partial charge and radius fields
+            True: Replace fields with originals and new hydogens get an occupancy of 1.0 and bfactor of 20.0
+            2-tuple (occupancy, bfactor): Replace fields with originals and new hydogens get the first tuple value, bfactors get thesecond tuple value.
+        kwds:
             Paramters to pass to pdb2pqr.
 
         Returns

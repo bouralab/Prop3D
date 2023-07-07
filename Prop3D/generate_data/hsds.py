@@ -54,13 +54,14 @@ def load_h5(job, h5_file, hsds_file, prefix="", hard_link_keys=["validation", "t
                         #Add hard links last
                         job.addFollowOnJobFn(load_h5, h5_file, hsds_file, prefix=f"{prefix}/{key}", 
                                         hard_link_keys=hard_link_keys, hard_link_map=hard_link_map, hardlink_items=True)
-
+                        
                 elif isinstance(h5_object, h5py.Dataset):
                     dset = h5_object[:]
                     shape = h5_object.shape
                     dtype = h5_object.dtype
-                    dset_parameters = {k:getattr(h5_object, k) for k in ('chunks', 'compression',
+                    dset_parameters = {k:getattr(h5_object, k) for k in ('compression',
                         'compression_opts', 'scaleoffset', 'shuffle', 'fletcher32', 'fillvalue')}
+                    dset_parameters['chunks'] = True
                     
                     try:
                         dset = store.require_dataset(f'/{prefix}/{key}', shape, dtype, data=dset, **dset_parameters)
@@ -83,16 +84,19 @@ def load_h5(job, h5_file, hsds_file, prefix="", hard_link_keys=["validation", "t
                             for i, start in enumerate(range(0, len(dset), chunk_size)):
                                 small_data = dset[start:start+chunk_size]
                                 if i==0:
-                                    store.create_table(f'/{prefix}/{key}', dtype=dtype, shape=small_data.shape, data=small_data, **dset_parameters)
+                                    #store.create_table(f'/{prefix}/{key}', dtype=dtype, shape=small_data.shape, data=small_data, **dset_parameters)
+                                    store.create_dataset(f'/{prefix}/{key}', small_data.shape, dtype, data=small_data, **dset_parameters)
+
                                 else:
-                                    store[key].resize((store[f'/{prefix}/{key}'].shape[0] + small_data.shape[0]), axis=0)
-                                    store[key][-small_data.shape[0]:] = small_data
+                                    dset = store[f'/{prefix}/{key}']
+                                    dset.resize(dset.shape[0] + small_data.shape[0], axis=0)
+                                    dset[-small_data.shape[0]:] = small_data
 
 def save_h5(hsds_file, h5_file, prefix="", hard_link_keys=["validation", "training", "test"], hard_link_map={"data_splits":"domains"}, hardlink_items=False):
     """A custom version of hsget to save a H5 file from a an h5 file on an hsds endpoint. Parallel writing does not work, so Toil is not used.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     hsds_file : str
         Path to h5 file on HSDS endpoint
     h5_file : str

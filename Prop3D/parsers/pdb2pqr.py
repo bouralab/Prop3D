@@ -92,12 +92,9 @@ class Pdb2pqr(Container):
             occupancy and bfactor values and create new occupancy and bfactor
             values for added hydrogens in order to create a valid PDB file with
             standard column sizes.
-                None, False: keep the partial charge and radius fields
-                True: Replace fields with originals and new hydogens get an
-                    occupancy of 1.0 and bfactor of 20.0
-                2-tuple (occupancy, bfactor): Replace fields with originals and
-                    new hydogens get the first tuple value, bfactors get the
-                    second tuple value.
+            None, False: keep the partial charge and radius fields
+            True: Replace fields with originals and new hydogens get an occupancy of 1.0 and bfactor of 20.0
+            2-tuple (occupancy, bfactor): Replace fields with originals and new hydogens get the first tuple value, bfactors get the second tuple value.
         **kwds:
             Paramters to pass to pdb2pqr.
 

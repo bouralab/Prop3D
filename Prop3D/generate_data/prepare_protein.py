@@ -1,43 +1,36 @@
-import os, sys
-import subprocess
-import shutil
-import gzip
-import glob
+import os
 import re
+import sys
+import glob
+import gzip
 import time
-import traceback
+import shutil
+import logging
 import requests
+import traceback
+import subprocess
 import itertools as it
 from collections import defaultdict
 from multiprocessing.pool import ThreadPool
-import logging
+
 
 import pandas as pd
-from joblib import Parallel, delayed
-
 from Bio import SeqIO
-
 from toil.job import JobFunctionWrappingJob
 
-#from toil.realtimeLogger import RealtimeLogger
-from Prop3D.util.toil import RealtimeLogger_ as RealtimeLogger
-
-
-from botocore.exceptions import ClientError
-
-from Prop3D.parsers.Electrostatics import Pdb2pqr
 from Prop3D.parsers.SCWRL import SCWRL
 from Prop3D.parsers.MODELLER import MODELLER
-#from Prop3D.parsers.cns import CNSMinimize
+from Prop3D.parsers.Electrostatics import Pdb2pqr
 
-from Prop3D.util.iostore import IOStore
 from Prop3D.util.toil import map_job
 from Prop3D.util.hdf import get_file
-from Prop3D.util import SubprocessChain, safe_remove
-from Prop3D.util.pdb import get_first_chain, get_all_chains, PDB_TOOLS, s3_download_pdb
+from Prop3D.util.iostore import IOStore
 from Prop3D.util.cath import download_cath_domain
-
+from Prop3D.util import SubprocessChain, safe_remove
 from Prop3D.generate_data.data_stores import data_stores
+from Prop3D.util.toil import RealtimeLogger_ as RealtimeLogger
+from Prop3D.util.pdb import get_first_chain, get_all_chains, PDB_TOOLS, s3_download_pdb
+
 
 class PrepareProteinError(RuntimeError):
     def __init__(self, cath_domain, stage, message, job,  errors=None, *args, **kwds):
@@ -584,13 +577,14 @@ def process_sfam(job, sfam_id, pdbFileStoreID, cath, clusterFileStoreID, further
         sdoms = sdoms[sdoms["sfam_id"]==float(sfam_id)]["sdi"].drop_duplicates().dropna()
     #sdoms = sdoms[:1]
     if further_parallize:
-        if cores > 2:
+        if False: #cores > 2:
             #Only makes sense for slurm or other bare-matal clsuters
-            setup_dask(cores)
-            d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
-            RealtimeLogger.info("Running sfam dask {}".format(sdoms))
-            processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi,
-                sdoms_file), axis=1).compute()
+            # setup_dask(cores)
+            # d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
+            # RealtimeLogger.info("Running sfam dask {}".format(sdoms))
+            # processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi,
+            #     sdoms_file), axis=1).compute()
+            pass
         else:
             map_job(job, process_domain, sdoms, pdbFileStoreID)
     else:

@@ -1,19 +1,19 @@
 import os
 import copy
+from typing import Union, Any, IO, AnyStr
+from collections.abc import Iterator
 
 import numpy as np
 import numpy.lib.recfunctions
-from sklearn import preprocessing
-from sklearn.decomposition import PCA
 from Bio.PDB.Atom import Atom
 from Bio.PDB import PDBIO
 
 import h5pyd
 import pandas as pd
 
+
 from Prop3D.common.AbstractStructure import AbstractStructure
-from Prop3D.common.features import default_atom_feature_np, default_residue_feature_np, \
-    atom_features, residue_features
+from Prop3D.common.ProteinTables import vdw_radii, vdw_aa_radii
 
 residue_columns = ["residue_id", "chain", "bfactor", "X", "Y", "Z"]
 atom_columns = ["serial_number", "atom_name", "residue_id", "chain", "bfactor",
@@ -24,8 +24,8 @@ class DistributedStructure(AbstractStructure):
     """A structure class to deal with structures originated from a distributed
      HSDS instance.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     path : str
         path to h5 file in HSDS endpoint to access structures
     key : str
@@ -35,7 +35,7 @@ class DistributedStructure(AbstractStructure):
     coarse_grained: boolean
         Use a residue only model instead of an all atom model. Defualt False. Warning, not fully implemented.
     """
-    def __init__(self, path, key, cath_domain_dataset=None, coarse_grained=False):
+    def __init__(self, path: str, key: str, cath_domain_dataset: Union[str, None] = None, coarse_grained: bool = False) -> None:
         self.path = path
         self.key = key
         self.f = None
@@ -91,11 +91,11 @@ class DistributedStructure(AbstractStructure):
         if self.f is not None:
             self.f.close()
 
-    def deep_copy_feature(self, feature_name, memo):
+    def deep_copy_feature(self, feature_name: str, memo: Any) -> Any:
         """Deep copy a  specific feature
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         feature_name: str
             Feature name to copy
         memo :
@@ -117,11 +117,12 @@ class DistributedStructure(AbstractStructure):
         else:
             raise NotImplementedError
 
-    def get_atoms(self, atoms=None, include_hetatms=False, exclude_atoms=None, include_atoms=None):
+    def get_atoms(self, atoms: Union[np.array, None] = None, include_hetatms: bool = False, 
+                  exclude_atoms: Union[list[int], None] = None, include_atoms: Union[list[int], None] = None) -> Iterator[np.array]:
         """Enumerate over all atoms with options to filter
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         include_hetatms : boolean
             Inclue hetero atoms or not. Default is False.
         exlude_atoms : list
@@ -142,26 +143,26 @@ class DistributedStructure(AbstractStructure):
         for a in data:
             yield a
     
-    def get_residues(self):
+    def get_residues(self) -> Iterator[np.array]:
         """Yields slices of the data for all atoms in single residue
         """
         residues = np.unique(np.stack([a["residue_id"] for a in self.data]))
         for r in residues:
             yield self.data[self.data["residue_id"]==r]
 
-    def unfold_entities(self, entity_list, target_level="A"):
+    def unfold_entities(self, entity_list: np.array, target_level: str = "A") -> Iterator[np.array]:
         """Map lower level such as atoms (single row) into higher entites such as 
         residues (multiple rows). Only works for atoms and chainsAdapted from BioPython
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         entity_list : list
             List of entites to unfold
         target_level : str 
             level to map to, eg: 'A' for atom, 'R' for residue
 
-        Yields:
-        -------
+        Yields
+        ------
         Either single row atoms or multiple rows for residues
         """
         if target_level in ["C", "M", "S"]:
@@ -182,11 +183,12 @@ class DistributedStructure(AbstractStructure):
             for r in residues:
                 yield self.data[self.data["residue_id"]==r]
 
-    def save_pdb(self, path=None, header=None, file_like=False, rewind=True):
+    def save_pdb(self, path: Union[str, None] = None, header: Union[str, None] = None, 
+                 file_like: Union[str, None] = False, rewind: bool = True) -> Union[str, IO[AnyStr]]:
         """Write PDB to file
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         path : None or str
             Path to save PDB file. If None, file_like needs to be True.
         header : str or list of strs
@@ -196,8 +198,8 @@ class DistributedStructure(AbstractStructure):
         rewind : boolean
             If returning a file-like object, rewind the beginning of the file
 
-        Returns:
-        --------
+        Returns
+        -------
         None or file-like object of PDB file data
         """
         writer = PDBIO()
@@ -251,16 +253,19 @@ class DistributedStructure(AbstractStructure):
 
         return output
 
-    def get_bfactors(self):
+    def get_bfactors(self) -> np.array:
         """Get bfactors for all atoms
         """
         return self.data["bfactor"]
 
-    def write_features(self, path=None, key=None, features=None, coarse_grained=False, name=None, work_dir=None, force=None, multiple=False):
+    def write_features(self, path: Union[str, None] = None, key: Union[str, None] = None, 
+                       features=Union[str, list[str], None], coarse_grained: bool = False, 
+                       name: Union[str, None] = None, work_dir: Union[str, None] = None, 
+                       force: Union[bool, int, None] = None, multiple: bool = False) -> None:
         """Write features to an hdf file
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         path : str
             Path to sve HDF file
         key : str
@@ -329,7 +334,7 @@ class DistributedStructure(AbstractStructure):
         #     ds1 = f.create_table(self.key, data=data, chunks=True,
         #         compression="gzip", compression_opts=9)
 
-    def add_features(self, coarse_grained=False, **features):
+    def add_features(self, coarse_grained: bool = False, **features: Any):
         """Add a feature column to dataset
         """
         assert [len(f)==len(self.features) for f in features.values()], "Features must contain same number of atoms (or residues is coarse grained)"
@@ -351,57 +356,66 @@ class DistributedStructure(AbstractStructure):
         self.feature_names += list(features.keys())
         self.features = new_df #self.data[self.feature_names]
 
-    def _to_unstructured(self, x):
+    def _to_unstructured(self, x: np.recarray) -> np.array:
         """Convert a rec array for atom(s) toa  regular numpy array
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         x : structured numpy array
         """
         return np.lib.recfunctions.structured_to_unstructured(x)
 
-    def get_coords(self):
+    def get_coords(self) -> np.array:
         """Get XYZ coordinates for all atoms as numpy array"""
         if self.coords is None:
             self.coords = self._to_unstructured(
                 self.pdb_info[["X", "Y", "Z"]]).round(decimals=4)
         return self.coords
-    #
-    # def orient_to_pai(self, random_flip=False, flip_axis=(0.2, 0.2, 0.2)):
-    #     self.shift_coords_to_origin()
-    #
-    #     coords = PCA(n_components = 3).fit_transform(self.get_coords())
-    #     if random_flip:
-    #         coords = flip_around_axis(coords, axis=flip_axis)
-    #
-    #     self.update_coords(coords)
-    #
-    # def rotate(self, rvs=None, num=1, return_to=None):
-    #     """Rotate structure in randomly in place"""
-    #     for r in range(num):
-    #         if rvs is None:
-    #             M, theta, phi, z = special_ortho_group.rvs(3) #rotation_matrix(random=True)
-    #         else:
-    #             M=rvs
-    #         self.shift_coords_to_origin()
-    #         old_coords = self.get_coords()
-    #         coords = np.dot(self.coords, M).round(decimals=4)
-    #         self.update_coords(coords)
-    #
-    #         self.shift_coords(self.get_mean_coord() if return_to is None else return_to)
-    #
-    #         yield r, M
-    #
-    # def update_coords(self, coords):
-    #     self.coords = coords
-    #     self.mean_coord = None
-    #     self.mean_coord_updated = False
-
-    def update_bfactors(self, b_factors):
+    
+    def get_coord(self, atom: int) -> np.array:
+        """Get XYZ coordinates for an atom
+        
+        Parameters
+        ----------
+        atom : int
+            Serial number of atom
+        
+        Returns
+        -------
+        xyz coordinate of atom
+        """
+        return self.pdb_info[atom]["X", "Y", "Z"].round(decimals=4)
+    
+    def get_elem(self, atom: int) -> str:
+        """Get element type for an atom
+        
+        Parameters
+        ----------
+        atom : int
+            Serial number of atom
+        
+        Returns
+        -------
+        element name of atom
+        """
+        if self.features[atom]["C_elem"] == 1:
+            return "C"
+        elif self.features[atom]["N_elem"] == 1:
+            return "N"
+        elif self.features[atom]["O_elem"] == 1:
+            return "O"
+        elif self.features[atom]["S_elem"] == 1:
+            return "S"
+        elif self.features[atom]["H_elem"] == 1:
+            return "H"
+        else:
+            return "Unk_elem"
+        
+    def update_bfactors(self, b_factors: np.array) -> None:
         """Reset bfactors for all atoms. New numpy array must be same length as the atom array"""
         self.data["bfactor"] = b_factors
 
-    def calculate_neighbors(self, d_cutoff=100.0):
+    def calculate_neighbors(self, d_cutoff: float = 100.0) -> Iterator[tuple[np.array, np.array]]:
         """
         Calculates intermolecular contacts in a parsed struct object.
 
@@ -414,15 +428,20 @@ class DistributedStructure(AbstractStructure):
         -------
         A list of lists of nearby elements at the specified level: [(a1,b2),]
         """
-        ns = spatial.cKDTree(self.coords)
-        return ns.query_pairs(d_cutoff)
+        if not hasattr(self, "atom_tree") or self.atom_tree is None:
+            self.atom_tree = spatial.cKDTree(self.coords)
 
-    def get_vdw(self, atom_or_residue):
+        for a1, a2 in self.atom_tree.query_pairs(d_cutoff):
+            yield self.data[a1], self.data[a1]
+
+        #return self.atom_tree.query_pairs(d_cutoff)
+
+    def get_vdw(self, atom_or_residue: np.array) -> float:
         """Get Van der Waals radius for an atom or if its a residue, return an appmate volume as a sphere around all atoms in residue
         """
         return atom_or_residue["vdw"]
 
-    def remove_loops(self, verbose=False):
+    def remove_loops(self, verbose: bool = False) -> None:
         """Remove atoms present in loop regions
         """
         ss_groups = self.get_secondary_structures_groups(verbose=verbose)

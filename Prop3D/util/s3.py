@@ -7,7 +7,7 @@ def delete_all_sdb_domains():
     conn = boto.sdb.connect_to_region("us-east-1")
     while len(conn.get_all_domains()) > 0:
         for d in conn.get_all_domains():
-        conn.delete_domain(d.name)
+            conn.delete_domain(d.name)
 
 def delete_all_buckets():
     s3 = boto3.resource('s3', "us-east-1", config=botocore.client.Config(signature_version='s3v4'))

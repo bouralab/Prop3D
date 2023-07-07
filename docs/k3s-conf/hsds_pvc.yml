@@ -1,0 +1,12 @@
+# Create persistent volume claim for hsds to store data.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hsds-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi

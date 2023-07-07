@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: hsds
+  name: hsds
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hsds
+  template:
+    metadata:
+      labels:
+        app: hsds
+    spec:
+      containers:
+        -
+          name: sn
+          image: "hdfgroup/hsds:v0.7beta8"
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+          - name: data
+            mountPath: "/data"
+          - name: config
+            mountPath: "/config/"
+          - name: accounts
+            mountPath: "/etc/hsds"
+            readOnly: true 
+          ports:
+            -
+              containerPort: 5101
+          env:
+          - name: NODE_TYPE
+            value: sn
+          - name: HEAD_PORT
+            value: "0" # no head container
+        
+        -
+          name: dn
+          image: "hdfgroup/hsds:v0.7beta8"
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/usr/bin/curl", "-X", "DELETE", "http://127.0.0.1:6101/prestop"]
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+          - name: data
+            mountPath: "/data"
+          - name: config
+            mountPath: "/config/"
+          ports:
+            -
+              containerPort: 6101
+          env:
+          - name: NODE_TYPE
+            value: dn
+          - name: HEAD_PORT
+            value: "0" # no head container
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: hsds-pvc
+      - name: config
+        configMap:
+          name: hsds-config
+      - name: accounts
+        secret:
+          secretName: user-password

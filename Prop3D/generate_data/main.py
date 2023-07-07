@@ -344,10 +344,25 @@ def str2boolorval(v):
         return False
     else:
         return False
+    
+def start_workflow(options):
+    with Toil(options) as workflow:
+        if not workflow.options.restart:
+            if options.no_hsds:
+                cathFileStoreID = workflow.importFile("file://" + os.path.abspath(sfam_file))
+            else:
+                cathFileStoreID = options.hsds_file
+            job = Job.wrapJobFn(start_toil, cathFileStoreID, cathcode=options.cathcode,
+                skip_cathcode=options.skip_cathcode, pdbs=options.pdb, update_features=options.features,
+                use_hsds=not options.no_hsds, work_dir=options.work_dir, force=options.force)
+            workflow.start(job)
+        else:
+            workflow.restart()
 
 if __name__ == "__main__":
     from toil.common import Toil
     from toil.job import Job
+    from toil.jobStores.abstractJobStore import NoSuchJobStoreException
 
     parser = Job.Runner.getDefaultArgumentParser()
 
@@ -379,7 +394,8 @@ if __name__ == "__main__":
         help="Which files should be overwrriten. (0, False)=No files overwritten; (1, True)=Only Features, 2=Structure and Features, 3=Entire database. Default is False.")
     parser.add_argument(
         "--hsds_file",
-        default=None)
+        default=None,
+        help="Path to h5 file on the HSDS endpoint")
     parser.add_argument(
         "--no_hsds",
         action="store_true",
@@ -387,6 +403,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--work_dir",
         default=os.getcwd())
+    parser.add_argument(
+        "--restartable",
+        action="store_true",
+        default=False,
+        help="Create a new workflow or restart if it already exists")
+    
     parser.add_argument("--hs_username", default=None, help="HSDS username. If not provided it will use hsinfo")
     parser.add_argument("--hs_password", default=None, help="HSDS username. If not provided it will use hsinfo")
     parser.add_argument("--hs_endpoint", default=None, help="HSDS username. If not provided it will use hsinfo")
@@ -453,15 +475,15 @@ if __name__ == "__main__":
 
     os.environ["TOIL_START_DIR"] = options.work_dir
 
-    with Toil(options) as workflow:
-        if not workflow.options.restart:
-            if options.no_hsds:
-                cathFileStoreID = workflow.importFile("file://" + os.path.abspath(sfam_file))
-            else:
-                cathFileStoreID = options.hsds_file
-            job = Job.wrapJobFn(start_toil, cathFileStoreID, cathcode=options.cathcode,
-                skip_cathcode=options.skip_cathcode, pdbs=options.pdb, update_features=options.features,
-                use_hsds=not options.no_hsds, work_dir=options.work_dir, force=options.force)
-            workflow.start(job)
-        else:
-            workflow.restart()
+    if options.restartable:
+        options.restart = True
+        try:
+            start_workflow(options)
+        except NoSuchJobStoreException:
+            options.restart = False
+            start_workflow(options)
+
+    else:
+        start_workflow(options)
+
+    

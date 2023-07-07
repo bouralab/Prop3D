@@ -1,14 +1,19 @@
 import os
+from itertools import groupby
+from typing import Union, TypeVar
 
 import pandas as pd
 import numpy as np
 from sklearn.gaussian_process.kernels import RBF
 from Bio import PDB
 import freesasa
+import networkx as nx
+        
 
 import warnings
 warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
 
+from toil.job import Job
 from toil.realtimeLogger import RealtimeLogger
 
 from Prop3D.util.pdb import InvalidPDB
@@ -22,17 +27,15 @@ from Prop3D.parsers.dssp import DSSP
 from Prop3D.parsers.eppic import EPPICApi, EPPICLocal
 from Prop3D.parsers.frustratometeR import FrustratometeR
 
-from Prop3D.common.LocalStructure import LocalStructure, angle_between, get_dihedral
+from Prop3D.common.LocalStructure import LocalStructure, AtomType, ResidueType, angle_between, get_dihedral
 from Prop3D.common.ProteinTables import hydrophobicity_scales
-from Prop3D.common.features import atom_features, residue_features, \
-    atom_features_by_category, residue_features_by_category, default_atom_features, \
-    check_threshold
+from Prop3D.common.features import default_features, custom_features, all_features
 
 class ProteinFeaturizer(LocalStructure):
     """An object to calculate biophysical properties from a single protein in a local structure file
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     path : str
         Path to local structure file
     cath_domain : str
@@ -50,8 +53,8 @@ class ProteinFeaturizer(LocalStructure):
     features_path : path or None
         Path to save feature file. If None, use cwd.
     """
-    def __init__(self, path, cath_domain, job, work_dir,
-      input_format="pdb", force_feature_calculation=False, update_features=None, features_path=None, **kwds):
+    def __init__(self, path: str, cath_domain: str, job: Union[Job, None], work_dir: Union[str, None],
+      input_format:str = "pdb", force_feature_calculation: bool = False, update_features: list[str] = None, features_path: str = None, **kwds) -> None:
         feature_mode = "w+" if force_feature_calculation else "r"
         if features_path is None: # and update_features is not None:
             features_path = work_dir
@@ -66,12 +69,12 @@ class ProteinFeaturizer(LocalStructure):
         self.work_dir = work_dir
         self.update_features = update_features
 
-    def calculate_flat_features(self, coarse_grained=False, only_aa=False, only_atom=False,
-      non_geom_features=False, use_deepsite_features=False, write=True):
+    def calculate_flat_features(self, coarse_grained: bool = False, only_aa: bool = False, only_atom: bool = False,
+      non_geom_features: bool = False, use_deepsite_features: bool = False, write: bool = True) -> tuple[list[pd.DataFrame], str]:
         """Calculate features for each atom (or residue)
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         coarse_grained : bool
             Use residue features. Default false (Atoms features)
         only_aa : bool
@@ -85,8 +88,8 @@ class ProteinFeaturizer(LocalStructure):
         write : bool
             Save features to file after calculating.
 
-        Returns:
-        --------
+        Returns
+        -------
         features : pd.DataFrame
             All caculated features
         feature_file : Str
@@ -111,30 +114,30 @@ class ProteinFeaturizer(LocalStructure):
                 self.write_features()
             return features, self.atom_features_file
 
-    def calculate_flat_residue_features(self, only_aa=False, only_atom=False,
-      non_geom_features=False, use_deepsite_features=False, write=True):
+    def calculate_flat_residue_features(self, only_aa: bool = False, only_atom: bool = False,
+      non_geom_features: bool = False, use_deepsite_features: bool = False, write: bool = True) -> tuple[list[pd.DataFrame], str]:
         """See calculate_flat_features"""
         return self.calculate_flat_features(coarse_grained=True,
             only_aa=only_aa, only_atom=only_atom,
             non_geom_features=non_geom_features,
             use_deepsite_features=use_deepsite_features, write=write)
 
-    def get_features_per_atom(self, residue_list):
+    def get_features_per_atom(self, residue_list: list[ResidueType]) -> list[pd.DataFrame]:
         """Get features for each atom in a list of residues"""
         features = [self.get_features_for_atom(self._remove_altloc(a)) for r in residue_list for a in r]
         return features
 
-    def get_features_per_residue(self, residue_list):
+    def get_features_per_residue(self, residue_list: list[ResidueType]) -> list[pd.DataFrame]:
         """Get features for each atom in a list of residues"""
         features = [self.get_features_for_residue(self._remove_inscodes(r)) for r in residue_list]
         return features
 
-    def calculate_features_for_atom(self, atom, only_aa=False, only_atom=False,
-      non_geom_features=False, use_deepsite_features=False, warn_if_buried=False):
+    def calculate_features_for_atom(self, atom: PDB.Atom, only_aa: bool = False, only_atom: bool = False,
+      non_geom_features: bool = False, use_deepsite_features: bool = False, warn_if_buried: bool = False) -> Union[pd.DataFrame, tuple[pd.DataFrame, bool]]:
         """Calculate features for a single atom
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         atom : Bio.PDB.Atom
             Atom that needs features
         only_aa : bool
@@ -148,15 +151,15 @@ class ProteinFeaturizer(LocalStructure):
         warn_if_buried : bool
             returns a bool if residue is buried or not from DSSP
 
-        Returns:
-        --------
+        Returns
+        -------
         atom_features : pd.DataFrame
             All calcuated atom features
         is_burried : bool
             Is residue buried or not
         """
         if self.update_features is not None:
-            for feat_type, feat_names in atom_features_by_category.items():
+            for feat_type, feat_names in all_features.atom_features_by_category.items():
                 if feat_type in self.update_features:
                     getattr(self, feat_type)(atom)
                 else:
@@ -206,6 +209,7 @@ class ProteinFeaturizer(LocalStructure):
             self.get_deepsite_features(atom, calc_charge=False, calc_conservation=False)
             self.get_evolutionary_conservation_score(atom)
             self.get_frustration(atom)
+            self.get_custom_features(atom)
 
             is_buried = self.atom_features.loc[atom.serial_number, "residue_buried"]
 
@@ -223,12 +227,12 @@ class ProteinFeaturizer(LocalStructure):
         else:
             return self.atom_features
 
-    def calculate_features_for_residue(self, residue, only_aa=False, non_geom_features=False,
-      use_deepsite_features=False, warn_if_buried=False):
+    def calculate_features_for_residue(self, residue: ResidueType, only_aa: bool = False, non_geom_features: bool = False,
+                                       use_deepsite_features: bool = False, warn_if_buried: bool = False) -> Union[pd.DataFrame, tuple[pd.DataFrame, bool]]:
         """Calculate features for a single atom
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         residue : Bio.PDB.Residue
             Residue that needs features
         only_aa : bool
@@ -240,8 +244,8 @@ class ProteinFeaturizer(LocalStructure):
         warn_if_buried : bool
             returns a bool if residue is buried or not from DSSP
 
-        Returns:
-        --------
+        Returns
+        -------
         atom_features : pd.DataFrame
             All calcuated atom features
         is_burried : bool
@@ -287,6 +291,7 @@ class ProteinFeaturizer(LocalStructure):
             self.get_ss(residue)
             self.get_evolutionary_conservation_score(residue)
             self.get_frustration(residue)
+            self.get_custom_features(residue)
             is_buried = self.residue_features.loc[[residue.get_id()], "residue_buried"]
 
         if warn_if_buried:
@@ -294,7 +299,7 @@ class ProteinFeaturizer(LocalStructure):
         else:
             return self.residue_features
 
-    def get_atom_type(self, atom):
+    def get_atom_type(self, atom: AtomType) -> pd.DataFrame:
         """Get Autodock atom type for Bio.PDB.Atom"""
 
         if not hasattr(self, "_autodock"):
@@ -306,39 +311,39 @@ class ProteinFeaturizer(LocalStructure):
         except KeyError:
             atom_type = "Unk_atom"
 
-        if atom_type not in atom_features_by_category["get_atom_type"]: # == "  ":
+        if atom_type not in default_features.atom_features_by_category["get_atom_type"]: # == "  ":
             atom_type = "Unk_atom"
 
-        values = default_atom_features[atom_features_by_category["get_atom_type"]]
+        values = default_features.default_atom_features[default_features.atom_features_by_category["get_atom_type"]]
         values[atom_type] = 1.0
 
-        self.atom_features.loc[atom.serial_number, atom_features_by_category["get_atom_type"]] = values #1.0
+        self.atom_features.loc[atom.serial_number, default_features.atom_features_by_category["get_atom_type"]] = values #1.0
 
         return self.atom_features.loc[atom.serial_number,
-            atom_features_by_category["get_atom_type"]]
+            default_features.atom_features_by_category["get_atom_type"]]
 
-    def get_element_type(self, atom):
+    def get_element_type(self, atom: AtomType) -> pd.DataFrame:
         """Get element name for Bio.PDB.Atom"""
         elems = "CNOS"
         elem_col = "{}_elem".format(atom.element)
 
-        values = default_atom_features[atom_features_by_category["get_element_type"]]
+        values = default_features.default_atom_features[default_features.atom_features_by_category["get_element_type"]]
 
-        if elem_col in atom_features_by_category["get_element_type"]:
+        if elem_col in default_features.atom_features_by_category["get_element_type"]:
             values[elem_col] = 1.0
         else:
             values["Unk_elem"] = 1.0
 
-        self.atom_features.loc[atom.serial_number, atom_features_by_category["get_element_type"]] = values
+        self.atom_features.loc[atom.serial_number, default_features.atom_features_by_category["get_element_type"]] = values
 
         return self.atom_features.loc[atom.serial_number,
-            atom_features_by_category["get_element_type"]]
+            default_features.atom_features_by_category["get_element_type"]]
 
-    def get_vdw(self, atom_or_residue):
+    def get_vdw(self, atom_or_residue: Union[AtomType, ResidueType]) -> pd.DataFrame:
         """Get Van der Waals radius for Bio.PDB.Atom"""
         vdw = super().get_vdw(atom_or_residue)
 
-        if isinstance(atom_or_residue, PDB.Atom.Atom):
+        if isinstance(atom_or_residue, AtomType):
             atom = atom_or_residue
             self.atom_features.loc[atom.serial_number, "vdw_radii"] = vdw
             return self.atom_features.loc[atom.serial_number, "vdw_radii"]
@@ -349,12 +354,12 @@ class ProteinFeaturizer(LocalStructure):
             self.residue_features.loc[idx, "vdw_radii"] = vdw
             return self.residue_features.loc[idx, ["vdw_radii"]]
 
-    def get_charge_and_electrostatics(self, atom_or_residue, only_charge=False,
-      only_bool=False, calculate=True):
+    def get_charge_and_electrostatics(self, atom_or_residue: Union[AtomType, ResidueType], only_charge: bool = False,
+                                      only_bool: bool = False, calculate: bool = True) -> pd.DataFrame:
         """Run pdb2par and APBS on an atom or residue to get charge and electrostatic information
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         atom_or_residue : Bio.PDB.Atom or Bio.PDB.Residue
         only_charge : bool
             Only run pdb2pqr to get charge
@@ -374,12 +379,12 @@ class ProteinFeaturizer(LocalStructure):
         else:
             raise RuntimeError("Input must be Atom or Residue: {}".format(type(atom_or_residue)))
 
-    def get_charge_and_electrostatics_for_residue(self, atom_or_residue, only_charge=False,
-      only_bool=False, calculate=True):
+    def get_charge_and_electrostatics_for_residue(self, atom_or_residue: Union[AtomType, ResidueType], only_charge: bool = False,
+                                                  only_bool: bool = False, calculate: bool = True) -> pd.DataFrame:
         """Run pdb2par and APBS on an atom or residue to get charge and electrostatic information at the residue level
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         atom_or_residue : Bio.PDB.Atom or Bio.PDB.Residue
         only_charge : bool
             Only run pdb2pqr to get charge
@@ -413,16 +418,16 @@ class ProteinFeaturizer(LocalStructure):
 
         charge = [
             charge_value,
-            check_threshold("neg_charge", charge_value, residue=True), #float(charge_value < 0)
-            check_threshold("pos_charge", charge_value, residue=True) #float(charge_value > 0)
+            default_features.check_threshold("neg_charge", charge_value, residue=True), #float(charge_value < 0)
+            default_features.check_threshold("pos_charge", charge_value, residue=True) #float(charge_value > 0)
             ]
-        cols = residue_features_by_category["get_charge_and_electrostatics"][:3]
+        cols = default_features.residue_features_by_category["get_charge_and_electrostatics"][:3]
         if not only_charge:
             charge += [
                 electrostatic_pot_value,
-                check_threshold("is_electronegative", electrostatic_pot_value, residue=True) #float(electrostatic_pot_value < 0)
+                default_features.check_threshold("is_electronegative", electrostatic_pot_value, residue=True) #float(electrostatic_pot_value < 0)
                 ]
-            cols += residue_features_by_category["get_charge_and_electrostatics"][3:]
+            cols += default_features.residue_features_by_category["get_charge_and_electrostatics"][3:]
 
         if only_bool:
             charge = charge[1:3]
@@ -435,12 +440,12 @@ class ProteinFeaturizer(LocalStructure):
         self.residue_features.loc[idx, cols] = charge
         return self.residue_features.loc[idx, cols]
 
-    def get_charge_and_electrostatics_for_atom(self, atom, only_charge=False,
-      only_bool=False, calculate=True):
+    def get_charge_and_electrostatics_for_atom(self, atom: AtomType, only_charge: bool = False,
+                                               only_bool: bool = False, calculat: bool = True) -> pd.DataFrame:
         """Run pdb2par and APBS on an atom to get carge and electrostatic information
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         atom: Bio.PDB.Atom
         only_charge : bool
             Only run pdb2pqr to get charge
@@ -450,7 +455,7 @@ class ProteinFeaturizer(LocalStructure):
             Should calculate values, otherwise just look them up. Defautl True
         """
         if not isinstance(atom, PDB.Atom.Atom):
-            raise RuntimeErorr("Input must be Atom")
+            raise RuntimeError("Input must be Atom")
 
         if self.update_features is not None:
             if "electrostatic_potential" not in self.update_features and \
@@ -496,18 +501,18 @@ class ProteinFeaturizer(LocalStructure):
 
             charge = [
                 charge_value,
-                check_threshold("neg_charge", charge_value), #float(charge_value < 0)
-                check_threshold("pos_charge", charge_value) #float(charge_value > 0)
+                default_features.check_threshold("neg_charge", charge_value), #float(charge_value < 0)
+                default_features.check_threshold("pos_charge", charge_value) #float(charge_value > 0)
                 ]
 
-        cols = atom_features_by_category["get_charge_and_electrostatics"][:3]
+        cols = default_features.atom_features_by_category["get_charge_and_electrostatics"][:3]
         if not only_charge:
             if calculate:
                 charge += [
                     electrostatic_pot_value,
                     check_threshold("is_electronegative", electrostatic_pot_value) #float(electrostatic_pot_value < 0)
                 ]
-            cols += atom_features_by_category["get_charge_and_electrostatics"][3:]
+            cols += default_features.atom_features_by_category["get_charge_and_electrostatics"][3:]
 
         if only_bool:
             if calculate:
@@ -525,7 +530,7 @@ class ProteinFeaturizer(LocalStructure):
 
         return self.atom_features.loc[idx, cols]
 
-    def get_concavity(self, atom_or_residue):
+    def get_concavity(self, atom_or_residue: Union[AtomType, ResidueType]) -> pd.DataFrame:
         """Get concavity of an atom or residue by running CX
         """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
@@ -537,16 +542,16 @@ class ProteinFeaturizer(LocalStructure):
 
             concavity = np.array([
                 concavity_value,
-                check_threshold("is_concave", concavity_value, residue=True) #float(concavity_value <= 2)
+                default_features.check_threshold("is_concave", concavity_value, residue=True) #float(concavity_value <= 2)
                 ])
 
             idx = residue.get_id()
-            cols = residue_features_by_category["get_concavity"]
+            cols = default_features.residue_features_by_category["get_concavity"]
             self.residue_features.loc[idx, cols] = concavity
 
             return self.residue_features.loc[idx, cols]
         else:
-            raise RuntimeErorr("Input must be Atom or Residue")
+            raise RuntimeError("Input must be Atom or Residue")
 
         if not hasattr(self, "_cx"):
             cx = CX(work_dir=self.work_dir, job=self.job)
@@ -557,16 +562,16 @@ class ProteinFeaturizer(LocalStructure):
 
         concavity = np.array([
             concavity_value,
-            check_threshold("is_concave", concavity_value) #float(concavity_value <= 2)
+            default_features.check_threshold("is_concave", concavity_value) #float(concavity_value <= 2)
             ])
 
         idx = atom.serial_number
-        cols = atom_features_by_category["get_concavity"]
+        cols = default_features.atom_features_by_category["get_concavity"]
         self.atom_features.loc[idx, cols] = concavity
 
         return self.atom_features.loc[idx, cols]
 
-    def get_hydrophobicity(self, atom_or_residue):
+    def get_hydrophobicity(self, atom_or_residue: Union[AtomType, ResidueType]) -> pd.DataFrame:
         """Get the hydrophocity of an atom or residue using three different scales: 
             Kyte-Doolite (kd), Biological, and Octanal
         """
@@ -591,23 +596,23 @@ class ProteinFeaturizer(LocalStructure):
 
         result = np.array([
             hydrophobicity,
-            check_threshold("is_hydrophobic", hydrophobicity, residue=not use_atom), #float(concavity_value <= 2)
+            default_features.check_threshold("is_hydrophobic", hydrophobicity, residue=not use_atom), #float(concavity_value <= 2)
             biological,
             octanal
             ])
 
         if use_atom:
             idx = atom.serial_number
-            cols = atom_features_by_category["get_hydrophobicity"]
+            cols = default_features.atom_features_by_category["get_hydrophobicity"]
             self.atom_features.loc[idx, cols] = result
             return self.atom_features.loc[idx, cols]
         else:
             idx = residue.get_id()
-            cols = residue_features_by_category["get_hydrophobicity"]
+            cols = default_features.residue_features_by_category["get_hydrophobicity"]
             self.residue_features.loc[idx, cols] = result
             return self.residue_features.loc[idx, cols]
 
-    def get_accessible_surface_area(self, atom_or_residue, save=True):
+    def get_accessible_surface_area(self, atom_or_residue: Union[AtomType, ResidueType], save: bool = True)  -> Union[pd.DataFrame, pd.Series]:
         """Returns the ASA value from freesasa (if inout is Atom) and the DSSP
         value (if input is Atom or Residue)
 
@@ -625,7 +630,7 @@ class ProteinFeaturizer(LocalStructure):
         else:
             raise RuntimeError("Input must be Atom or Residue")
 
-    def get_accessible_surface_area_atom(self, atom, save=True):
+    def get_accessible_surface_area_atom(self, atom: AtomType, save: bool = True) -> Union[pd.DataFrame, pd.Series]:
         """Returns the ASA value from freesasa (if inout is Atom) and the DSSP
         value (if input is Atom or Residue)
 
@@ -658,7 +663,8 @@ class ProteinFeaturizer(LocalStructure):
         else:
             return pd.Series([atom_area], index=["atom_asa"])
 
-    def get_accessible_surface_area_residue(self, atom_or_residue, acc_threshold=0.2, save=True):
+    def get_accessible_surface_area_residue(self, atom_or_residue: Union[AtomType, ResidueType], acc_threshold: float = 0.2, 
+                                            save: bool = True) -> Union[pd.DataFrame, pd.Series]:
         """Returns the ASA value from freesasa (if inout is Atom) and the DSSP
         value (if input is Atom or Residue)
 
@@ -698,7 +704,7 @@ class ProteinFeaturizer(LocalStructure):
 
         if is_atom:
             idx = atom.serial_number
-            cols = atom_features_by_category["get_accessible_surface_area"][1:]
+            cols = default_features.atom_features_by_category["get_accessible_surface_area"][1:]
             self.atom_features.loc[idx, cols] = asa
             if save:
                 return self.atom_features.loc[idx, cols]
@@ -706,14 +712,14 @@ class ProteinFeaturizer(LocalStructure):
                 return pd.Series(asa, index=cols)
         else:
             idx = residue.get_id()
-            cols = residue_features_by_category["get_accessible_surface_area"]
+            cols = default_features.residue_features_by_category["get_accessible_surface_area"]
             self.residue_features.loc[idx, cols] = asa
             if save:
                 return self.residue_features.loc[idx, cols]
             else:
                 return pd.Series(asa, index=cols)
 
-    def get_residue(self, atom_or_residue):
+    def get_residue(self, atom_or_residue: Union[AtomType, ResidueType]) -> pd.DataFrame:
         """Get a one hote encoded represatnation the amino acid from atom or residue
         """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
@@ -724,7 +730,7 @@ class ProteinFeaturizer(LocalStructure):
             is_atom = False
             residue = atom_or_residue
         else:
-            raise RuntimeErorr("Input must be Atom or Residue")
+            raise RuntimeError("Input must be Atom or Residue")
 
         # residues = [0.]*(len(PDB.Polypeptide.aa1)+1) #one hot residue
         #
@@ -743,14 +749,14 @@ class ProteinFeaturizer(LocalStructure):
             self.atom_features.loc[atom.serial_number, all_aas] = 0.
             self.atom_features.loc[atom.serial_number, col] = 1.
             return self.atom_features.loc[atom.serial_number,
-                atom_features_by_category["get_residue"]]
+                default_features.atom_features_by_category["get_residue"]]
         else:
             self.residue_features.loc[residue.get_id(), all_aas] = 0.
             self.residue_features.loc[residue.get_id(), col] = 1.
             return self.residue_features.loc[residue.get_id(),
-                residue_features_by_category["get_residue"]]
+                default_features.residue_features_by_category["get_residue"]]
 
-    def get_ss(self, atom_or_residue):
+    def get_ss(self, atom_or_residue: Union[AtomType, ResidueType]) -> pd.Series:
         """Get 3- and 7- secondary strcutre codes from DSSP for an atom or residue as well as the phi and psi angles
         """
         if isinstance(atom_or_residue, PDB.Atom.Atom):
@@ -804,16 +810,16 @@ class ProteinFeaturizer(LocalStructure):
 
         if is_atom:
             idx = atom.serial_number
-            cols = atom_features_by_category["get_ss"]
+            cols = default_features.atom_features_by_category["get_ss"]
             self.atom_features.loc[idx, cols] = ss
             return self.atom_features.loc[idx, cols]
         else:
             idx = residue.get_id()
-            cols = residue_features_by_category["get_ss"]
+            cols = default_features.residue_features_by_category["get_ss"]
             self.residue_features.loc[idx, cols] = ss
             return self.residue_features.loc[idx, cols]
 
-    def get_deepsite_features(self, atom, calc_charge=True, calc_conservation=True):
+    def get_deepsite_features(self, atom: AtomType, calc_charge: bool = True, calc_conservation: bool = True):
         """Use DeepSite rules for autodock atom types: 
             is_hydrophobic (C or A)
             is_aromatic (A)
@@ -821,8 +827,8 @@ class ProteinFeaturizer(LocalStructure):
             is_hbond_donor (HS or HD)
             is_metal (MG, ZN, MN, CA, FA) (not relavent since all hetatms are likley removed)
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         atom : Bio.PDB.Atom
             Atom to apply features to
         calc_charge : bool
@@ -843,7 +849,7 @@ class ProteinFeaturizer(LocalStructure):
             atom_type = "  "
 
         idx = atom.serial_number
-        cols = atom_features_by_category["get_deepsite_features"][:5]
+        cols = default_features.atom_features_by_category["get_deepsite_features"][:5]
 
         features = np.array([ #zeros(nFeatures, dtype=bool)
             #hydrophobic
@@ -871,12 +877,12 @@ class ProteinFeaturizer(LocalStructure):
 
         return self.atom_features.loc[idx, cols]
 
-    def get_evolutionary_conservation_score(self, atom_or_residue, eppic=True,
-      only_bool=False, run_eppic_for_domain_on_failure=False):
+    def get_evolutionary_conservation_score(self, atom_or_residue: Union[AtomType, ResidueType], eppic=True,
+                                            only_bool=False, run_eppic_for_domain_on_failure=False) -> pd.Series:
         """Get the evolutionary conservation score measured by the EPPIC entropy value.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         eppic : bool
             DEPRECATED. It is always using EPPIC now
         only_bool : bool
@@ -888,11 +894,11 @@ class ProteinFeaturizer(LocalStructure):
             use_atom = True
             atom = atom_or_residue
             residue = atom_or_residue.get_parent()
-            cols = atom_features_by_category["get_evolutionary_conservation_score"]
+            cols = default_features.atom_features_by_category["get_evolutionary_conservation_score"]
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
             use_atom = False
             residue = atom_or_residue
-            cols = residue_features_by_category["get_evolutionary_conservation_score"]
+            cols = default_features.residue_features_by_category["get_evolutionary_conservation_score"]
         else:
             raise RuntimeError("Input must be Atom or Residue")
 
@@ -922,7 +928,7 @@ class ProteinFeaturizer(LocalStructure):
 
         result = pd.Series(np.empty(len(cols)), index=cols, dtype=np.float64)
         result["eppic_entropy"] = self._eppic.get(residue.get_id(), np.nan)
-        result["is_conserved"] = check_threshold("is_conserved", result["eppic_entropy"], residue=not use_atom)
+        result["is_conserved"] = default_features.check_threshold("is_conserved", result["eppic_entropy"], residue=not use_atom)
 
         if only_bool:
             return result["is_conserved"]
@@ -936,17 +942,17 @@ class ProteinFeaturizer(LocalStructure):
 
         return result
 
-    def get_frustration(self, atom_or_residue):
+    def get_frustration(self, atom_or_residue: Union[AtomType, ResidueType]) -> None:
         """Calculate frustration for an atom or residue"""
         if isinstance(atom_or_residue, PDB.Atom.Atom):
             use_atom = True
             atom = atom_or_residue
             residue = atom_or_residue.get_parent()
-            cols = atom_features_by_category["get_frustration"]
+            cols = default_features.atom_features_by_category["get_frustration"]
         elif isinstance(atom_or_residue, PDB.Residue.Residue):
             use_atom = False
             residue = atom_or_residue
-            cols = residue_features_by_category["get_frustration"]
+            cols = default_features.residue_features_by_category["get_frustration"]
         else:
             raise RuntimeError("Input must be Atom or Residue")
 
@@ -975,16 +981,15 @@ class ProteinFeaturizer(LocalStructure):
         result["sd_energy"] = frust_values.get("SDEnergy", np.nan)
         result["frustration_index"] = frust_values.get("FrstIndex", np.nan)
 
-        result["is_highly_frustrated"] = check_threshold("is_highly_frustrated", frust_values.get("FrstIndex", np.nan), residue=not use_atom)
-        result["is_minimally_frustrated"] = check_threshold("is_minimally_frustrated", frust_values.get("FrstIndex", np.nan), residue=not use_atom)
-        result["has_nuetral_frustration"] = check_threshold("has_nuetral_frustration", frust_values.get("FrstIndex", np.nan), residue=not use_atom)
+        result["is_highly_frustrated"] = default_features.check_threshold("is_highly_frustrated", frust_values.get("FrstIndex", np.nan), residue=not use_atom)
+        result["is_minimally_frustrated"] = default_features.check_threshold("is_minimally_frustrated", frust_values.get("FrstIndex", np.nan), residue=not use_atom)
+        result["has_nuetral_frustration"] = default_features.check_threshold("has_nuetral_frustration", frust_values.get("FrstIndex", np.nan), residue=not use_atom)
         
 
-    def calculate_graph(self, d_cutoff=100., edgelist=False, write=True):
+    def calculate_graph(self, d_cutoff: float = 100., edgelist: bool = False, write: bool = True) -> tuple[nx.Graph, str]:
         """Build a residue-residue network, linking residues if the distances between is less than given cutoff and 
         give attributes to each edge. Network is saved as a pd.DataFrame or edge list.
         """
-        import networkx as nx
         structure_graph = nx.Graph()
         for r1, r2 in self.calculate_neighbors(d_cutoff=d_cutoff):
             structure_graph.add_edge(r1.get_id(), r2.get_id(),
@@ -1001,7 +1006,7 @@ class ProteinFeaturizer(LocalStructure):
 
         return structure_graph, edge_file
 
-    def get_edge_features(self, r1, r2):
+    def get_edge_features(self, r1: ResidueType, r2: ResidueType) -> dict[str, float]:
         """Calculate edge features for a pair of residues.
 
         Features:
@@ -1090,3 +1095,85 @@ class ProteinFeaturizer(LocalStructure):
             "is_short_welltype": frust_values.get("Welltype","")=="short",
             "is_long_welltype": frust_values.get("Welltype","")=="long",
         }
+
+    def calculate_custom_features(self) -> None:
+        if not hasattr(self, "custom_feature_values"):
+            self.custom_feature_values = {}
+            self.custom_feature_modules = {}
+        
+        for category in custom_features.features:
+            for parser_name, features in groupby(list(category.values())[0], key=lambda feat: feat["parser"]):
+                try:
+                    parser = self.custom_feature_modules[category]
+                except KeyError:
+                    parser = import_module(parser_name)(work_dir=self.work_dir)
+                    self.custom_feature_modules[category] = parser
+                
+                atom_results, residue_results = parser.calculate_prop3D(self.path, self.structure)
+
+                if atom_results is None:
+                    residue_results = pd.DataFrame(np.nan, index=self.residue_features.index)
+                
+                if residue_results is None:
+                    residue_results = pd.DataFrame(np.nan, index=self.residue_features.index)#, columns=custom_features.atom_features_by_category[category])
+                
+                if len(residue_results.columns) != custom_features.residue_features_by_category[category] or \
+                    len(atom_results.columns) != custom_features.atom_features_by_category[category]:
+                    #Map features from atoms to residues and residues to atoms
+                    resi_to_atoms = {resi.get_id():[a.serial for a in resi] for resi in self.get_residues()}
+
+                    #Create boolean/thresholded features
+                    update_atom_cols = False
+                    for feat in custom_features.atom_feature_categories[category]:
+                        if feat["name"] not in atom_results:
+                            try:
+                                source_feature = feat["from_feature"]
+                            except KeyError:
+                                raise KeyError(f"Feature '{feat['name']} has no source feature ('from_feature') attribute")
+                            
+                            new_feat = atom_results[source_feature].apply(lambda v: custom_features.check_threshold(feat["name"], v, residue=False))
+                            atom_results = atom_results.assign(**{feat["name"]: new_feat})
+                            update_atom_cols = True
+                    if update_atom_cols:
+                        atom_results = atom_results[custom_features.atom_features_by_category(category)]
+
+                    update_resi_cols = False
+                    for feat in custom_features.residue_feature_categories[category]:
+                        if feat["name"] not in residue_results:
+                            try:
+                                source_feature = feat["from_feature"]
+                            except KeyError:
+                                raise KeyError(f"Feature '{feat['name']} has no source feature ('from_feature') attribute")
+                            
+                            new_feat = residue_results[source_feature].apply(lambda v: custom_features.check_threshold(feat["name"], v, residue=True))
+                            residue_results = residue_results.assign(**{feat["name"]: new_feat})
+                            update_resi_cols = True
+                    if update_resi_cols:
+                        residue_results = residue_results[custom_features.residue_features_by_category(category)]
+
+                    #Map atom features to residue feature through aggegation rules
+                    aggregate_rules = {"sum": np.sum, "min":np.min, "max":np.max, "mean":np.mean, "avg":np.mean}
+                    for feat in custom_features.residue_feature_categories[category]:
+                        if feat["name"] not in residue_results and feat.get("from_feature", None) is None:
+                            try:
+                                agg = aggregate_rules[feat["aggregate"]]
+                            except KeyError:
+                                raise KeyError(f"Aggregate rule must be: {aggregate_rules.keys()}")
+                            
+                            residue_results = residue_results.assign(**{feat: np.nan})
+                            
+                            for resi in self.get_residues():
+                                idx = resi_to_atoms[resi.get_id()]
+                                residue_results.loc[resi.get_id(), feat] = agg(atom_results.loc[idx, feat])
+
+                    #Map residue features to atoms by copying the features to all atoms in the residue
+                    for feat in custom_features.atom_feature_categories[category]:
+                        if feat["name"] not in atom_results:
+                            atom_results = atom_results.assign(**{feat: np.nan})
+
+                            for resi, atoms in resi_to_atoms.items():
+                                atom_results.loc[atoms, feat] = residue_results.loc[resi.get_id(), feat]
+
+
+
+

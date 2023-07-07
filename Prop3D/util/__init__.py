@@ -161,15 +161,17 @@ def izip_missing(iterA, iterB, **kwds):
     """Iterate through two iterables, while making sure they are in the same
     order. If there are missing values, you can skip the value entirely or
     return only the iterator with the value and a special fill value.
-    Parameters:
-    ___________
+    
+    Parameters
+    ----------
     iterA : the first iterator
     iterB : the second iterator
     key : function that returns items to compare. Must return strings, ints, or
         an object with the __lt__, __gt__, and __eq__ methods. Optional.
     fillvalue : The value to return if the item is missing. Optional.
-    Returns:
-    ________
+    
+    Returns
+    -------
     A : item from first iterator, or fillValue
     B : item from second iterator, or fillValue
     """

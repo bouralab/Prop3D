@@ -3,22 +3,12 @@ pandas
 tables
 scikit-learn
 Biopython
-seaborn
-tqdm
-dask
-dask[dataframe]
 joblib
-tornado
-toolz >= 0.7.3
-partd >= 0.3.8
-cloudpickle >= 0.2.1
 tables
 freesasa
-#boto3
 botocore
-awscli
 spython
 h5py
 h5pyd
-toil
 biotite
+networkx

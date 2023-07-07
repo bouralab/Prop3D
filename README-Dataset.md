@@ -42,6 +42,14 @@ Follow the instructions at https://gitlab.com/uva-arc/hobo-request/-/blob/main/d
 
 #### 1. Next, load the dataset into HSDS: <a name="use-hsds-load"></a>
 
+We recommend loaded the data using our Toil-parallelized hsload inside Prop3D
+
+```bash
+python -m Prop3D.generate_data.hsds file:load-Prop3D --maxLocalJobs 96 --load Prop3D-20.h5 $PROP3D_DATA
+```
+
+Alternatively, you can use the original hsload script from h5pyd, but it is mich slower:
+
 ```bash
 hsload Prop3D-20.h5 $PROP3D_DATA
 ```
@@ -53,7 +61,7 @@ import os
 import h5pyd
 
 with h5pyd.File(os.environ["PROP3d_DATA"], use_cache=False) as f:
-     domain = f["2/30/30/100/domains/1kq2A00/atom"][:]
+    domain = f["2/30/30/100/domains/1kq2A00/atom"][:]
 
 ... #Code to process domain
 ```
@@ -90,14 +98,13 @@ for i, (r, M) in enumerate(structure.rotate(num=5)):
     np.savez(f"1kq2A00_rotation{i}.npz", coords=coords, feats=feats)
 ```
 
-#### 4. To train ML models in PyTorch Lightning, use the dataloader from DeepUrfold: <a name="use-hsds-deepurfold"></a>
+#### 4. To train ML models in PyTorch Lightning, use the custom PyTorch Datasets: <a name="use-hsds-deepurfold"></a>
 
-To be written. Please see [DistributedDomainStructureDataModule](https://github.com/bouralab/DeepUrfold/blob/main/DeepUrfold/DataModules/DistributedDomainStructureDataModule.py) and [DistributedDomainStructureDataset](https://github.com/edraizen/DeepUrfold/blob/main/DeepUrfold/Datasets/DistributedDomainStructureDataset.py) from the [DeepUrfold github repo](https://github.com/bouralab/DeepUrfold) for more info.
-
+We provide PyTorch Datasets to convert the Prop3D dataset into (i) voxelized representations; (ii) sequence-ready models; (iii) graph-based models (input for ProteinMPNN). The Datasets be found in `Prop3D.ml.datasets`, with accompanying examples in `Prop3D.ml.examples`.
 
 ### 3. If you want to use the raw .h5 locally with only h5py (no HSDS), run: <a name="use-h5"></a>
 
-This is only for testing purposes. Not many of the Prop3D analyss functionality will work with raw .h5 files.
+This is only for testing purposes. Not many of the Prop3D functionality will work with raw .h5 files.
 
 ```bash
 import os

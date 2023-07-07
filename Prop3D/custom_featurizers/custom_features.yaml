@@ -1,0 +1,76 @@
+- hs_exposure: # Unique Group Name
+        - name: "hs_exposure" # Unique Feature Name
+          default: 0.
+          aggregate: mean # How to combine for multiple values, e.g. for overlapping atoms in a voxel or if atom feature, how to combine to create a residue level feature
+          residue: true #True if calculated at the residue level
+          bool: false #True if value is boolean
+          min: -180
+          max: 180
+          parser: Prop3D.custom_featurizers.HalfSphereExposure
+        
+        - name: "hs_exposure_norm"
+          default: 0.
+          aggregate: mean
+          residue: true
+          bool: false
+          min: 0
+          max: 1
+          parser: Prop3D.custom_featurizers.HalfSphereExposure
+
+        - name: 'is_exposed' #Create new boolean value based on thresholding previous values
+          default: 0
+          aggregate: max
+          residue: true
+          bool: true
+          min: 0.
+          max: 1.
+          threshold: 0.2
+          from_feature: "hs_exposure_norm"
+          equality: ">="
+          parser: Prop3D.custom_featurizers.HalfSphereExposure
+        
+        - name: 'is_buried'
+          default: 0
+          aggregate: max
+          residue: true
+          bool: true
+          min: 0.
+          max: 1.
+          threshold: 0.2
+          from_feature: "hs_exposure_norm"
+          equality: "<"
+          parser: Prop3D.custom_featurizers.HalfSphereExposure
+
+- druggability: # Unique Group Name
+        - name: "druggability_score" # Unique Feature Name
+          default: 0.
+          aggregate: mean # How to combine for multiple values, e.g. for overlapping atoms in a voxel or if atom feature, how to combine to create a residue level feature
+          residue: false #True if calculated at the residue level
+          bool: false #True if value is boolean
+          min: 0.
+          max: 1.
+          parser: Prop3D.custom_featurizers.Druggability
+
+        - name: 'is_druggable' #Create new boolean value based on thresholding previous values
+          default: 0
+          aggregate: max
+          residue: true
+          bool: true
+          min: 0.
+          max: 1.
+          threshold: 0.5
+          from_feature: "druggability_score"
+          equality: ">="
+          parser: Prop3D.custom_featurizers.Druggability
+        
+        - name: 'not_druggable'
+          default: 0
+          aggregate: max
+          residue: true
+          bool: true
+          min: 0.
+          max: 1.
+          threshold: 0.5
+          from_feature: "druggability_score"
+          equality: "<"
+          parser: Prop3D.custom_featurizers.Druggability

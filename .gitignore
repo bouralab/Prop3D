@@ -1,2 +1,4 @@
 .DS_STORE
 *.pyc
+docs/_build/*
+*.bak

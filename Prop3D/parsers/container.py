@@ -116,22 +116,21 @@ def iterator_to_list(func):
 
 
 class Container(object):
-    """
+    """Base container object to run Dockerized software through Docker or Singulairty. You must subclass to 
+    define important parameters and how to handle outputs.
 
-    Arguments: A list of 2- or 3-tuples countaining the parameter name, rule,
-        and optioanlly a string formatting rule.
+    
+    PARAMETERS: list
+        A list of 2- or 3-tuples countaining the parameter name, rule, and optioanlly a string formatting rule.
 
-    Rules: A function or custom method name as string. Predefined rules:
+    RULES: A function or custom method name as string. Predefined rules:
         'str': No action, stay as string
-        'path:in': Define a path to be used as input. Paths can be modified for
-            use in contianer.
-        'path:out': Define a path to be used as output. Paths created in the
-            container can be copied to the local machine
-        'path:in:stdin': Define a path to be used as input. For contianerized it
-            will use the 'in' and LOCAL commands will use stdin.
+        'path:in': Define a path to be used as input. Paths can be modified for use in contianer.
+        'path:out': Define a path to be used as output. Paths created in the container can be copied to the local machine
+        'path:in:stdin': Define a path to be used as input. For contianerized it will use the 'in' and LOCAL commands will use stdin.
 
-        Custom methods must return the updated value. If None, value will be
-        removed from parameter list.
+    Custom methods must return the updated value. If None, value will be
+    removed from parameter list.
     """
 
     IMAGE = None

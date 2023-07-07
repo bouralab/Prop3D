@@ -9,7 +9,7 @@ def split_dataset_at_level(job, cath_full_h5, superfamily, sfam_df, level_key, l
     """Split a dataset into train/validation/test sets, saving the splits into new h5 groups with
     links back to the the main dataset.
     
-    Paramters:
+    Parameters
     ----------
     job : toi.job.Job
         Toil job
