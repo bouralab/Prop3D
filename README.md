@@ -1,12 +1,25 @@
 # Prop3D
 
-**Note: this is all research code and not all components are functional**
+<img src="docs/img/prop3d-logo.png" alt="CATH hierarchy in Toil" width="300"/>
 
-Prop3D is a protein structure dataset that combines 3D atomic coordinates with biophysical and evolutionary properties for every atom in every "cleaned" domain structure in CATH. We use [Toil](https://github.com/DataBiosphere/toil) to create a massively parallel workflow to process the large amount of structures in CATH and then save and share the data using the [Highly Scalable Data Service (HSDS)](https://github.com/HDFGroup/hsds) to create and share the dataset.
+Prop3D is a protein structure toolkit designed for machine learning, enabling the generation and utilization of datasets that integrate 3D atomic coordinates with biophysical and evolutionary properties. Due to the massive increase in the number of available protein structures, massively-parallel reproducible workflows to create datasets that run in the cloud are needed. Prop3D is not just a dataset or workflow, it is both; it's a way to reproduce our datatsets or build your own with your own custom proteins.
 
-Here we provide code to re-create the dataset. Unfortunately, it is a large/bloated project because it started out as a general structural bioinformatics toolkit, but it is not meant replace (better) tools such as [Biotite](https://github.com/biotite-dev/biotite) or [BioPython](https://github.com/biopython/biopython).
+To use Prop3D, you can:
 
-To learn how the dateset is organized, please see the [Dataset README](README-Dataset.md)
+1. Use our precomputed datasets to train an ML model; 
+1. Build your own datasets; and 
+1. Use your new datasets to train an ML model.
+
+We provide two precalculated datasets: 
+
+1. Prop3D-20 (20 highly populated superfamilies) and 
+1. The entire PDB. In the future.
+
+We will provide the entire CATH database and AlphaFold-CATH -- CATH mappings for all domains in AlphaFold2.
+
+If you want to generate your own datasets, please follow the installation steps for using the :doc:`./install/hsds.rst`
+
+<img src="docs/img/Prop3D_overview.png" alt="CATH hierarchy in Toil" width="300"/>
 
 ## Overview
 
@@ -51,7 +64,7 @@ All of the external tools have been dockerized (available at https://hub.docker.
 
 You can set up HSDS on any cloud platform or a single machine using Docker or on a cluster using Kubernetes (or AKS on Microsoft Azure).
 
-For single machine setup, please clone the [HSDS](https://github.com/HDFGroup/hsds) repository and follow the instruction at [https://gitlab.com/uva-arc/hobo-request/-/blob/main/doc/single-node-k3s-hsds-install.md](https://gitlab.com/uva-arc/hobo-request/-/blob/main/doc/single-node-k3s-hsds-install.md).
+For single machine setup, please follow instructions in the docs.
 
 
 ## Data Generation
