@@ -16,12 +16,11 @@ To use Prop3D, you can:
 #. Build your own datasets; and 
 #. Use your new datasets to train an ML model.
 
-We provide two precalculated datasets: 
+Currently, we provide one precalculated dataset: 
 
-#. Prop3D-20 (20 highly populated superfamilies) and 
-#. The entire PDB. In the future.
+#. *Prop3D-20 (20 highly populated superfamilies)*
 
-We will provide the entire CATH database and AlphaFold-CATH -- CATH mappings for all domains in AlphaFold2.
+In the future, we will provide the entire CATH database, entire PDB, and AlphaFold-CATH -- CATH mappings for all domains in AlphaFold2.
 
 If you want to generate your own datasets, please follow the installation steps for using the :doc:`./install/hsds.rst`
 
@@ -30,7 +29,7 @@ If you want to generate your own datasets, please follow the installation steps 
 Building Prop3D Datasets
 ------------------------
 
-First, we created AtomicToil [based on `Toil <https://github.com/DataBiosphere/toil>`_] to create a massively-parallel workflow following the CATH hierarchy or any sets of proteins to clean () each protein and calcuate its biophyscal propteris.  We also create reproducible training set splits using either the CATH S35 clusters, PDB clusters based on mmseqs, or a calculate new clusters using foldseek.
+First, we created AtomicToil [based on `Toil <https://github.com/DataBiosphere/toil>`_] to create a massively-parallel workflow following the CATH hierarchy or any sets of proteins to clean each protein and calcuate its biophyscal properties.  We also create reproducible training set splits using either the CATH S35 clusters, PDB clusters based on mmseqs, or a calculate new clusters using foldseek.
 
 Next, we built Meadowlark to process individual protein structures for use ML. Specifically, we "clean" each structure by adding missing atoms or residues (SCWRL, MODELLER) and add hydrogens and perform a simple energy-minimization, or 'debump' (Pdb2Pqr). We then calculate biophysical properties for the cleaned structures. All of the cleaned structures and biophysical properties are added into HDF file on an HSDS endpoint create and share the dataset.
 
@@ -42,7 +41,7 @@ Finally, once you have a dataset (or just want to use our precomputed datatsets)
 
 #. A sequence (input) and biophysical properties (output) for use in a language model (See ESM example)
 #. 3D coordinates and biophysical properties for use in custom tools that require just atomic coordinates, e.g. many graph-based models (see MPNN example) 
-#. A sparse voxelized input with biophysical properties for use in 3D applications, such as 3DCNNS (see MinkowskiEngine examples)
+#. A sparse voxelized input with biophysical properties for use in 3D applications, such as 3DCNNS (see MinkowskiEngine example)
 
 To learn how the CATH dataset is organized, please see the `CATH Dataset Organization <dataset_org>`_
 

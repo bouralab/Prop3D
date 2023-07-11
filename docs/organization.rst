@@ -146,4 +146,6 @@ We organize each superfamily by their CATH hierarchy within the HDF file:
 PDB-based Dataset
 -----------------
 
+Still in progress.
+
 The PDB-based datasets is organized like a single superfamily just ``domains``, ``data_splits`` and ``representatives`` at the root level. Representatives are taken from the first entry of each mmseqs 30% clusters provided by the PDB.

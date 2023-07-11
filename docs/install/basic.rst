@@ -72,6 +72,8 @@ The path to each pre-computed dataset on our HSDS endpoint is:
 
 *Prop3D-20* : ``/projects/Prop3D/Prop3D-20.h5``
 
+In Progress:
+
 *PDB* : ``/projects/Prop3D/PDB.h5``
 
 Extras
