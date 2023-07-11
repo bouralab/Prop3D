@@ -381,7 +381,8 @@ class AbstractStructure(object):
             length += 1
         return length
 
-    def shift_coords(self, new_center: Union[np.array, None] = None, from_origin: Union[np.array, None] = True) -> np.array:
+    def shift_coords(self, new_center: Union[np.array, None] = None, 
+                     from_origin: Union[np.array, None] = True) -> np.array:
         """Shift coordinates by setting a new center of mass value or shift to the origin
         
         Parameters
@@ -415,7 +416,7 @@ class AbstractStructure(object):
         """
         return self.shift_coords()
 
-    def orient_to_pai(self, random_flip: bool = False, flip_axis: Union[tuple[float], np.array] = (0.2, 0.2, 0.2)) -> None:
+    def orient_to_pai(self, random_flip: bool = False, flip_axis: Union[list[float], np.array] = (0.2, 0.2, 0.2)) -> None:
         """Orient structure to the Principle Axis of Interertia and optionally flip. Modified from EnzyNet
 
         Parameters
