@@ -1,11 +1,16 @@
 import h5py
 import h5pyd
+from time import sleep
 from pathlib import Path
 from Prop3D.util import safe_remove
 from Prop3D.util.toil import map_job
+
+from toil.job import Job
+from toil.common import Toil
 from toil.realtimeLogger import RealtimeLogger
 
-def load_h5(job, h5_file, hsds_file, prefix="", hard_link_keys=["validation", "training", "test"], hard_link_map={"data_splits":"domains"}, hardlink_items=False):
+def load_h5(job: Job, h5_file: str, hsds_file: str, prefix: str = "", hard_link_keys: list[str] = ["validation", "train", "test"], 
+            hard_link_map: dict[str, str] = {"data_splits":"domains", "representatives":"domains"}, hardlink_items: bool = False):
     """A parallelized version of hsload
     """
     #RealtimeLogger.info(f"Adding h5_file ({h5_file_id}) to hsds_file ({hsds_file})")
@@ -13,7 +18,7 @@ def load_h5(job, h5_file, hsds_file, prefix="", hard_link_keys=["validation", "t
     if prefix == "":
         #Start of hierarchy
         try:
-            with h5pyd.File(hsds_file, use_cache=False):
+            with h5pyd.File(hsds_file, use_cache=False, retries=100):
                 file_mode = "a"
         except IOError:
             file_mode = "w"
@@ -28,71 +33,105 @@ def load_h5(job, h5_file, hsds_file, prefix="", hard_link_keys=["validation", "t
 
     RealtimeLogger.info(f"downlaoded h5_file {h5_file}")
 
+    if prefix.startswith('/'):
+        prefix = prefix[1:]
+
     with h5py.File(h5_file, 'r') as f:
-        with h5pyd.File(hsds_file, mode=file_mode, use_cache=False) as store:
-            for key in f[f'/{prefix}'].keys():
-                if "domain" not in prefix or "data_splits" not in prefix or "representatives" not in prefix:
-                    RealtimeLogger.info(f"Adding {prefix}/{key}")
+        for key in f[f'/{prefix}'].keys():
+            full_key = f"/{prefix}/{key}"
+            if all([k not in full_key for k in hard_link_map.keys()]):
+                #if "domain" not in full_key or "data_splits" not in full_key or "representatives" not in full_key:
+                RealtimeLogger.info(f"Adding {prefix}/{key}")
+            elif hardlink_items:
+                #old_kwd, new_kwd = next(hard_link_map.items())
+                for old_kwd, new_kwd in hard_link_map.items():
+                    if old_kwd in full_key:
+                        store[full_key] = store[f"{prefix.split(old_kwd, 1)[0]}/{new_kwd}/{key}"]
+                        RealtimeLogger.info(f"Hardlinked {full_key}")
+                        break
+                else:
+                    raise RuntimeError(f"hard_link_map keys ('{list(old_kwd.keys())}')")
+                
+                continue
 
-                if hardlink_items:
-                    old_kwd, new_kwd = next(hard_link_map.items())
-                    store[f"{prefix}/{key}"] = store[f"{prefix.split(old_kwd, 1)[0]}/{new_kwd}/{key}"]
-                    continue
-                    
-                h5_object = f[f'/{prefix}/{key}']
+                
+            h5_object = f[full_key]
 
-                if isinstance(h5_object, h5py.Group):
-                    store_object = store.require_group(f'/{prefix}/{key}')
+            if isinstance(h5_object, h5py.Group):
+                with h5pyd.File(hsds_file, mode=file_mode, use_cache=False, retries=100) as store:
+                    store_object = store.require_group(full_key)
 
                     for attr, attr_value in h5_object.attrs.items():
                         store_object.attrs[attr] = attr_value
 
-                    if key not in hard_link_keys:
-                        job.addChildJobFn(load_h5, h5_file, hsds_file, prefix=f"{prefix}/{key}",
-                                        hard_link_keys=hard_link_keys, hard_link_map=hard_link_map, hardlink_items=False)
-                    else:
-                        #Add hard links last
-                        job.addFollowOnJobFn(load_h5, h5_file, hsds_file, prefix=f"{prefix}/{key}", 
-                                        hard_link_keys=hard_link_keys, hard_link_map=hard_link_map, hardlink_items=True)
-                        
-                elif isinstance(h5_object, h5py.Dataset):
-                    dset = h5_object[:]
-                    shape = h5_object.shape
-                    dtype = h5_object.dtype
-                    dset_parameters = {k:getattr(h5_object, k) for k in ('compression',
-                        'compression_opts', 'scaleoffset', 'shuffle', 'fletcher32', 'fillvalue')}
-                    dset_parameters['chunks'] = True
+                if key not in hard_link_keys:
+                    job.addChildJobFn(load_h5, h5_file, hsds_file, prefix=f"{prefix}/{key}",
+                                    hard_link_keys=hard_link_keys, hard_link_map=hard_link_map, hardlink_items=False)
+                else:
+                    #Add hard links last
+                    job.addFollowOnJobFn(load_h5, h5_file, hsds_file, prefix=f"{prefix}/{key}", 
+                                    hard_link_keys=hard_link_keys, hard_link_map=hard_link_map, hardlink_items=True)
                     
+            elif isinstance(h5_object, h5py.Dataset):
+                dset = h5_object[:]
+                shape = h5_object.shape
+                dtype = h5_object.dtype
+                dset_parameters = {k:getattr(h5_object, k) for k in ('compression',
+                    'compression_opts', 'scaleoffset', 'shuffle', 'fletcher32', 'fillvalue')}
+                dset_parameters['chunks'] = True
+                
+                retry = False
+                should_remove = False
+                with h5pyd.File(hsds_file, mode=file_mode, use_cache=False, retries=100) as store:
                     try:
-                        dset = store.require_dataset(f'/{prefix}/{key}', shape, dtype, data=dset, **dset_parameters)
+                        store.require_dataset(full_key, shape, dtype, data=dset, **dset_parameters)
                     except (OSError, TypeError) as e:
-                        retry = False
                         if isinstance(e, OSError) and "Request Entity Too Large" in str(e):
                             #First time loading dataset and it is too large
                             retry = True
-                        elif isinstance(e, TypeError):
+                            should_remove = True
+
+                        elif isinstance(e, TypeError) or (isinstance(e, OSError) and "Dataset is not extensible" in str(e)):
                             #Previous error and datasets aren't the same size. Remove everything and try again
                             retry = True
+                            should_remove = True
+
+                if should_remove:
+                    with h5pyd.File(hsds_file, mode=file_mode, use_cache=False, retries=100) as store:
+                        try:
+                            del store[full_key]
+                        except IOError:
+                            pass
+                    
+                    for _ in range(20):
+                        with h5pyd.File(hsds_file, mode=file_mode, use_cache=False, retries=100) as store:
                             try:
-                                del store[f'/{prefix}/{key}']
-                            except IOError:
-                                pass
+                                store[full_key]
+                                sleep(1)
+                                continue
+                            except KeyError:
+                                break
+                    else:
+                        continue
+                        raise RuntimeError(f"Unable to remove {full_key} to start over")
 
-                        if retry:
-                            #Dataset too lareg to pass over http PUT
-                            chunk_size = 500 #atoms in structure int(len(rec_arr)/4)
-                            for i, start in enumerate(range(0, len(dset), chunk_size)):
-                                small_data = dset[start:start+chunk_size]
-                                if i==0:
-                                    #store.create_table(f'/{prefix}/{key}', dtype=dtype, shape=small_data.shape, data=small_data, **dset_parameters)
-                                    store.create_dataset(f'/{prefix}/{key}', small_data.shape, dtype, data=small_data, **dset_parameters)
+                if retry:
+                    #Dataset too lareg to pass over http PUT
+                    chunk_size = 500 #atoms in structure int(len(rec_arr)/4)
+                    for i, start in enumerate(range(0, len(dset), chunk_size)):
+                        small_data = dset[start:start+chunk_size]
+                        if i==0:
+                            with h5pyd.File(hsds_file, mode=file_mode, use_cache=False, retries=100) as store:
+                                store.create_dataset(full_key, small_data.shape, dtype, data=small_data, **dset_parameters)
 
-                                else:
-                                    dset = store[f'/{prefix}/{key}']
-                                    dset.resize(dset.shape[0] + small_data.shape[0], axis=0)
-                                    dset[-small_data.shape[0]:] = small_data
+                        else:
+                            with h5pyd.File(hsds_file, mode=file_mode, use_cache=False, retries=100) as store:
+                                new_dset = store[full_key]
+                                new_dset.resize(dset.shape[0] + small_data.shape[0], axis=0)
+                                new_dset[-small_data.shape[0]:] = small_data
 
-def save_h5(hsds_file, h5_file, prefix="", hard_link_keys=["validation", "training", "test"], hard_link_map={"data_splits":"domains"}, hardlink_items=False):
+def save_h5(hsds_file: str, h5_file: str, prefix: str = "", hard_link_keys: list[str] = ["validation", "train", "test"], 
+            hard_link_map: dict[str,str] = {"data_splits":"domains", "representatives":"domains"}, hardlink_items: bool = False) -> None:
     """A custom version of hsget to save a H5 file from a an h5 file on an hsds endpoint. Parallel writing does not work, so Toil is not used.
 
     Parameters
@@ -110,47 +149,57 @@ def save_h5(hsds_file, h5_file, prefix="", hard_link_keys=["validation", "traini
     hardlink_items : bool
     
     """
+    if prefix.startswith('/'):
+        prefix = prefix[1:]
+
     add_keys = []
     hard_linked_keys = []
-    with h5pyd.File(hsds_file, "r", use_cache=False) as store, h5py.File(h5_file, 'a') as f:
+    with h5pyd.File(hsds_file, "r", use_cache=False, retries=100) as store, h5py.File(h5_file, 'a') as f:
         for key in f[f'/{prefix}'].keys():
+            full_key = f"/{prefix}/{key}"
             if hardlink_items:
                 #Convert to softlink
                 old_kwd, new_kwd = next(hard_link_map.items())
-                store[f"{prefix}/{key}"] = h5py.SoftLink(f"{prefix.split(old_kwd, 1)[0]}/{new_kwd}/{key}")
+                store[full_key] = h5py.SoftLink(f"{prefix.split(old_kwd, 1)[0]}/{new_kwd}/{key}")
+
+                for old_kwd, new_kwd in hard_link_map.items():
+                    if old_kwd in full_key:
+                        f[full_key] = h5py.HardLink(f"{prefix.split(old_kwd, 1)[0]}/{new_kwd}/{key}")
+                        RealtimeLogger.info(f"Hardlinked {full_key}")
+                        break
+                else:
+                    raise RuntimeError(f"hard_link_map keys ('{list(old_kwd.keys())}')")
+
                 continue
                 
-            hsds_object = store[f'/{prefix}/{key}']
+            hsds_object = store[full_key]
 
             if isinstance(hsds_object, h5pyd.Group):
-                h5_object = f.require_group(f'/{prefix}/{key}')
+                h5_object = f.require_group(full_key)
                 for attr, attr_value in hsds_object.attrs.items():
                     h5_object.attrs[attr] = attr_value
 
                 if key not in hard_link_keys:
-                    add_keys.append(f'/{prefix}/{key}')
+                    add_keys.append(full_key)
                 else:
-                    hard_linked_keys.append(f'/{prefix}/{key}')
+                    hard_linked_keys.append(full_key)
 
             elif isinstance(h5_object, h5py.Dataset):
                 dset = hsds_object[:]
                 dset_parameters = {k:getattr(h5_object, k) for k in ('shape', 'dtype', 'chunks', 'compression',
                   'compression_opts', 'scaleoffset', 'shuffle', 'fletcher32', 'fillvalue')}
-                f.create_dataset(f'/{prefix}/{key}', data=dset, **dset_parameters)
+                f.create_dataset(full_key, data=dset, **dset_parameters)
     
-        for key in add_keys:
-            save_h5(hsds_file, h5_file, prefix=f"{prefix}/{key}",
-                    hard_link_keys=hard_link_keys, hard_link_map=hard_link_map, hardlink_items=False)
-        
-        #Add hard links last
-        for hard_linked_key in hard_linked_keys:
-            save_h5(hsds_file, h5_file, prefix=f"{prefix}/{hard_linked_key}",      
-                    hard_link_keys=hard_link_keys, hard_link_map=hard_link_map, hardlink_items=True)
+    for key in add_keys:
+        save_h5(hsds_file, h5_file, prefix=f"{prefix}/{key}",
+                hard_link_keys=hard_link_keys, hard_link_map=hard_link_map, hardlink_items=False)
+    
+    #Add hard links last
+    for hard_linked_key in hard_linked_keys:
+        save_h5(hsds_file, h5_file, prefix=f"{prefix}/{hard_linked_key}",      
+                hard_link_keys=hard_link_keys, hard_link_map=hard_link_map, hardlink_items=True)
 
 if __name__ == "__main__":
-    from toil.common import Toil
-    from toil.job import Job
-
     parser = Job.Runner.getDefaultArgumentParser()
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--load", action="store_true", default=False)
