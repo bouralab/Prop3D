@@ -1,9 +1,13 @@
 import os
 from datetime import datetime
+from typing import Union, Any
+from argparse import Namespace
 from collections import defaultdict
 
 import h5pyd
 import pandas as pd
+from toil.job import Job
+from toil.fileStores import FileID
 from toil.realtimeLogger import RealtimeLogger
 
 from Prop3D.util import safe_remove, str2boolorlist
@@ -28,9 +32,30 @@ logging.getLogger('botocore').setLevel(logging.WARNING)
 logging.getLogger('s3transfer').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-def get_domain_structure_and_features(job, cath_domain, superfamily,
-  cathFileStoreID, update_features=None, further_parallelize=False, force=False, use_hsds=True):
-    """1) Run Features depends on prepared strucutre Structure"""
+def get_domain_structure_and_features(job: Job, cath_domain: str, superfamily: Union[str, None], cathFileStoreID: Union[str, FileID], 
+                                      update_features: Union[list[str],tuple[str]] = None, further_parallelize: bool = False, 
+                                      force: Union[int,bool] = False, use_hsds: bool = True) -> None:
+    """Process and 'prepare' a single domain and calculate its features
+    
+    Parameters
+    ----------
+    job : toil.Job
+        the toil job that is currently running
+    cath_domain : str
+        The name of the cath_domain
+    superfamily : str
+        The name of the superfamily the domain belongs to
+    cathFileStoreID : str or FileID
+        Path to the h5 file to update
+    update_features : list of str
+        List of features to update
+    further_parallelize : bool
+        Create new toil jobs for each step (clean, featurize). Default False
+    force : int or bool
+        If True, clean all structures if already preocess. Default is False
+    use_hsds: bool
+        Use HSDS, deprecating, alwasy sues hsds.
+    """
     RealtimeLogger.info("get_domain_structure_and_features Process domain "+cath_domain)
 
     if use_hsds:
@@ -114,9 +139,28 @@ def get_domain_structure_and_features(job, cath_domain, superfamily,
             f"updates/{jobStoreName}/{superfamily}/{cath_domain}")
         safe_remove(done_file)
 
-def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
-  force=False, use_hsds=True, further_parallize=True):
+def process_superfamily(job: Job, superfamily: Union[str, None], cathFileStoreID: Union[str, FileID], 
+                        update_features: Union[list[str], tuple[str]] = None, force: bool = False, 
+                        use_hsds: bool = True, further_parallize: bool = True) -> None:
+    """Process all domains in superfamily
 
+    Parameters
+    ----------
+    job : toil.Job
+        the toil job that is currently running
+    superfamily : str
+        The name of the superfamily the domain belongs to
+    cathFileStoreID : str or FileID
+        Path to the h5 file to update
+    update_features : list of str
+        List of features to update
+    force : int or bool
+        If True, clean all structures if already preocess. Default is False
+    use_hsds: bool
+        Use HSDS, deprecating, alwasy sues hsds.
+    further_parallelize : bool
+        Create new toil jobs for each step (clean, featurize). Default False
+    """
     cathcode = superfamily.replace("/", ".")
     if not use_hsds:
         cath_file = job.fileStore.readGlobalFile(cathFileStoreID, cache=True)
@@ -188,8 +232,35 @@ def process_superfamily(job, superfamily, cathFileStoreID, update_features=None,
             except:
                 pass
 
-def start_domain_and_features(job, cathFileStoreID, cathcode=None, skip_cathcode=None,
-  update_features=None, use_hsds=True, work_dir=None, pdbs=None, force=False):
+def start_domain_and_features(job: Job, cathFileStoreID: Union[str, FileID], cathcode: Union[list[str], str] = None, 
+                              skip_cathcode: Union[list[str], str, None] = None, update_features: Union[list[str], tuple[str], None] = None, 
+                              use_hsds: bool = True, work_dir: Union[str, None] = None, pdbs: Union[str,list[str], bool, None] = None, 
+                              force: bool = False, update: bool = False) -> None:
+    """Start a new job to follow the CATH hierarchy ending at the superfamily level 
+
+    Parameters
+    ----------
+    job : toil.Job
+        the toil job that is currently running
+    cathFileStoreID : str or FileID
+        Path to the h5 file to update
+    cathcode : str or list of str
+        The name of the superfamily to process, can be multiple
+    skip_cathode : str list of str
+        The names of the superfamilies to skip, can be multiple
+    update_features : list of str
+        List of features to update
+    use_hsds: bool
+        Use HSDS, deprecating, alwasy sues hsds.
+    work_dir : str
+        Working directory
+    pdbs : list of str or bool
+        PDB IDs to update if list or if True or lest id empty, all PDBS will be used. Also handles file names
+    force : int or bool
+        If True, clean all structures if already preocess. Default is False
+    update : bool
+        Add new entries from source database (CATH or PDB) since last update. Default is False.
+    """
     if not use_hsds:
         cath_hierarchy_runner = run_cath_hierarchy
     else:
@@ -228,15 +299,6 @@ def start_domain_and_features(job, cathFileStoreID, cathcode=None, skip_cathcode
                             for cath_domain in store[f"{sfam}/domains"].keys()], columns=["cath_domain", "cathcode"])
                     except KeyError:
                         raise RuntimeError(f"Must create hsds file first. Key not found {sfam+'/domain' for sfam in fixed_sfams}")
-
-                    # try:
-                    #     check = [f"{sfam}/domains" for sfam in fixed_sfams]
-                    #     RealtimeLogger.info(f"Checking {check}")
-                    #     done_domains = [domain for sfam in fixed_sfams for domain in \
-                    #         store[f"{sfam}/domains"].keys() if \
-                    #         len(store[f"{sfam}/domains/{domain}"].keys())==3]
-                    # except KeyError as e:
-                    #     raise RuntimeError(f"Must create hsds file first. Key not found {e}")
 
             num_domains_to_run = 500000
             #domains_to_run = cath_domains[~cath_domains["cath_domain"].isin(done_domains)]
@@ -305,10 +367,78 @@ def start_domain_and_features(job, cathFileStoreID, cathcode=None, skip_cathcode
         map_job(job, process_superfamily, superfamilies, cathFileStoreID,
             update_features=update_features, force=force)
 
-    #Build Interactome
-    #job.addChildJobFn()
+def start_domain_and_features_then_create_splits(job: Job, cathFileStoreID: Union[str, FileID], cathcode: Union[list[str], str] = None, 
+                                                 skip_cathcode: Union[list[str], str, None] = None, update_features: Union[list[str], tuple[str], None] = None, 
+                                                 use_hsds: bool = True, work_dir: Union[str, None] = None, pdbs:Union[str,list[str], bool, None] = None, 
+                                                 force: bool = False, update: bool = False) -> None:
+    """Start a new job to follow the cath hierchy to prepare and featurize proteins then create data splits. Useful for adding in PDB ids becuase there are too many.
 
-def start_toil(job, cathFileStoreID, cathcode=None, skip_cathcode=None, pdbs=None, update_features=None, use_hsds=True, work_dir=None, force=False):
+    Parameters
+    ----------
+    job : toil.Job
+        the toil job that is currently running
+    cathFileStoreID : str or FileID
+        Path to the h5 file to update
+    cathcode : str or list of str
+        The name of the superfamily to process, can be multiple
+    skip_cathode : str list of str
+        The names of the superfamilies to skip, can be multiple
+    update_features : list of str
+        List of features to update
+    use_hsds: bool
+        Use HSDS, deprecating, alwasy sues hsds.
+    work_dir : str
+        Working directory
+    pdbs : list of str or bool
+        PDB IDs to update if list or if True or lest id empty, all PDBS will be used. Also handles file names
+    force : int or bool
+        If True, clean all structures if already preocess. Default is False
+    update : bool
+        Add new entries from source database (CATH or PDB) since last update. Default is False.
+    """
+    job.addChildJobFn(start_domain_and_features, cathFileStoreID, cathcode=cathcode,
+        skip_cathcode=skip_cathcode, update_features=update_features, use_hsds=use_hsds,
+        pdbs=pdbs, force=force)
+    
+    if (isinstance(pdbs, bool) and pdbs):
+        #Use entire PDB database
+        from Prop3D.generate_data.update_pdb import get_all_pdbs
+        job.addFollowOnJobFn(get_all_pdbs, cathFileStoreID, update=update)
+    elif len(pdbs[0]) < 9:
+        #Is PDB_entity or PDB.chain or just PDB
+        from Prop3D.generate_data.update_pdb import get_custom_pdbs
+        job.addFollowOnJobFn(get_custom_pdbs, cathFileStoreID, update=update)
+
+
+def start_toil(job: Job, cathFileStoreID: Union[str, FileID], cathcode: Union[list[str], str] = None, 
+               skip_cathcode: Union[list[str], str, None] = None, pdbs:Union[str, list[str], bool, None] = None, 
+               update_features: Union[list[str], tuple[str], None] = None, use_hsds: bool = True, work_dir: Union[str, None] = None, 
+               force: bool = False, update: bool = False) -> None:
+    """A new job that starts the entire Prop3D workflow
+
+    Parameters
+    ----------
+    job : toil.Job
+        the toil job that is currently running
+    cathFileStoreID : str or FileID
+        Path to the h5 file to update
+    cathcode : str or list of str
+        The name of the superfamily to process, can be multiple
+    skip_cathode : str list of str
+        The names of the superfamilies to skip, can be multiple
+    pdbs : list of str or bool
+        PDB IDs to update if list or if True or lest id empty, all PDBS will be used. Also handles file names
+    update_features : list of str
+        List of features to update
+    use_hsds: bool
+        Use HSDS, deprecating, alwasy sues hsds.
+    work_dir : str
+        Working directory
+    force : int or bool
+        If True, clean all structures if already preocess. Default is False
+    update : bool
+        Add new entries from source database (CATH or PDB) since last update. Default is False.
+    """
     if work_dir is None:
         if job is not None and hasattr(job, "fileStore"):
             work_dir = job.fileStore.getLocalTempDir()
@@ -318,15 +448,35 @@ def start_toil(job, cathFileStoreID, cathcode=None, skip_cathcode=None, pdbs=Non
     if pdbs is not None and (cathcode is not None or skip_cathcode is not None):
         raise RuntimeError("Cannot use --pdbs with --cathcode or --skip_cathcode")
 
-    if use_hsds:
-        job.addChildJobFn(create_h5_hierarchy, cathFileStoreID, cathcode=cathcode,
-            skip_cathcode=skip_cathcode, pdbs=pdbs, work_dir=work_dir, force=force)
+    if not use_hsds:
+        raise RuntimeError("You must use HSDS")
+    
+    job.addChildJobFn(create_h5_hierarchy, cathFileStoreID, cathcode=cathcode,
+        skip_cathcode=skip_cathcode, pdbs=pdbs, work_dir=work_dir, force=force)
 
-    job.addFollowOnJobFn(start_domain_and_features, cathFileStoreID, cathcode=cathcode,
+    next_job = None
+    if pdbs is not None:
+        if (isinstance(pdbs, bool) and pdbs):
+            #Use entire PDB database
+            next_job = start_domain_and_features_then_create_splits
+        elif:
+            if Path(pdbs[0]).is_file():
+                #Ceate custom files, not implemented
+                pass
+            elif len(pdbs[0]) < 9:
+                #Is PDB_entity or PDB.chain or just PDB
+                next_job = start_domain_and_features_then_create_splits
+    else:
+        #Normal execution
+        next_job = start_domain_and_features
+        
+    job.addFollowOnJobFn(next_job, cathFileStoreID, cathcode=cathcode,
         skip_cathcode=skip_cathcode, update_features=update_features, use_hsds=use_hsds,
-        pdbs=pdbs, force=force)
-
-def str2boolorval(v):
+        pdbs=pdbs, force=force, update=update)
+    
+def str2boolorval(v: Any) -> Union[bool,int]:
+    """Convert argparse parameter to either a bool or an an int e.g. 'false' -> False, '0'->0
+    """
     def is_num(a):
         try:
             int(a)
@@ -345,7 +495,14 @@ def str2boolorval(v):
     else:
         return False
     
-def start_workflow(options):
+def start_workflow(options: Namespace) -> None:
+    """Start the toil workflow.
+
+    Parameters
+    ----------
+    options: argparse.Namespace
+        All parsed arguments
+    """
     with Toil(options) as workflow:
         if not workflow.options.restart:
             if options.no_hsds:
@@ -354,7 +511,7 @@ def start_workflow(options):
                 cathFileStoreID = options.hsds_file
             job = Job.wrapJobFn(start_toil, cathFileStoreID, cathcode=options.cathcode,
                 skip_cathcode=options.skip_cathcode, pdbs=options.pdb, update_features=options.features,
-                use_hsds=not options.no_hsds, work_dir=options.work_dir, force=options.force)
+                use_hsds=not options.no_hsds, work_dir=options.work_dir, force=options.force, update=options.update)
             workflow.start(job)
         else:
             workflow.restart()
@@ -385,6 +542,13 @@ if __name__ == "__main__":
         nargs="+",
         default=None
     )
+    parser.add_argument(
+        "--update",
+        type=str2boolorval,
+        nargs='?',
+        const=True,
+        default=False,
+        help="Update dataset since last update.")
     parser.add_argument(
         "--force",
         type=str2boolorval,

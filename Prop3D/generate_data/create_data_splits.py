@@ -2,10 +2,11 @@ from numbers import Number
 
 import h5pyd
 import pandas as pd
+from toil.job import Job
 from toil.realtimeLogger import RealtimeLogger
 
-def split_dataset_at_level(job, cath_full_h5, superfamily, sfam_df, level_key, level_name,
-  split_size={"train":0.8, "validation":0.1, "test":0.1}):
+def split_dataset_at_level(job: Job, cath_full_h5: str, superfamily: str, sfam_df: pd.DataFrame, level_key: str, level_name: str,
+                           split_size: dict[str, float] = {"train":0.8, "validation":0.1, "test":0.1}) -> None:
     """Split a dataset into train/validation/test sets, saving the splits into new h5 groups with
     links back to the the main dataset.
     
@@ -21,8 +22,10 @@ def split_dataset_at_level(job, cath_full_h5, superfamily, sfam_df, level_key, l
         The data frame to split. Each row must a single protein and the df M\must contain 2 columns: 
             (i) "cath_domain", the column of protein domain names, must match groups of the same name in this 'superfamily' group;
             (ii) level_key, custom variable name for the name of the cluster the protein domain belongs to
+    level_key : str
+        Name of the column that contains cluster names for use in pandas groupby
     level_name : str
-        Name of the column that contains cluster names
+        Name of the data split, e.g. "S35"
     split_size : Dict [split_name->split perecent]
         A dictionary containing the total number of splits
     """

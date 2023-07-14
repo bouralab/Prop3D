@@ -95,7 +95,8 @@ Most academics still use Slurm, so we will demonstrate how to run Prop3D on Slur
         --retryCount 5 \
         --clean always \
         --realTimeLogging \
-        --maxJobs=1000 \
+        --maxJobs=96 \
+        --maxLocalJobs 96 \
         --workDir=~/tmp3 \
         --statePollingWait 120 \
         --disableAutoDeployment \

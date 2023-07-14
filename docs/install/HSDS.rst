@@ -264,3 +264,18 @@ Happy K3s + HSDS testing!
 --
 Sign-off: LF Murilo, 11-03-2021
 
+Recommended HSDS changes
+++++++++++++++++++++++++
+
+.. code-block:: yaml
+
+    dn_ram: 6g
+    sn_ram: 6g
+    max_tcp_connections: 1000
+    max_task_count: 1000
+    aio_max_pool_connections: 264
+    metadata_mem_cache_size: 1g
+    chunk_mem_cache_size: 1g
+    data_cache_size: 1g
+    timeout: 120
+

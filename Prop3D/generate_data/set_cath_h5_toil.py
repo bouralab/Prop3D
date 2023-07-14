@@ -3,12 +3,16 @@ import re
 import sys
 import urllib.request
 import multiprocessing
+from typing import Union
 from pathlib import Path
 from numbers import Number
 from collections import defaultdict
 
 import pandas as pd
 from joblib import Parallel, delayed
+
+from toil.job import Job
+from toil.fileStores import FileID
 from toil.realtimeLogger import RealtimeLogger
 
 from Prop3D.util.toil import map_job
@@ -25,8 +29,9 @@ except ImportError:
     except:
         raise ImportError("h5pyd or h5py must be installed")
 
-def split_superfamily_at_level(job, cath_full_h5, superfamily, sfam_df, level_key, level_name,
-  split_size={"train":0.8, "validation":0.1, "test":0.1}):
+def split_superfamily_at_level(job: Job, cath_full_h5: Union[str, FileID], superfamily: str,
+                               sfam_df: pd.DataFrame, level_key: str, level_name: str,
+                               split_size: dict[str, float] = {"train":0.8, "validation":0.1, "test":0.1}) -> None:
     """Split a dataset into train/validation/test sets, saving the splits into new h5 groups with
     links back to the the main dataset.
     
@@ -51,7 +56,18 @@ def split_superfamily_at_level(job, cath_full_h5, superfamily, sfam_df, level_ke
   split_size={"train":0.8, "validation":0.1, "test":0.1})
 
 
-def create_splits_for_superfamily_levels(job, sfam, cath_full_h5):
+def create_splits_for_superfamily_levels(job: Job, sfam: str, cath_full_h5: str) -> None:
+    """Create jobs for seauence ID cutoffs (SOLI, 35-100%) precalculated in CATH
+
+    Parameters
+    ----------
+    job : toi.job.Job
+        Toil job
+    sfam : str
+        Name of superfamily
+    cath_full_h5 : str
+        Path to CATH h5 file on HSDS enpoint
+    """
     superfamily, sfam_df = sfam
     RealtimeLogger.info(f"Start splits for {superfamily}")
 
@@ -61,7 +77,7 @@ def create_splits_for_superfamily_levels(job, sfam, cath_full_h5):
     for level_key, level_name in [("S", "S35"), (list("SO"), "S60"), (list("SOL"), "S95"), (list("SOLI"), "S100")]:
         job.addChildJobFn(split_superfamily_at_level, cath_full_h5, superfamily, sfam_df, level_key, level_name)
 
-def create_representatives_for_superfamily(job, sfam, cath_full_h5):
+def create_representatives_for_superfamily(job: Job, sfam: str, cath_full_h5: str) -> None:
     from Prop3D.parsers.cath import CATHApi
     cath = CATHApi(job=job)
     hierarchy = cath.list_children_in_heirarchy(sfam, 5)
@@ -84,7 +100,7 @@ def create_representatives_for_superfamily(job, sfam, cath_full_h5):
             store[key].attrs["missing_domains"] = missing_domains
         store[key].attrs["total_domains"] = len(representatives)
 
-def create_splits(job, cath_full_h5, all_superfamilies):
+def create_splits(job: Job, cath_full_h5: str, all_superfamilies: pd.DataFrame) -> None:
     RealtimeLogger.info(f"Start all splits {all_superfamilies}")
     sfams = [g for g in all_superfamilies.groupby("h5_key")]
     map_job(job, create_splits_for_superfamily_levels, sfams, cath_full_h5)
@@ -92,7 +108,7 @@ def create_splits(job, cath_full_h5, all_superfamilies):
     job.addFollowOnJobFn(finish_section, cath_full_h5, "completed_domain_splits")
     job.addFollowOnJobFn(finish_section, cath_full_h5, "completed_representatives")
 
-def process_cath_domain_list_for_group(job, group, cath_full_h5):
+def process_cath_domain_list_for_group(job: Job, group: tuple[str, pd.DataFrame], cath_full_h5: str):
     name, group_df = group
 
     with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
@@ -101,7 +117,9 @@ def process_cath_domain_list_for_group(job, group, cath_full_h5):
             group.domain_length = row.domain_length
             group.resolution = row.resolution
 
-def process_cath_domain_list(job, cath_full_h5, cathcode=None, skip_cathcode=None, force=False, work_dir=None):
+def process_cath_domain_list(job: Job, cath_full_h5: str, cathcode: Union[list[str], str] = None, 
+                             skip_cathcode: Union[list[str], str] = None, force: bool = False, 
+                             work_dir: Union[str, None] = None) -> None:
     if work_dir is None:
         if job is not None and hasattr(job, "fileStore"):
             work_dir = job.fileStore.getLocalTempDir()
@@ -165,7 +183,7 @@ def process_cath_domain_list(job, cath_full_h5, cathcode=None, skip_cathcode=Non
     all_superfamilies = names[names['cath_code'].str.split('.').agg(len)==4]
     job.addFollowOnJobFn(create_splits, cath_full_h5, all_superfamilies)
 
-def process_cath_names_for_group(job, group, cath_full_h5, level=2):
+def process_cath_names_for_group(job: Job, group: tuple[str, pd.DataFrame], cath_full_h5: str, level: int = 2) -> None:
     name, group_df = group
     RealtimeLogger.info(f"Adding group under {name}")
 
@@ -189,14 +207,23 @@ def process_cath_names_for_group(job, group, cath_full_h5, level=2):
         group_df.group = group_df["cath_code"].str.split(".", expand=True)[:level+1].fillna("").agg('.'.join, axis=1)
         map_job(job, process_cath_names_for_group, group_df.groupby("group"), cath_full_h5, level=level+1)
 
-def delete_groups(root):
+def delete_groups(root: h5py.Group) -> None:
+    """Delete all groups and datasets from and including given root
+    
+    Parameters
+    ----------
+    root : h5py or h5pyd Group
+        Group you want to delete
+    """
     if hasattr(root, "keys"):
         for key in root.keys():
             delete_groups(root[key])
             del root[key]
     del root
 
-def process_cath_names(job, cath_full_h5, cathcode=None, skip_cathcode=None, force=False, work_dir=None):
+def process_cath_names(job: Job, cath_full_h5: str, cathcode: Union[list[str], str] = None, 
+                       skip_cathcode: Union[list[str], str] = None, force: bool = False, 
+                       work_dir: Union[str, None] = None) -> None:
     """Will overwrite all files"""
     if work_dir is None:
         if job is not None and hasattr(job, "fileStore"):
@@ -283,7 +310,7 @@ def process_cath_names(job, cath_full_h5, cathcode=None, skip_cathcode=None, for
 
     job.addFollowOnJobFn(finish_section, cath_full_h5, "completed_names")
 
-def setup_custom_cath_file_for_sfam(job, full_sfam_path, cath_full_h5):
+def setup_custom_cath_file_for_sfam(job: Job, full_sfam_path: str, cath_full_h5: str):
     with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
         for _, row in group_df.iterrows():
             group = store.require_group(row.h5_key)
@@ -292,7 +319,24 @@ def setup_custom_cath_file_for_sfam(job, full_sfam_path, cath_full_h5):
             if row.cath_code.count(".") == 3:
                 store.require_group(f"{row.h5_key}/domains")
 
-def setup_custom_file(job, cath_full_h5, pdbs, update=False, force=False):
+def setup_custom_file(job: Job, cath_full_h5: str, pdbs: Union[bool, list[str], str], update: bool = False, 
+                      force: bool = False, create_all_hierarchies_first: bool = False) -> None:
+    """Create a 'Custom' file with single group to hold all entries. Root contains only 3 groups: 'domains', 
+    'data_splits', and 'representatives'. This is used for PDB entries or given list of files where no hierarchy
+    is used.
+
+    Parameters
+    ----------
+    job : toil Job
+        Currently running job
+    cath_full_h5 : str
+        Path to h5 file on HSDS endpoint
+    pdbs : bool or list of str
+        Can be a list of PDB IDs or file names to include. If value is True, all PDBs from the
+        PDB are included
+    update : bool
+
+    """
     RealtimeLogger.info(f"Creating file {cath_full_h5}")
 
     if is_num(force) and int(force)==3:
@@ -319,43 +363,69 @@ def setup_custom_file(job, cath_full_h5, pdbs, update=False, force=False):
     with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
         pass
 
-    if isinstance(pdbs, bool) and pdbs:
-        #Use entire PDB database
-        job.addFollowOnJobFn(get_all_pdbs, cath_full_h5, update=update)
-    elif isinstance(pdbs, (list,tuple)) and isinstance(pdbs[0], str):
-        if Path(pdbs[0]).is_file():
-            #Ceate custom files, not implemented
-            pass
-        elif len(pdbs[0]) < 9:
-            #Is PDB_entity or PDB.chain or just PDB
-            job.addFollowOnJobFn(get_custom_pdbs, pdbs, cath_full_h5, update=update)
-    else:
-        pdbs = Path(pdbs)
-        if pdbs.is_dir():
-            child_files = list(pdbs.iterdir())
-            if all([f.is_dir() for f in child_files]):
-                if all([f.stem.count(".")==3 for f in child_files]):
-                    #Are all CATH directories
-                    names = pd.DataFrame([(*f.stem.split(), str(f)) for f in child_files], columns=["C", "A", "T", "H", "full_path"])
-                    names = names.assign(group=names["cath_code"].str.split(".", expand=True)[[0,1]].fillna("").agg('.'.join, axis=1))
+    if create_all_hierarchies_first:
+        if isinstance(pdbs, bool) and pdbs:
+            #Use entire PDB database
+            job.addFollowOnJobFn(get_all_pdbs, cath_full_h5, update=update)
+            return
+        elif isinstance(pdbs, (list,tuple)) and isinstance(pdbs[0], str):
+            if Path(pdbs[0]).is_file():
+                #Ceate custom files, not implemented
+                pass
+            elif len(pdbs[0]) < 9:
+                #Is PDB_entity or PDB.chain or just PDB
+                job.addFollowOnJobFn(get_custom_pdbs, pdbs, cath_full_h5, update=update)
+            return
+    
+    pdbs = Path(pdbs)
+    if pdbs.is_dir():
+        child_files = list(pdbs.iterdir())
+        if all([f.is_dir() for f in child_files]):
+            if all([f.stem.count(".")==3 for f in child_files]):
+                #Are all CATH directories
+                names = pd.DataFrame([(*f.stem.split(), str(f)) for f in child_files], columns=["C", "A", "T", "H", "full_path"])
+                names = names.assign(group=names["cath_code"].str.split(".", expand=True)[[0,1]].fillna("").agg('.'.join, axis=1))
 
-                    with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
-                        for className in names.C.drop_duplicates():
-                            #Only max 4
-                            store.require_group(className)
-                        for class_arch, _ in names.groupby(["C", "A"]):
-                            #only max 41
-                            store.require_group(f"{class_arch[0]}/{class_arch[1]}")
+                with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
+                    for className in names.C.drop_duplicates():
+                        #Only max 4
+                        store.require_group(className)
+                    for class_arch, _ in names.groupby(["C", "A"]):
+                        #only max 41
+                        store.require_group(f"{class_arch[0]}/{class_arch[1]}")
 
-                    map_job(job, setup_custom_cath_file_for_sfam, child_files, cath_full_h5)
-                else:
-                    #Follow direcotry structure
-                    raise NotImplementedError
+                map_job(job, setup_custom_cath_file_for_sfam, child_files, cath_full_h5)
             else:
-                #All PDB files in single direcotry
+                #Follow direcotry structure
                 raise NotImplementedError
+        else:
+            #All PDB files in single direcotry
+            raise NotImplementedError
 
-def create_h5_hierarchy(job, cath_full_h5, cathcode=None, skip_cathcode=None, pdbs=None, work_dir=None, force=False):
+def create_h5_hierarchy(job: Job, cath_full_h5: str, cathcode: Union[str, list[str], None] = None, 
+                        skip_cathcode: Union[str, list[str], None] = None, pdbs: Union[bool, list[str], None] = None, 
+                        work_dir: Union[str, None] = None, force: Union[bool, int] = False) -> None:
+    """Start a job that creates the CATH hierarchy inside of the h5 file
+
+    Parameters
+    ----------
+    job : toil Job
+        Currently running job
+    cath_full_h5 : str
+        Path to h5 file on HSDS endpoint
+    cathcode : str or list of strs
+        The CATH codes to seed the hierachy with. Can be 'C', 'C.A', 'C.A.T' or 'C.A.T.H' codes. 
+        Can be one or multiple in list. If None, all superfamilies are included.
+    skip_cathcode : str or list of strs
+        Which CATH codes to skip, same format as above
+    pdbs : bool or list of str
+        Can be a list of PDB IDs or file names to include. If value is True, all PDBs from the
+        PDB are included
+    work_dir : str
+        Path to save temporary failes
+    force : bool or int
+        If Ture or <3, will reconstruct the entire hierarchy
+    """
     if work_dir is None:
         if job is not None and hasattr(job, "fileStore"):
             work_dir = job.fileStore.getLocalTempDir()
@@ -382,11 +452,24 @@ def create_h5_hierarchy(job, cath_full_h5, cathcode=None, skip_cathcode=None, pd
 
     job.addFollowOnJobFn(process_cath_domain_list, cath_full_h5, cathcode=cathcode, skip_cathcode=skip_cathcode, force=force)
 
-def finish_section(job, cath_full_h5, attribute):
+def finish_section(job: Job, cath_full_h5: str, attribute: str) -> None:
+    """Add attribute to entire dataset (root level) specifying which sections have been completed
+
+    Parameters
+    ----------
+    job : toil.Job
+        Currently running job
+    cath_full_h5 : str
+        Path to h5 file on HSDS endpoint
+    atrribute : str
+        Name of complete section
+    """
     with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
         store.attrs[attribute] = True
 
-def is_num(a):
+def is_num(a: Any) -> bool:
+    """Returns True is input in a number (e.g. string)
+    """
     try:
         int(a)
         return True

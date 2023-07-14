@@ -1,30 +1,34 @@
 import time
 import urllib.request
+from typing import Union, Any
 from datetime import datetime
 
 import h5pyd
 import requests
 import pandas as pd
+from toil.job import Job
 from biotite.database.rcsb import FieldQuery, CompositeQuery, search, count, IdentityGrouping
 
 from Prop3D.util.toil import map_job
 from toil.realtimeLogger import RealtimeLogger
 
-
 from Prop3D.generate_data.create_data_splits import split_dataset_at_level
 
-def chain2entity_old(pdbs):
-    RealtimeLogger.info("Converting all chain ids to entity ids")
-    values = []
-    for pdb in pdbs:
-        chain_query = FieldQuery("rcsb_polymer_entity_instance_container_identifiers.rcsb_id", exact_match=pdb)
-        chains_result = [(pdb, entity) for entity in search(chain_query, return_type="polymer_instance")]
-        values += chains_result
-    values = pd.DataFrame(values, columns=["cath_domain", "entity_id"])
-    RealtimeLogger.info("Converted all chain ids to entity ids")
-    return values
 
-def _chain2entity(pdbs, attempts=1):
+def _chain2entity(pdbs: list[str], attempts: int = 1) -> list[tuple[str,str]]:
+    """Convert chain name to entity id to bridge PDB naming schemes using the PDB graph query language
+
+    Parameters
+    ----------
+    pdbs : list of str
+        PDB.CHAIN ids you want to convert
+    attempts : int
+        Number of extra attempts to make if the conversion fails. Defualt is 1
+
+    Returns
+    -------
+    A list of tuple the original id and the converted ids in the same order as the input
+    """
     query = f"""{{
     polymer_entity_instances(instance_ids: ["{'", "'.join(pdbs)}"]) {{
     rcsb_id
@@ -47,7 +51,22 @@ def _chain2entity(pdbs, attempts=1):
     return [(entity["rcsb_id"], f'{entity["rcsb_id"][:4]}_{entity["rcsb_polymer_entity_instance_container_identifiers"]["entity_id"]}') for entity in results]
     
 
-def chain2entity(pdbs, chunk_size=8000):
+def chain2entity(pdbs: list[str], chunk_size: int = 8000) -> list[tuple[str,str]]:
+    """Convert chain name to entity id to bridge PDB naming schemes using the PDB graph query language. 
+    If the number of PDB chian ids is greater than 8000 (or chink_size) they will be split into 
+    multiple chunks to avoid errors.
+
+    Parameters
+    ----------
+    pdbs : list of str
+        PDB.CHAIN ids you want to convert
+    chunk_size : int
+        Number of PDB ids in a single chunk. Defualt is 8000 since that is what seems to work best without failing.
+
+    Returns
+    -------
+    A list of tuple the original id and the converted ids in the same order as the input
+    """
     values = []
     for pdb_chunk_start in range(0, len(pdbs), chunk_size):
         RealtimeLogger.info(f"Converting all chain ids to entity ids: {pdb_chunk_start}/{len(pdbs)}")
@@ -57,7 +76,22 @@ def chain2entity(pdbs, chunk_size=8000):
     RealtimeLogger.info("Converted all chain ids to entity ids")
     return values
 
-def update_pdbs(job, full_pdb_h5):
+def update_pdbs(job: Job, full_pdb_h5: str, return_query: bool = False) -> Union[set[str], FieldQuery]:
+    """Get new PDBs since last update
+
+    Parmeters
+    ---------
+    job : toil Job
+        Current job
+    full_pdb_h5 : str
+        Path to h5 file on hsds endpoint
+    return_query : bool
+        Only return the query used to obtain new PDBs. Defualt false
+    
+    Returns
+    -------
+    Either a set of new PDB ids or a biotite FieldQuery
+    """
     with h5pyd.open(full_pdb_h5, use_cache=False) as f:
         try:
             last_updated = f.attrs['last_updated']
@@ -70,13 +104,19 @@ def update_pdbs(job, full_pdb_h5):
     today_query = FieldQuery("rcsb_accession_info.deposit_date", less_or_equal=today)
     experimental_query = FieldQuery("rcsb_entry_info.structure_determination_methodology", exact_match="experimental")
     #entity_query = FieldQuery("rcsb_entry_info.polymer_entity_count_protein", greater=0)
-    query = CompositeQuery(prev_query, today_query, experimental_query)
+    is_prot = FieldQuery("rcsb_entry_info.polymer_entity_count_protein", greater=0)
+    query = CompositeQuery(prev_query, today_query, experimental_query, is_prot)
 
     new_pdbs = search(query, return_type="polymer_entity")
 
     last_updated_revised_query = FieldQuery("rcsb_accession_info.revision_date", greater_or_equal=last_updated)
     today_revised_query = FieldQuery("rcsb_accession_info.revision_date", less_or_equal=today)
-    revised_pdbs = search(last_updated_revised_query & today_revised_query, return_type="polymer_entity")
+    full_query = last_updated_revised_query & today_revised_query
+
+    if return_query:
+        return full_query
+    
+    revised_pdbs = search(full_query, return_type="polymer_entity")
 
     with h5pyd.open(full_pdb_h5, use_cache=False) as f:
         for rpdb in revised_pdbs:
@@ -84,7 +124,9 @@ def update_pdbs(job, full_pdb_h5):
 
     return set(new_pdbs)&set(revised_pdbs)
 
-def get_all_pdbs(job, full_pdb_h5, update=False):
+def get_all_pdbs(job: Job, full_pdb_h5: str, update: bool = False, create_groups: bool = True) -> None:
+    """Get all PDB ids from the PDB
+    """
     RealtimeLogger.info("Downloading all PDBs names")
     pdbs = None
     if update:
@@ -92,9 +134,10 @@ def get_all_pdbs(job, full_pdb_h5, update=False):
 
     if pdbs is None:
         experimental_query = FieldQuery("rcsb_entry_info.structure_determination_methodology", exact_match="experimental")
+        is_prot = FieldQuery("rcsb_entry_info.polymer_entity_count_protein", greater=0)
         #entity_query = FieldQuery("rcsb_entry_info.polymer_entity_count_protein", greater=0)
         #query = CompositeQuery(experimental_query, entity_query)
-        pdbs = search(experimental_query, return_type="polymer_instance")
+        pdbs = search(experimental_query&is_prot, return_type="polymer_instance")
 
     assert len(pdbs)>0
     
@@ -107,10 +150,6 @@ def get_all_pdbs(job, full_pdb_h5, update=False):
     batches = [pdbs[start:start+batch_size] for start in range(0,len(run_pdbs),batch_size)]
     map_job(job, create_groups, batches, full_pdb_h5)
         
-        # for i, pdb in enumerate(run_pdbs):
-        #     if i%500==0:
-        #         RealtimeLogger.info(f"Adding {i}/{len(run_pdbs)}")
-        #     store.require_group(f"domains/{pdb}")
     job.addFollowOnJobFn(finish_section, full_pdb_h5, "completed_names")
 
     #Map chains to entity ids
@@ -125,17 +164,30 @@ def create_groups(job, pdbs, full_pdb_h5):
                 RealtimeLogger.info(f"Adding {i}/{len(pdbs)}")
             store.require_group(f"domains/{pdb}")
          
-def get_custom_pdbs(job, pdbs, full_pdb_h5, update=False):
+def get_custom_pdbs(job: Job, pdbs: Union[str,list[str]], full_pdb_h5: str, update: bool = False) -> None:
+    """
+    """
     if not isinstance(pdbs, (list, tuple)):
         pdbs = [pdbs]
 
     pdb_chains = set()
 
+    if update:
+        update_query = update_pdbs(job, full_pdb_h5, return_query=True)
+
+    def search_(query, **kwds):
+        if update:
+            query &= update_query
+        
+        return search(query, **kwds)
+    
+    is_prot = FieldQuery("rcsb_entry_info.polymer_entity_count_protein", greater=0)
+
     #Then try old chains names (polymer_instance or asym id) (e.g. 1XYZ.A)
     possible_chains = [p for p in pdbs if "." in p]
     if len(possible_chains) > 0:    
         chain_query = FieldQuery("rcsb_polymer_entity_instance_container_identifiers.rcsb_id", is_in=pdbs)
-        chains_result = set(search(chain_query, return_type="polymer_instance"))
+        chains_result = set(search_(chain_query&is_prot, return_type="polymer_instance"))
         pdb_chains |= chains_result
     
     #Try polymer_entity first (e.g. 1XYZ_1)    
@@ -153,14 +205,14 @@ def get_custom_pdbs(job, pdbs, full_pdb_h5, update=False):
                 entity_query = q3
             else:
                 entity_query |= q3
-        entity_result = set(search(entity_query, return_type="polymer_entity"))
+        entity_result = set(search_(entity_query&is_prot, return_type="polymer_entity"))
         pdb_chains |= entity_result
 
     #Might've used just the 4-letter PDB codes? (e.g. 1XYZ -> 1XYZ_1,1XYZ_2)
     possible_ids = [p for p in pdbs if len(p) == 4]
     if len(possible_ids) > 0:
         entry_query = FieldQuery("rcsb_entry_container_identifiers.entry_id", is_in=pdbs)
-        entry_results = set(search(entry_query, return_type="polymer_instance"))
+        entry_results = set(search_(entry_query&is_prot, return_type="polymer_instance"))
         pdb_chains |= entry_results
 
     if len(pdb_chains) < len(pdbs):
@@ -265,6 +317,17 @@ def create_splits_for_levels(job, full_pdb_h5, pdbs, custom=False):
     
     job.addFollowOnJobFn(finish_section, full_pdb_h5, "completed_domain_splits")
 
-def finish_section(job, cath_full_h5, attribute):
+def finish_section(job: Job, cath_full_h5: str, attribute: str):
+    """Add attribute to entire dataset (root level) specifying which sections have been completed
+
+    Parameters
+    ----------
+    job : toil.Job
+        Currently running job
+    cath_full_h5 : str
+        Path to h5 file on HSDS endpoint
+    atrribute : str
+        Name of complete section
+    """
     with h5pyd.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
         store.attrs[attribute] = True

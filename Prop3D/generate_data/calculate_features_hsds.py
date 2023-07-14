@@ -268,38 +268,6 @@ def calculate_features_for_sfam(job, sfam_id, update_features, further_paralleli
                 out_store.write_output_file(fail_file, fail_key)
                 os.remove(fail_file)
 
-# def run_cath_hierarchy(job, cathcode, cathFileStoreID, update_features=None, further_parallelize=True):
-#     work_dir = job.fileStore.getLocalTempDir()
-#     cath_path = get_file(job, "cath.h5", cathFileStoreID, work_dir=work_dir)
-#
-#     cath_names = ["class", "architechture", "topology", "homology"]
-#     cathcode = dict(zip(cath_names, cathcode))
-#     cath_names = cath_names[:len(cathcode)+1]
-#
-#     cathcodes = filter_hdf_chunks(
-#         cath_path,
-#         "table",
-#         columns=cath_names,
-#         drop_duplicates=True,
-#         **cathcode)[cath_names]
-#
-#     RealtimeLogger.info("cathcode {} {} {}".format(cathcode, cath_names, cathcodes.columns))
-#
-#     if len(cathcodes.columns) < 4:
-#         map_job(job, run_cath_hierarchy, cathcodes.values,
-#             cathFileStoreID, update_features, further_parallelize)
-#         RealtimeLogger.info("Running {} {}s".format(len(cathcodes), cathcodes.columns[-1]))
-#     else:
-#         sfams = (cathcodes.astype(int).astype(str)+"/").sum(axis=1).str[:-1].tolist()
-#         RealtimeLogger.info("Running sfam {}".format(cathcode))
-#         map_job(job, calculate_features_for_sfam, sfams, update_features,
-#             further_parallelize, True)
-#
-#     try:
-#         os.remove(cath_path)
-#     except (FileNotFoundError, OSError):
-#         pass
-
 def start_toil(job, further_parallelize=False, use_cath=True, update_features=None):
     import pandas as pd
     work_dir = job.fileStore.getLocalTempDir()

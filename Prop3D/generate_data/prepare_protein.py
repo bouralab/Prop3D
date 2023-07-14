@@ -10,13 +10,13 @@ import requests
 import traceback
 import subprocess
 import itertools as it
+from typing import Union, Any
 from collections import defaultdict
 from multiprocessing.pool import ThreadPool
 
-
 import pandas as pd
 from Bio import SeqIO
-from toil.job import JobFunctionWrappingJob
+from toil.job import Job, JobFunctionWrappingJob
 
 from Prop3D.parsers.SCWRL import SCWRL
 from Prop3D.parsers.MODELLER import MODELLER
@@ -33,7 +33,14 @@ from Prop3D.util.pdb import get_first_chain, get_all_chains, PDB_TOOLS, s3_downl
 
 
 class PrepareProteinError(RuntimeError):
-    def __init__(self, cath_domain, stage, message, job,  errors=None, *args, **kwds):
+    """A new Error to handle errrs during protein preparation and featurization
+
+    Parameters
+    ----------
+
+    """
+    def __init__(self, cath_domain: str, stage: str, message: str, job: Job,  
+                 errors: Union[list, None] = None, *args: Any, **kwds) -> None:
         super().__init__(*args, **kwds)
         self.cath_domain = cath_domain
         self.stage = stage
@@ -41,11 +48,19 @@ class PrepareProteinError(RuntimeError):
         self.job = job
         self.errors = errors if isinstance(errors, list) else []
 
-    def __str__(self):
+    def __str__(self) -> str:
+        """Convert errors into string
+        """
         return "Error during {}: {}\nErrors:\n".format(self.stage, self.message,
             "\n".join(map(str, self.errors)))
 
-    def save(self, store=None):
+    def save(self, store: Union[IOStore, None] = None) -> None:
+        """Save errors to file in an IOStore
+
+        Parameters
+        ----------
+        store : IOStore
+        """
         if store is None:
             store = data_stores(self.job).prepared_cath_structures
         fail_file = "{}.{}".format(self.cath_domain, self.stage)
@@ -55,33 +70,46 @@ class PrepareProteinError(RuntimeError):
         store.write_output_file(fail_file, "errors/"+os.path.basename(fail_file))
         safe_remove(fail_file)
 
-def extract_domain(pdb_file, cath_domain, sfam_id, chain=None, rename_chain=None,
-  striphet=True, rslices=None, work_dir=None):
+def extract_domain(pdb_file: str, cath_domain: str, sfam_id: Union[str, None], chain: Union[None,str] = None, 
+                   rename_chain: Union[str, None] = None, striphet: bool = True, rslices: Union[list[str],tuple[str],None]= None, 
+                   work_dir: Union[str, None] = None) ->  tuple[str, list[str]]:
     """Extract a domain from a protein structure and cleans the output to make
-    it in standard PDB format. No information in changed or added
+    it in standard PDB format. No information in changed or added.
 
     Prepare a protein structure for use in Prop3D. This will
     0) Unzip if gzipped
-    1) Cleanup PDB file and add TER lines in between gaps
-    2) Remove HETATMS
-    3) Split Chains into separate files
-    4) Each chain is then protonated and minimized. See 'run_single_chain'
-    for more info
+    1) Select first model
+    2) select chain
+    3) Remove all alternate conformations (altlocs)
+    4) Remove HETATMS
+    5) Clip structure into regions if given
+    6) Cleanup PDB file and add TER lines in between gaps
 
     Parameters
     ----------
     pdb_file : str
         Path to PDB file
+    cath_domain : str 
+        Name of cath domain (e.g. 1xyzA00)
+    sfam_id : str
+        Name of CATH sfam domains belong to. Not used, can be None.
     chain : str or None
-        Chain ID to split out, protonate, and mininize. If None (default),
-        all chains will be split out, protonated, and mininized.
+        Chain ID to use
+    rename_chain : str or None
+        Chain to renmae old one to
+    striphet : bool
+        Remove HETATMS, default is True
+    rslices : list of str
+        Residue regions to slice input structure. Format follows pdb_tool.rslice
+    work_dir : str
+        Where to save files
 
     Returns
     -------
-    If no chain was specified a list of all chains is returned with the
-    path to the prepared file, the pdb code, and chain. If a chain is
-    specified, 3 values are returned: the path to the prepared file,
-    the pdb code, and chain. See 'run_single_chain' for info.
+    domain_file : str
+        Path to newly cleaned file
+    prep_steps : list of str
+        All commands used to clean the structure
     """
     if not os.path.isfile(pdb_file):
         raise RuntimeError("Invalid PDB File, cannot find {}".format(pdb_file))
@@ -201,14 +229,12 @@ def extract_domain(pdb_file, cath_domain, sfam_id, chain=None, rename_chain=None
 
     return domain_file, prep_steps
 
-def prepare_domain(pdb_file, chain, cath_domain, sfam_id=None,
-  perform_cns_min=False, work_dir=None, job=None, cleanup=True):
+def prepare_domain(pdb_file: str, chain: str, cath_domain: str, sfam_id: Union[str,None] = None,
+                   perform_cns_min: bool = False, work_dir: Union[str, None] = None, 
+                   job: Union[Job, None] = None, cleanup: bool = True) ->  tuple[str, list[str]]:
     """Prepare a single domain for use in Prop3D. This method modifies a PDB
-    file by adding hydrogens with PDB2PQR (ff=parse, ph=propka) and minimizing
-    using rosetta (lbfgs_armijo_nonmonotone with tolerance 0.001). Finally,
-    the domain PDB file is cleaned so that can be parsed by simple PDB parsers.
-
-    Method called during 'run_protein'
+    file by adding missing atoms (SCWRL), residues (MODELLER) and adding hydrogens 
+    and energy minimizr (simple debump) with PDB2PQR (ff=parse, ph=propka).
 
     Note: AssertError raised if pdb_file is gzipped or contains 2+ chains
 
@@ -217,17 +243,27 @@ def prepare_domain(pdb_file, chain, cath_domain, sfam_id=None,
     pdb_file : str
         Path to PDB file of chain to prepare. Must not be gzipped or contain
         more than one chain.
-
+    chain : str or None
+        Chain ID to use
+    cath_domain : str 
+        Name of cath domain (e.g. 1xyzA00)
+    sfam_id : str
+        Name of CATH sfam domains belong to. Not used, can be None.
+    perform_cns_min : bool
+        Apply more rigorous minimimization with CNS that with just Pdb2Pqr. Default False.
+    work_dir : str
+        Where to save files
+    job : toil.Job
+        The toil job that is used to call this function. Not needed, can be None
+    cleanup: bool
+        Cleanup/remove all temp files
+    
     Returns
     -------
-    cleaned_minimized_file : str
-        Path to prepared PDB file
-    pdb : str
-        PDB ID
-    chain : str
-        Chain ID
-    domain : 2-tuple
-        Structural domain ID and domain Number.
+    cleaned_file : str
+        Path to newly cleaned/modified structure
+    prep_steps : list of str
+        All commands used to clean/modify the structure
     """
     if not os.path.isfile(pdb_file):
         raise RuntimeError("Invalid PDB File, cannot find {}".format(pdb_file))
@@ -327,7 +363,7 @@ def prepare_domain(pdb_file, chain, cath_domain, sfam_id=None,
 def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chain=None,
   force_rslices=None, force=False, work_dir=None, get_from_pdb=False, cleanup=True,
   memory="12G", preemptable=True):
-    """Process domains by extracting them, protonating them, and then minimizing.
+    """Process domains by extracting them, protonating them, and then minimizing. 
     PrepareProteinError is raised on error"""
     if work_dir is None:
         if job and hasattr(job, "fileStore"):
@@ -454,8 +490,6 @@ def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chai
 
     if cleanup:
         safe_remove(files_to_remove)
-
-    print("RETURN?", local_file)
 
     return prepared_file, prep_steps, domain_file, local_file
 
@@ -660,20 +694,3 @@ def start_toil(job, cath=True):
 
     del sfams
     safe_remove(sdoms_file)
-
-if __name__ == "__main__":
-    from toil.common import Toil
-    from toil.job import Job
-
-    parser = Job.Runner.getDefaultArgumentParser()
-    options = parser.parse_args()
-    options.logLevel = "DEBUG"
-    options.clean = "always"
-    options.targetTime = 1
-
-    detector = logging.StreamHandler()
-    logging.getLogger().addHandler(detector)
-
-    job = Job.wrapJobFn(start_toil)
-    with Toil(options) as toil:
-        toil.start(job)
