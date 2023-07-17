@@ -1,32 +1,38 @@
-from __future__ import print_function
-import sys
 import os
-import argparse
-import time
 import traceback
 from functools import partial
-from itertools import groupby
-import glob
+from typing import Union, Any
 
 import h5pyd
-import numpy as np
-
 from Prop3D.common.featurizer import ProteinFeaturizer
 
 from Prop3D.util import safe_remove
-from Prop3D.util.iostore import IOStore
-from Prop3D.util.pdb import InvalidPDB, get_atom_lines
-from Prop3D.util.hdf import get_file, filter_hdf, filter_hdf_chunks
-from Prop3D.util.toil import map_job
-from Prop3D.util.cath import run_cath_hierarchy
-
 from Prop3D.generate_data.data_stores import data_stores
 
+from toil.job import Job
 from toil.realtimeLogger import RealtimeLogger
-from botocore.exceptions import ClientError
 
 class CalculateFeaturesError(RuntimeError):
-    def __init__(self, job, cath_domain, stage, message, errors=None, *args, **kwds):
+    """A new Error to handle errors during protein featurization
+
+    Parameters
+    ----------
+    job : toil Job
+        Current running job
+    cath_domain : str
+        Name of cath domain
+    stage : str
+        function name where error occured
+    message : str
+        Error message
+    errors : list or None
+        Orignal error objects
+    *args : any
+        any xtra args
+    **kwds : any 
+        ANY XTRA KWDS
+    """
+    def __init__(self, job: Job, cath_domain: str, stage: str, message:str, errors: Union[list, None] = None, *args: Any, **kwds: Any) -> None:
         super().__init__(*args, **kwds)
         self.cath_domain = cath_domain
         self.stage = stage
@@ -35,10 +41,18 @@ class CalculateFeaturesError(RuntimeError):
         self.jobStoreName = os.path.basename(job.fileStore.jobStore.config.jobStore.split(":")[-1])
 
     def __str__(self):
+        """Convert errors into string
+        """
         return "Error during {}: {}\nErrors:\n".format(self.stage, self.message,
             "\n".join(map(str, self.errors)))
 
     def save(self, store=None):
+        """Save errors to file in an IOStore
+
+        Parameters
+        ----------
+        store : IOStore
+        """
         if store is None:
             store = data_stores(job).cath_features
         fail_file = "{}.{}".format(self.cath_domain, self.stage)
@@ -50,7 +64,28 @@ class CalculateFeaturesError(RuntimeError):
             f"errors/{self.jobStoreName}/{os.path.basename(fail_file)}")
         safe_remove(fail_file)
 
-def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features=None, domain_file=None, work_dir=None):
+def calculate_features(job: Job, cath_full_h5: str, cath_domain: str, cathcode: str, update_features: Union[list[str], None] = None, 
+                       domain_file: Union[str, None] = None, work_dir: Union[str, None] = None) -> None:
+    """Featurize a protein at the atom, residue, and graph level saving all data into the h5 file on HSDS endpoint
+
+    Parameters
+    ----------
+    job : toil Job
+        Currently running job
+    cath_full_h5 : str
+        Path to h5 on hsds endpoint
+    cath_domain : str
+        CATH domain (7-letter code) PDB ID, CHAIN, Domain ID, eg. 1zyzA00
+    cathcode : str
+        Superfamily cath domain belongs to (Use / instead of .)
+    update_features : list of str or None
+        Select which features update (either indidual feature names or whole group names). If None, all features will be calculated.
+        Default is None.
+    domain_file : str or None
+        Path to pdb file. If None, it will be downloaded from the raw IOStore (see data_stores)
+    work_dir : str
+        Where to save temp files
+    """
     if work_dir is None:
         if job is not None and hasattr(job, "fileStore"):
             work_dir = job.fileStore.getLocalTempDir()
@@ -71,50 +106,32 @@ def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features
 
 
     if update_features is not None:
-        if False:
-            #Download existing features from older method
-            fail = False
-            for ext in ("atom.h5", "residue.h5", "edges.txt.gz"):
-                try:
-                    data_stores(job).cath_features.read_input_file(
-                        "{}_{}".format(s3_cath_key, ext),
-                        os.path.join(work_dir, "{}_{}".format(cath_domain, ext)))
-                except ClientError:
-                    #Ignore, just recalculate
-                    update_features = None
-                    fail = True
-                    break
-            if fail:
-                RealtimeLogger.info("Failed to download old features")
-        else:
-            #Save features for cath domain in new seperate h5 files to be red in by the Featurizer
-            store = h5pyd.File(cath_full_h5, mode="r", use_cache=False)
-            try:
-                feat_files = list(store[cath_key].keys())
-                if len(feat_files) == 3 and "atom" in feat_files and \
-                  "residue" in feat_files and feat_files and "edges":
-                    for feature_type, index_col in (("atoms", "serial_number"), ("residues", "residue_id")):
-                        df = pd.DataFrame(store[f"{cath_key}/{feature_type}"]).set_index(index_col)
-                        feature_file = os.path.join(work_dir, f"{cath_domain}_{feature_type:-1]}.h5")
-                        df.to_hdf(feature_file, "table")
-                        del df
-                        to_remove.append(feature_file)
-                else:
-                    update_features = None
-            except KeyError:
-                feats_exist = False
-            finally:
-                store.close()
-
-
+        #Save features for cath domain in new seperate h5 files to be red in by the Featurizer
+        store = h5pyd.File(cath_full_h5, mode="r", use_cache=False)
+        try:
+            feat_files = list(store[cath_key].keys())
+            if len(feat_files) == 3 and "atom" in feat_files and \
+                "residue" in feat_files and feat_files and "edges":
+                for feature_type, index_col in (("atoms", "serial_number"), ("residues", "residue_id")):
+                    df = pd.DataFrame(store[f"{cath_key}/{feature_type}"]).set_index(index_col)
+                    feature_file = os.path.join(work_dir, f"{cath_domain}_{feature_type:-1]}.h5")
+                    df.to_hdf(feature_file, "table")
+                    del df
+                    to_remove.append(feature_file)
+            else:
+                update_features = None
+        except KeyError:
+            feats_exist = False
+        finally:
+            store.close()
 
     if s3_cath_key is not None:
         domain_file = os.path.join(work_dir, "{}.pdb".format(cath_domain))
         try:
             data_stores(job).prepared_cath_structures.read_input_file(
                 s3_cath_key+".pdb", domain_file)
-        except ClientError:
-            RealtimeLogger.info("Failed to download prapred cath file {}".format(
+        except Exception as e:
+            RealtimeLogger.info("Failed to download prepared cath file {}".format(
                 cath_key+".pdb"))
             raise
         output_name = cath_domain
@@ -189,26 +206,6 @@ def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features
                             RealtimeLogger.info(f"Add small data: with: {len(small_data)}")
                             store[f"{cath_key}/{ext}"].resize((store[f"{cath_key}/{ext}"].shape[0] + small_data.shape[0]), axis=0)
                             store[f"{cath_key}/{ext}"][-small_data.shape[0]:] = small_data
-                        
-            # else:
-                # ds1 = store[f"{cath_key}/{ext}"]       # load the data
-                # RealtimeLogger.info(f"OLD DS is: {ds1}")
-                # try:
-                #     ds1[...] = rec_arr                     # assign new values to data
-                # except OSError as e:
-                #     if "Request Entity Too Large" in str(e):
-                #         #Dataset too lareg to pass over http PUT
-                #         span = 500 #atoms in structure int(len(rec_arr)/4)
-                #         for i, start in enumerate(range(0, len(rec_arr), span)):
-                #             small_data = rec_arr[start:start+span]
-                #             if i==0:
-                #                 RealtimeLogger.info(f"Create small data: with: {len(small_data)}")
-                #                 store.create_table(f"{cath_key}/{ext}", data=small_data, dtype=list(column_dtypes.items()),
-                #                     chunks=True, compression="gzip", compression_opts=9)
-                #             else:
-                #                 RealtimeLogger.info(f"Add small data: with: {len(small_data)}")
-                #                 store[f"{cath_key}/{ext}"].resize((store[f"{cath_key}/{ext}"].shape[0] + small_data.shape[0]), axis=0)
-                #                 store[f"{cath_key}/{ext}"][-small_data.shape[0]:] = small_data
 
         RealtimeLogger.info("Finished {} features for: {} {}".format(ext, cathcode, output_name))
 
@@ -219,104 +216,3 @@ def calculate_features(job, cath_full_h5, cath_domain, cathcode, update_features
     if update_features:
         for f in to_remove:
             safe_remove(f)
-
-def calculate_features_for_sfam(job, sfam_id, update_features, further_parallelize=True, use_cath=True):
-    work_dir = job.fileStore.getLocalTempDir()
-
-    RealtimeLogger.info("Running SFAM {}".format(sfam_id))
-
-    extensions = set([u'atom.h5', u'residue.h5', u'edges.h5'])
-
-    def done_files(k, o):
-        return set(f.rsplit("_", 1)[1] for f in \
-            o.list_input_directory(k) if "fail" not in f)
-
-    if use_cath:
-        pdb_store = IOStore.get("aws:us-east-1:Prop3D-cath-structure")
-        out_store = IOStore.get("aws:us-east-1:Prop3D-cath-features")
-        pdb_keys_full = set(k for k in pdb_store.list_input_directory(sfam_id) \
-            if k.endswith(".pdb"))
-
-        if update_features is None:
-            pdb_keys_done = set(k for k in pdb_keys_full if \
-                done_files(os.path.splitext(k)[0], out_store)==extensions)
-            pdb_keys = list(pdb_keys_full-pdb_keys_done)
-        else:
-            pdb_keys = list(pdb_keys_full)
-
-        RealtimeLogger.info("RUNNING {}/{} DOMAINS from {}: {}".format(len(pdb_keys),
-            len(pdb_keys_full), sfam_id, pdb_keys))
-
-        # pdb_keys = [k for k in pdb_store.list_input_directory(sfam_id) if \
-        #     k.endswith(".pdb") and \
-        #     extensions != done_files(os.path.splitext(k)[0], out_store)]
-
-
-    if further_parallelize:
-        map_job(job, calculate_features, pdb_keys, update_features)
-    else:
-        for pdb_key in pdb_keys: #pdb_store.list_input_directory(int(sfam_id)):
-            try:
-                calculate_features(job, pdb_key, update_features, work_dir=work_dir)
-            except (SystemExit, KeyboardInterrupt):
-                raise
-            except Exception as e:
-                fail_key = "{}_error.fail".format(os.path.splitext(pdb_key)[0])
-                fail_file = os.path.join(work_dir, os.path.basename(fail_key))
-                with open(fail_file, "w") as f:
-                    f.write("{}\n".format(e))
-                out_store.write_output_file(fail_file, fail_key)
-                os.remove(fail_file)
-
-def start_toil(job, further_parallelize=False, use_cath=True, update_features=None):
-    import pandas as pd
-    work_dir = job.fileStore.getLocalTempDir()
-
-
-    if use_cath:
-        in_store = IOStore.get("aws:us-east-1:Prop3D-cath")
-        sfam_file = os.path.join(work_dir, "cath.h5")
-        in_store.read_input_file("cath-domain-description-file-small.h5", sfam_file)
-
-        cathFileStoreID = job.fileStore.writeGlobalFile(sfam_file)
-
-        # run_cath_hierarchy(job, (2,130,10), cathFileStoreID)
-        #
-        # map_job(job, calculate_features, ["1/20/80/40/4jk7A02.pdb"])
-
-        classes = filter_hdf_chunks(sfam_file, "table", columns=["class"],
-           drop_duplicates=True).sort_values("class")["class"].values[:, None]
-        map_job(job, run_cath_hierarchy, classes, cathFileStoreID, update_features)
-        #sfams = ["2/60/40/10"]
-    else:
-        in_store = IOStore.get("aws:us-east-1:Prop3D-ibis")
-        sfam_file = os.path.join(work_dir, "PDB.h5")
-        in_store.read_input_file("PDB.h5", sfam_file)
-
-        sfams = pd.read_hdf(sfam_file, "Superfamilies", columns=
-            ["sfam_id"]).drop_duplicates().dropna()["sfam_id"].sort_values()
-
-        RealtimeLogger.info("Running {} SFAMs".format(len(sfams)))
-        RealtimeLogger.info("{}".format(sfams))
-
-        #sfams = [299845.0]
-
-        map_job(job, calculate_features_for_sfam, sfams, further_parallelize, use_cath)
-
-    safe_remove(sfam_file)
-
-    #job.addChildJobFn(calculate_features, "301320/yc/1YCS_A_sdi225433_d0.pdb")
-
-if __name__ == "__main__":
-    from toil.common import Toil
-    from toil.job import Job
-
-    parser = Job.Runner.getDefaultArgumentParser()
-    options = parser.parse_args()
-    options.logLevel = "DEBUG"
-    options.clean = "always"
-    options.targetTime = 1
-
-    job = Job.wrapJobFn(start_toil)
-    with Toil(options) as workflow:
-        workflow.start(job)

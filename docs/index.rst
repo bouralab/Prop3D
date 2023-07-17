@@ -22,7 +22,7 @@ Currently, we provide one precalculated dataset:
 
 In the future, we will provide the entire CATH database, entire PDB, and AlphaFold-CATH -- CATH mappings for all domains in AlphaFold2.
 
-If you want to generate your own datasets, please follow the installation steps for using the :doc:`./install/hsds.rst`
+If you want to generate your own datasets, please follow the installation steps for using the :doc:`install/hsds`
 
 .. image:: img/Prop3D_overview.png
 
@@ -64,9 +64,9 @@ Prop3D is not meant replace (better) tools such as `Biotite <https://github.com/
    :hidden:
    :caption: Installation
 
-   install/basic.rst
-   install/hsds.rst
-   install/precomputed_dataset.rst
+   /install/basic.rst
+   /install/hsds.rst
+   /install/precomputed_dataset.rst
 
 .. toctree::
    :maxdepth: 1
@@ -81,10 +81,10 @@ Prop3D is not meant replace (better) tools such as `Biotite <https://github.com/
    :hidden:
    :caption: Use Dataset
 
-   use_dataset/simple.rst
-   use_dataset/sequence_classification.ipynb
-   use_dataset/protein_mpnn.ipynb
-   use_dataset/voxelized_structure.ipynb
+   /use_dataset/simple.rst
+   /use_dataset/sequence_classification.ipynb
+   /use_dataset/protein_mpnn.ipynb
+   /use_dataset/voxelized_structure.ipynb
 
 .. toctree::
    :maxdepth: 4

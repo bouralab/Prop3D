@@ -18,7 +18,6 @@ from Prop3D.util.toil import map_job, map_job_follow_ons
 from Prop3D.util.pdb import get_atom_lines
 
 from Prop3D.generate_data.prepare_protein import process_domain
-from Prop3D.generate_data.calculate_features import calculate_features
 from Prop3D.generate_data.calculate_features_hsds import calculate_features as calculate_features_hsds
 from Prop3D.generate_data.set_cath_h5_toil import create_h5_hierarchy
 
@@ -58,10 +57,10 @@ def get_domain_structure_and_features(job: Job, cath_domain: str, superfamily: U
     """
     RealtimeLogger.info("get_domain_structure_and_features Process domain "+cath_domain)
 
-    if use_hsds:
-        calc_features_func = calculate_features_hsds
-    else:
-        calc_features_func = calculate_features
+    if not use_hsds:
+        raise RuntimeError("You must use HSDS")
+    
+    calc_features_func = calculate_features_hsds
 
     if superfamily is not None:
         key = "{}/{}.pdb".format(superfamily, cath_domain)
@@ -451,7 +450,7 @@ def start_toil(job: Job, cathFileStoreID: Union[str, FileID], cathcode: Union[li
     if not use_hsds:
         raise RuntimeError("You must use HSDS")
     
-    job.addChildJobFn(create_h5_hierarchy, cathFileStoreID, cathcode=cathcode,
+    hierarchy_job = job.addChildJobFn(create_h5_hierarchy, cathFileStoreID, cathcode=cathcode,
         skip_cathcode=skip_cathcode, pdbs=pdbs, work_dir=work_dir, force=force)
 
     next_job = None
@@ -459,13 +458,14 @@ def start_toil(job: Job, cathFileStoreID: Union[str, FileID], cathcode: Union[li
         if (isinstance(pdbs, bool) and pdbs):
             #Use entire PDB database
             next_job = start_domain_and_features_then_create_splits
-        elif:
+        elif isinstance(pdbs, list) and isinstance(pdbs[0], str):
             if Path(pdbs[0]).is_file():
                 #Ceate custom files, not implemented
-                pass
+                raise RuntimeError("Use of PDB files is not supported yet")
             elif len(pdbs[0]) < 9:
                 #Is PDB_entity or PDB.chain or just PDB
                 next_job = start_domain_and_features_then_create_splits
+        pdbs = hierarchy_job.rv()
     else:
         #Normal execution
         next_job = start_domain_and_features

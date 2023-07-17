@@ -1,7 +1,7 @@
 import os
 from toil.job import Job
 from Prop3D.generate_data.prepare_protein import process_domain
-from Prop3D.generate_data.calculate_features import calculate_features
+from Prop3D.generate_data.old.calculate_features import calculate_features
 
 def create_input_files(*pdbs, input_file=None):
     job = Job()

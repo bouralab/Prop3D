@@ -4,13 +4,6 @@ Prop3D.generate\_data package
 Submodules
 ----------
 
-Prop3D.generate\_data.calculate\_features module
-------------------------------------------------
-
-.. automodule:: Prop3D.generate_data.calculate_features
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 Prop3D.generate\_data.calculate\_features\_hsds module
 ------------------------------------------------------
@@ -28,13 +21,6 @@ Prop3D.generate\_data.create\_data\_splits module
    :undoc-members:
    :show-inheritance:
 
-Prop3D.generate\_data.create\_input\_files module
--------------------------------------------------
-
-.. automodule:: Prop3D.generate_data.create_input_files
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 Prop3D.generate\_data.data\_stores module
 -----------------------------------------

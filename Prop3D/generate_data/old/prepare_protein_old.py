@@ -1,44 +1,46 @@
 import os
+import re
 import sys
+import glob
+import gzip
+import time
+import shutil
+import logging
 import requests
 import traceback
+import subprocess
+import itertools as it
 from typing import Union, Any
+from collections import defaultdict
+from multiprocessing.pool import ThreadPool
 
-from toil.job import Job
+import pandas as pd
+from Bio import SeqIO
+from toil.job import Job, JobFunctionWrappingJob
 
 from Prop3D.parsers.SCWRL import SCWRL
 from Prop3D.parsers.MODELLER import MODELLER
 from Prop3D.parsers.Electrostatics import Pdb2pqr
 
+from Prop3D.util.toil import map_job
+from Prop3D.util.hdf import get_file
 from Prop3D.util.iostore import IOStore
 from Prop3D.util.cath import download_cath_domain
 from Prop3D.util import SubprocessChain, safe_remove
 from Prop3D.generate_data.data_stores import data_stores
 from Prop3D.util.toil import RealtimeLogger_ as RealtimeLogger
-from Prop3D.util.pdb import get_all_chains, PDB_TOOLS, s3_download_pdb
+from Prop3D.util.pdb import get_first_chain, get_all_chains, PDB_TOOLS, s3_download_pdb
+
 
 class PrepareProteinError(RuntimeError):
-    """A new Error to handle errors during protein preparation
+    """A new Error to handle errrs during protein preparation and featurization
 
     Parameters
     ----------
-    cath_domain : str
-        Name of cath domain
-    stage : str
-        function name where error occured
-    message : str
-        Error message
-    job : toil Job
-        Current running job
-    errors : list or None
-        Orignal error objects
-    *args : any
-        any xtra args
-    **kwds : any 
-        ANY XTRA KWDS
+
     """
     def __init__(self, cath_domain: str, stage: str, message: str, job: Job,  
-                 errors: Union[list, None] = None, *args: Any, **kwds: Any) -> None:
+                 errors: Union[list, None] = None, *args: Any, **kwds) -> None:
         super().__init__(*args, **kwds)
         self.cath_domain = cath_domain
         self.stage = stage
@@ -358,40 +360,11 @@ def prepare_domain(pdb_file: str, chain: str, cath_domain: str, sfam_id: Union[s
 
     return cleaned_file, prep_steps
 
-def _process_domain(job: Job, cath_domain: str, cathcode: Union[str, None], cathFileStoreID: Union[str, None] = None, 
-                    force_chain: Union[str, None] = None, force_rslices: Union[list[str], None] = None, 
-                    force: Union[bool, int] = False, work_dir: Union[str, None] = None, get_from_pdb: bool = False, 
-                    cleanup: bool = True, memory="12G", preemptable=True) -> tuple[str, list[str], str, str]:
+def _process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chain=None,
+  force_rslices=None, force=False, work_dir=None, get_from_pdb=False, cleanup=True,
+  memory="12G", preemptable=True):
     """Process domains by extracting them, protonating them, and then minimizing. 
-    PrepareProteinError is raised on error
-    
-    Parameters
-    ----------
-    job : toil job
-        Currently running job
-    cath_domain : str
-        Name of cath domain
-    cathcode : str or None
-        Name of superfamily domain belongs to. Can be None.
-    cathFileStoreID : str or None
-        Path to h5 file on hsds endpoint
-    force_chain : str or None
-        DEPRECATED. not used. Orginally used to modify chain name
-    force_rslices : list of str of None
-        DEPRECATED, not used. Residue regions to slice input structure. Format follows pdb_tool.rslice
-    force : bool or int
-        DEPRECATED, not used. Force processing domain by re-ecxtacting and preparing.
-    work_dir : str ot None
-        Path to save temp files
-    get_from_pdb : bool 
-        DEPRECATED. not used
-    cleanup : bool
-        Cleanup temp failes. Default True
-    memory : str
-        Human readable memory string, only used if running jobon AWS. Default is '12G'
-    preemptable : bool
-        Job can be restarted immediately if on spot instance.
-    """
+    PrepareProteinError is raised on error"""
     if work_dir is None:
         if job and hasattr(job, "fileStore"):
             work_dir = job.fileStore.getLocalTempDir()
@@ -520,41 +493,9 @@ def _process_domain(job: Job, cath_domain: str, cathcode: Union[str, None], cath
 
     return prepared_file, prep_steps, domain_file, local_file
 
-def process_domain(job: Job, cath_domain: str, cathcode: Union[str, None], cathFileStoreID: Union[str, None] = None, 
-                   force_chain: Union[str, None] = None, force_rslices: Union[list[str], None] = None, 
-                   force: bool = False, work_dir: Union[str, None] = None, get_from_pdb: bool = False, 
-                   cleanup: bool = True, memory: str ="12G", preemptable: bool = True) -> tuple[str, list[str], str, str]:
-    """'Safe' method to process domains. Calls _precess_domain, but all errors are saved so toil jobs can continue.
-
-    Not recommened anymore, and all errors are actually raised. Uncommon if truly needed.
-
-    Parameters
-    ----------
-    job : toil job
-        Currently running job
-    cath_domain : str
-        Name of cath domain
-    cathcode : str or None
-        Name of superfamily domain belongs to. Can be None.
-    cathFileStoreID : str or None
-        Path to h5 file on hsds endpoint
-    force_chain : str or None
-        DEPRECATED. not used. Orginally used to modify chain name
-    force_rslices : list of str of None
-        DEPRECATED, not used. Residue regions to slice input structure. Format follows pdb_tool.rslice
-    force : bool or int
-        DEPRECATED, not used. Force processing domain by re-ecxtacting and preparing.
-    work_dir : str ot None
-        Path to save temp files
-    get_from_pdb : bool 
-        DEPRECATED. not used
-    cleanup : bool
-        Cleanup temp failes. Default True
-    memory : str
-        Human readable memory string, only used if running jobon AWS. Default is '12G'
-    preemptable : bool
-        Job can be restarted immediately if on spot instance.
-    """
+def process_domain(job, cath_domain, cathcode, cathFileStoreID=None, force_chain=None,
+  force_rslices=None, force=False, work_dir=None, get_from_pdb=False, cleanup=True,
+  memory="12G", preemptable=True):
     try:
         try:
             return _process_domain(job, cath_domain, cathcode, cathFileStoreID=cathFileStoreID,
@@ -575,3 +516,181 @@ def process_domain(job: Job, cath_domain: str, cathcode: Union[str, None], cathF
     except PrepareProteinError as e:
         raise
         e.save()
+
+    print("HERE")
+
+def convert_pdb_to_mmtf(job, sfam_id, jobStoreIDs=None, clustered=True, preemptable=True):
+    raise NotImplementedError()
+
+    work_dir = job.fileStore.getLocalTempDir()
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+    clustered = "clustered" if clustered else "full"
+
+    pdb_path = os.path.join(work_dir, "pdb")
+    if not os.path.isdir(pdb_path):
+        os.makedirs(pdb_path)
+
+    #Download all with same sfam
+    if jobStoreIDs is None:
+        in_store = IOStore.get("{}:Prop3D-{}-structures".format(prefix), clustered)
+        for f in in_store.list_input_directory(sfam_id):
+            if f.endswith(".pdb"):
+                in_store.read_input_file(f, os.path.join(work_dir, f))
+    else:
+        for jobStoreID in jobStoreIDs:
+            job.fileStore.readGlobalFile(fileStoreID, userPath=pdb_path)
+
+    PdbToMmtfFull(pdb_path, mmtf_path, work_dir=work_dir, job=job)
+
+    out_store = IOStore.get("{}:Prop3D-{}-mmtf".format(prefix, clustered))
+    out_store.write_output_directory(mmtf_path, sfam_id)
+
+def create_data_loader(job, sfam_id, preemptable=True):
+    """Create H5 for Molmimic3dCNN to read
+
+    Note: move this somewhere else
+    """
+    work_dir = job.fileStore.getLocalTempDir()
+    prefix = job.fileStore.jobStore.config.jobStore.rsplit(":", 1)[0]
+
+    pdb_path = os.path.join(work_dir, "pdb")
+    if not os.path.isdir(pdb_path):
+        os.makedirs(pdb_path)
+
+    id_format = re.compile("^([A-Z0-9]{4})_([A-Za-z0-9]+)_sdi([0-9]+)_d([0-9]+)$")
+
+    #Get all with keys same sfam, but do not download
+
+    in_store = IOStore.get("{}:Prop3D-clustered-structures".format(prefix))
+    keys = [id_format.match(f).groups() for f in in_store.list_input_directory(sfam_id) \
+        if f.endswith(".pdb") and id_format.match(f)]
+
+    pdb_path = os.path.join(PDB_PATH, dataset_name, "by_superfamily", str(int(sfam_id)))
+    clusters_file = os.path.join(pdb_path, "{}_nr.fasta".format(int(sfam_id)))
+
+
+    try:
+        pdb, chain, sdi, domain = list(zip(*[id_format.match(seq.id[:-2]).groups() \
+            for s in SeqIO.parse(clusters_file, "fasta")]))
+    except ValueError:
+        RealtimeLogger.info("Unable to create data loading file for {}.".format(sfam_id))
+        return
+
+    domains = pd.DataFrame({"pdb":pdb, "chain":chain, "domNo":domain, "sdi":sdi})
+
+    data_loader = os.path.join(pdb_path, "{}.h5".format(int(sfam_id)))
+    domains.to_hdf(str(data_loader), "table", complevel=9, complib="bzip2")
+
+def copy_pdb_h5(job, path_or_pdbFileStoreID):
+    if os.path.isfile(path_or_pdbFileStoreID):
+        return path_or_pdbFileStoreID
+    else:
+        work_dir = job.fileStore.getLocalTempDir()
+        sdoms_file = os.path.join(work_dir, "PDB.h5")
+
+        with job.fileStore.readGlobalFileStream(path_or_pdbFileStoreID) as fs_sdoms, open(sdoms_file, "w") as f_sdoms:
+            for line in fs_sdoms:
+                f_sdoms.write(line)
+
+        return sdoms_file
+
+def process_sfam(job, sfam_id, pdbFileStoreID, cath, clusterFileStoreID, further_parallize=False, cores=1):
+    work_dir = job.fileStore.getLocalTempDir()
+
+    if cath:
+        clusters_file = get_file(job, "S100.txt", clusterFileStoreID, work_dir=work_dir)
+        all_sdoms = pd.read_csv(clusters_file, delim_whitespace=True, header=None,
+            usecols=[0, 1, 2, 3, 4], names=["cath_domain", "C", "A", "T", "H"])
+        RealtimeLogger.info("ALL SDOMS {}".format(all_sdoms.head()))
+        groups = all_sdoms.groupby(["C", "A", "T", "H"])
+        RealtimeLogger.info("Running sfam {}".format(sfam_id))
+        sdoms = groups.get_group(tuple(sfam_id))["cath_domain"].drop_duplicates().dropna()
+    else:
+        sdoms_file = copy_pdb_h5(job, pdbFileStoreID)
+        sdoms = pd.read_hdf(str(sdoms_file), "merged")
+        sdoms = sdoms[sdoms["sfam_id"]==float(sfam_id)]["sdi"].drop_duplicates().dropna()
+    #sdoms = sdoms[:1]
+    if further_parallize:
+        if False: #cores > 2:
+            #Only makes sense for slurm or other bare-matal clsuters
+            # setup_dask(cores)
+            # d_sdoms = dd.from_pandas(sdoms, npartitions=cores)
+            # RealtimeLogger.info("Running sfam dask {}".format(sdoms))
+            # processed_domains = d_sdoms.apply(lambda row: process_domain(job, row.sdi,
+            #     sdoms_file), axis=1).compute()
+            pass
+        else:
+            map_job(job, process_domain, sdoms, pdbFileStoreID)
+    else:
+        for sdom in sdoms:
+            process_domain(job, sdom, pdbFileStoreID)
+
+
+def post_process_sfam(job, sfam_id, jobStoreIDs):
+    cluster(job, sfam_id, jobStoreIDs)
+
+    if False:
+        convert_pdb_to_mmtf(job, sfam_id, jobStoreIDs)
+        create_data_loader(job, sfam_id, jobStoreIDs)
+
+def start_toil(job, cath=True):
+    """Start the workflow to process PDB files"""
+    work_dir = job.fileStore.getLocalTempDir()
+
+
+    if cath:
+        in_store = IOStore.get("aws:us-east-1:Prop3D-cath")
+        sdoms_file = os.path.join(work_dir, "cath-domain-description-file-small.h5")
+        in_store.read_input_file("cath-domain-description-file-small.h5", sdoms_file)
+
+        #Add pdb info into local job store
+        pdbFileStoreID = job.fileStore.writeGlobalFile(sdoms_file)
+
+        clusters_file = os.path.join(work_dir, "cath-domain-list-S100.txt")
+        in_store.read_input_file("cath-domain-list-S35.txt", clusters_file)
+
+        with open(clusters_file) as f:
+            sfams = list(set([tuple(map(int, l.split()[1:5])) for l in f if l and not l.startswith("#")]))
+
+        clusterFileStoreID = job.fileStore.writeGlobalFile(clusters_file)
+
+    else:
+        in_store = IOStore.get("aws:us-east-1:Prop3D-ibis")
+
+        #Download PDB info
+        sdoms_file = os.path.join(work_dir, "PDB.h5")
+        in_store.read_input_file("PDB.h5", sdoms_file)
+
+        #Add pdb info into local job store
+        pdbFileStoreID = job.fileStore.writeGlobalFile(sdoms_file)
+
+        #Get all unique superfamilies
+        sdoms = pd.read_hdf(str(sdoms_file), "merged")
+
+        # skip_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keep.csv")
+        # if os.path.isfile(skip_file):
+        #     skip = pd.read_csv(skip_file)
+        #     sdoms = sdoms[sdoms["sdi"].isin(skip["sdi"])]
+        #     RealtimeLogger.info("SKIPPING {} sdis; RUNIING {} sdis".format(skip.shape[0], sdoms.shape[0]))
+        #
+        sfams = sdoms["sfam_id"].drop_duplicates().dropna()
+
+        clusterFileStoreID = None
+    #sfams = sfams[:1]
+    #sfams = ["653504"]
+
+    # max_cores = job.fileStore.jobStore.config.maxCores if \
+    #     job.fileStore.jobStore.config.maxCores > 2 else \
+    #     job.fileStore.jobStore.config.defaultCores
+
+    max_cores = job.fileStore.jobStore.config.defaultCores
+    #Add jobs for each sdi
+    job.addChildJobFn(map_job, process_sfam, sfams, pdbFileStoreID, cath, clusterFileStoreID,
+        cores=max_cores)
+
+    #Add jobs for to post process each sfam
+    #job.addFollowOnJobFn(map_job, post_process_sfam, sfams, pdbFileStoreID,
+    #    cores=max_cores)
+
+    del sfams
+    safe_remove(sdoms_file)

@@ -5,7 +5,7 @@ def start_toil(option, use_data=False):
     from Prop3D.generate_data import get_structural_interactome
     from Prop3D.generate_data import calculate_bsa
     from Prop3D.generate_data import prepare_protein
-    from Prop3D.generate_data import calculate_features
+    from Prop3D.generate_data.old import calculate_features
     from Prop3D.generate_data import filter_dataset
 
     if use_data:

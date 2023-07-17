@@ -19,7 +19,7 @@ from Prop3D.parsers.MaxCluster import MaxCluster
 from Prop3D.parsers.USEARCH import ClusterFast
 
 from Prop3D.generate_data.prepare_protein import process_domain
-from Prop3D.generate_data.calculate_features import calculate_features
+from Prop3D.generate_data.old.calculate_features import calculate_features
 from Prop3D.generate_data.data_stores import data_stores
 
 from toil.realtimeLogger import RealtimeLogger

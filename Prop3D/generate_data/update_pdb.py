@@ -79,8 +79,8 @@ def chain2entity(pdbs: list[str], chunk_size: int = 8000) -> list[tuple[str,str]
 def update_pdbs(job: Job, full_pdb_h5: str, return_query: bool = False) -> Union[set[str], FieldQuery]:
     """Get new PDBs since last update
 
-    Parmeters
-    ---------
+    Parameters
+    ----------
     job : toil Job
         Current job
     full_pdb_h5 : str
@@ -124,8 +124,23 @@ def update_pdbs(job: Job, full_pdb_h5: str, return_query: bool = False) -> Union
 
     return set(new_pdbs)&set(revised_pdbs)
 
-def get_all_pdbs(job: Job, full_pdb_h5: str, update: bool = False, create_groups: bool = True) -> None:
-    """Get all PDB ids from the PDB
+def get_all_pdbs(job: Job, full_pdb_h5: str, update: bool = False, create_groups: bool = True) -> Union[None, pd.DataFrame]:
+    """Add the list of All PDB_CHAIN from the enitre PDB to the h5 file. 
+
+    Parameters
+    ----------
+    job : toil.Job
+        Currently running job
+    full_pdb_h5 : str
+        Path to h5 file on HSDS endpoint
+    update : bool
+        Add in new entries since last update
+    create_groups : bool
+        Create groups for all PDB_CHAIN or wait to be added later
+
+    Returns
+    -------
+    Either nothing or just the list of PDB IDs to run
     """
     RealtimeLogger.info("Downloading all PDBs names")
     pdbs = None
@@ -155,17 +170,49 @@ def get_all_pdbs(job: Job, full_pdb_h5: str, update: bool = False, create_groups
     #Map chains to entity ids
     pdb_chains = chain2entity(pdbs)
     
+    if not create_groups:
+        return pdb_chains
+    
     job.addFollowOnJobFn(create_splits_for_levels, full_pdb_h5, pdb_chains)
 
-def create_groups(job, pdbs, full_pdb_h5):
+def create_groups(job: Job, pdbs: list[str], full_pdb_h5: str) -> None:
+    """Create subjob for adding a subset of PDB_CHAINS to the h5 hsds store
+
+    Parameters
+    ----------
+    job : toil.Job
+        Currently running job
+    pdbs: list of str
+        The list of PDB ids. Must be PDB_CHAIN.
+    full_pdb_h5 : str
+        Path to h5 file on HSDS endpoint
+    """
     with h5pyd.File(full_pdb_h5, mode="a", use_cache=False, retries=100) as store:
         for i, pdb in enumerate(pdbs):
             if i%50==0:
                 RealtimeLogger.info(f"Adding {i}/{len(pdbs)}")
             store.require_group(f"domains/{pdb}")
          
-def get_custom_pdbs(job: Job, pdbs: Union[str,list[str]], full_pdb_h5: str, update: bool = False) -> None:
-    """
+def get_custom_pdbs(job: Job, pdbs: Union[str,list[str]], full_pdb_h5: str, update: bool = False, create_groups: bool = True) -> None:
+    """Add the list of custom PDBs to the h5 file. 
+
+    Parameters
+    ----------
+    job : toil.Job
+        Currently running job
+    pdbs: list of str
+        The list of PDB ids. Can be PDB_CHAIN, or PDB_ENTITY which maps to PDB_CHAIN, or 
+        just 4- letter PDB code, which maps to all PDB_CHAINS present in protein.
+    full_pdb_h5 : str
+        Path to h5 file on HSDS endpoint
+    update : bool
+        Add in new entries since last update
+    create_groups : bool
+        Create groups for all PDB_CHAIN or wait to be added later
+
+    Returns
+    -------
+    Either nothing or just the list of PDB IDs to run
     """
     if not isinstance(pdbs, (list, tuple)):
         pdbs = [pdbs]
@@ -228,10 +275,24 @@ def get_custom_pdbs(job: Job, pdbs: Union[str,list[str]], full_pdb_h5: str, upda
             store.require_group(f"domains/{pdb}")
 
     pdb_chains = chain2entity(pdb_chains)
-        
+
+    if not create_groups:
+        return pdb_chains
+    
     job.addFollowOnJobFn(create_splits_for_levels, full_pdb_h5, pdb_chains, custom=False)
 
-def create_representatives(job, clusters, full_pdb_h5):
+def create_representatives(job: Job, clusters: pd.DataFrame, full_pdb_h5: str) -> None:
+    """Add hard links from domain representatives to its equivalent in the "domains" branch hierarchy.
+
+    Parameters
+    ----------
+    job : toil.Job
+        Currently running job
+    clusters : pd.DrataFrame
+        A dataframe mapping pdb_chain to clusters with cols ["cath_id, "entity_id", "cluster_name", "representative"]
+    full_pdb_h5 : str
+        Path to h5 file on HSDS endpoint
+    """
     #Get representatives as entity id
     representatives = clusters["representative"].drop_duplicates()
     
@@ -255,7 +316,22 @@ def create_representatives(job, clusters, full_pdb_h5):
     
     job.addFollowOnJobFn(finish_section, full_pdb_h5, "completed_representatives")
 
-def update_clusters(job, full_pdb_h5, pdbs, pct_id=30, custom=False, update=False):
+def update_clusters(job: Job, full_pdb_h5: str, pdbs: pd.DataFrame, pct_id: int = 30, custom: bool = False) -> None:
+    """Create jobs to create data splits based on mmseqs %seq ids
+
+    Parameters
+    ----------
+    job : toil.Job
+        Currently running job
+    full_pdb_h5 : str
+        Path to h5 file on HSDS endpoint
+    pdbs : pd.DataFrame with cols ["cath_domain", "entity_id"] 
+        A data frame mapping where cath ID (Just PDB_CHAIN) to its entity_id
+    pct_id : int
+        MMseqs cluster level provided by the PDB. Must be 30, 40, 50, 70, 90, 95, 100. Default is 30.
+    custom : bool
+        Use a custom set of PDBs. Defualt false, for all PDBs
+    """
     assert pct_id in [30, 40, 50, 70, 90, 95, 100]
     
     if False:
@@ -308,7 +384,20 @@ def update_clusters(job, full_pdb_h5, pdbs, pct_id=30, custom=False, update=Fals
     if pct_id == 30:
         job.addFollowOnJobFn(create_representatives, clusters, full_pdb_h5)
 
-def create_splits_for_levels(job, full_pdb_h5, pdbs, custom=False):
+def create_splits_for_levels(job: Job, full_pdb_h5: str, pdbs: list[str], custom: bool = False) -> None:
+    """Create jobs to create data splits based on mmseqs %seq ids
+
+    Parameters
+    ----------
+    job : toil.Job
+        Currently running job
+    full_pdb_h5 : str
+        Path to h5 file on HSDS endpoint
+    pdbs : list of str
+        list of PDB.ENTITY
+    custom : bool
+        Use a custom set of PDBs. Defualt false, for all PDBs
+    """
     with h5pyd.File(full_pdb_h5, mode="a", use_cache=False, retries=100) as store:
         store.require_group(f"data_splits")
 
@@ -317,17 +406,17 @@ def create_splits_for_levels(job, full_pdb_h5, pdbs, custom=False):
     
     job.addFollowOnJobFn(finish_section, full_pdb_h5, "completed_domain_splits")
 
-def finish_section(job: Job, cath_full_h5: str, attribute: str):
+def finish_section(job: Job, full_pdb_h5: str, attribute: str) -> None:
     """Add attribute to entire dataset (root level) specifying which sections have been completed
 
     Parameters
     ----------
     job : toil.Job
         Currently running job
-    cath_full_h5 : str
+    full_pdb_h5 : str
         Path to h5 file on HSDS endpoint
     atrribute : str
         Name of complete section
     """
-    with h5pyd.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
+    with h5pyd.File(full_pdb_h5, mode="a", use_cache=False, retries=100) as store:
         store.attrs[attribute] = True

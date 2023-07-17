@@ -117,18 +117,20 @@ def load_h5(job: Job, h5_file: str, hsds_file: str, prefix: str = "", hard_link_
 
                 if retry:
                     #Dataset too lareg to pass over http PUT
-                    chunk_size = 500 #atoms in structure int(len(rec_arr)/4)
-                    for i, start in enumerate(range(0, len(dset), chunk_size)):
-                        small_data = dset[start:start+chunk_size]
-                        if i==0:
-                            with h5pyd.File(hsds_file, mode=file_mode, use_cache=False, retries=100) as store:
-                                store.create_dataset(full_key, small_data.shape, dtype, data=small_data, **dset_parameters)
+                    
+                    #dset_parameters["chunks"] = (chunk_size,)
+                    dset_parameters["maxshape"] = None
 
-                        else:
-                            with h5pyd.File(hsds_file, mode=file_mode, use_cache=False, retries=100) as store:
-                                new_dset = store[full_key]
-                                new_dset.resize(dset.shape[0] + small_data.shape[0], axis=0)
-                                new_dset[-small_data.shape[0]:] = small_data
+                    with h5pyd.File(hsds_file, mode=file_mode, use_cache=False, retries=100) as store:
+                        new_dset = store.create_dataset(full_key, dset.shape[0], dtype, **dset_parameters)
+                        chunk_size = min(new_dset.chunks[0], 500) #atoms in structure int(len(rec_arr)/4)
+
+                    for start in range(0, len(dset), chunk_size):
+                        small_data = dset[start:start+chunk_size]
+                        with h5pyd.File(hsds_file, mode=file_mode, use_cache=False, retries=100) as store:
+                            new_dset = store[full_key]
+                            new_dset.resize(dset.shape[0] + small_data.shape[0], axis=0)
+                            new_dset[-1:] = small_data
 
 def save_h5(hsds_file: str, h5_file: str, prefix: str = "", hard_link_keys: list[str] = ["validation", "train", "test"], 
             hard_link_map: dict[str,str] = {"data_splits":"domains", "representatives":"domains"}, hardlink_items: bool = False) -> None:

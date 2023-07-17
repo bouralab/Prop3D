@@ -2,9 +2,9 @@
 Highly Scalable Data Service (HSDS)
 ===================================
 
-**Note: If you only want to use the dataset, this is unnecessary. See instructions on how to use the** :doc:`../precomputed_datasets`
+**Note: If you only want to use the dataset, this is unnecessary. See instructions on how to use the** 
 
-*This documentation has been modified from `HOBO-request <>` documentation by LF Murillo.*
+*This documentation has been modified from* `HOBO-request <https://gitlab.com/uva-arc/hobo-request/-/blob/main/doc/single-node-k3s-hsds-install.md>`_ *documentation by LF Murillo.*
 
 *Accompanying files can be found in the* ``docs/k3s-conf`` *directory after cloning Prop3D* (``git clone https://github.com/bouralab/Prop3D``)
 

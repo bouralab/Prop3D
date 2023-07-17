@@ -13,7 +13,7 @@ from Bio.PDB.Polypeptide import three_to_one
 
 from Prop3D.common.LocalStructure import Structure
 from Prop3D.parsers.MODELLER import MODELLER
-from Prop3D.generate_data.create_input_files import create_input_files
+from Prop3D.generate_data.old.create_input_files import create_input_files
 
 """MLP: Multiple Loop Permutations
 
