@@ -446,29 +446,9 @@ def setup_custom_file(job: Job, cath_full_h5: str, pdbs: Union[bool, list[str], 
     with h5py.File(cath_full_h5, mode="a", use_cache=False) as store:
         pass
 
-    if isinstance(pdbs, bool) and pdbs:
-        #Use entire PDB database
-        if create_all_hierarchies_first:
-            job.addFollowOnJobFn(get_all_pdbs, cath_full_h5, update=update)
-            return
-        else:
-            return job.addChildJobFn(get_all_pdbs, cath_full_h5, update=update, create_groups=False).rv()
-    elif isinstance(pdbs, (list,tuple)) and isinstance(pdbs[0], str):
-        if Path(pdbs[0]).is_file():
-            #Ceate custom files, not implemented
-            pass
-        elif len(pdbs[0]) < 9:
-            #Is PDB_entity or PDB.chain or just PDB
-            if create_all_hierarchies_first:
-                job.addFollowOnJobFn(get_custom_pdbs, pdbs, cath_full_h5, update=update)
-                return 
-            else:
-                return job.addChildJobFn(get_all_pdbs, cath_full_h5, update=update, create_groups=False).rv()
-        return 
-    
-    #It might be CATH formatted directory
-    pdbs = Path(pdbs)
-    if pdbs.is_dir():
+    #It might be a direcotry or CATH formatted directory
+    if Path(pdbs).is_dir():
+        pdbs = Path(pdbs)
         child_files = list(pdbs.iterdir())
         if all([f.is_dir() for f in child_files]):
             if all([f.stem.count(".")==3 for f in child_files]):
@@ -490,7 +470,32 @@ def setup_custom_file(job: Job, cath_full_h5: str, pdbs: Union[bool, list[str], 
                 raise NotImplementedError
         else:
             #All PDB files in single direcotry
-            raise NotImplementedError
+            pdbs = [f for ftype in ("*.pdb", "*.cif", "*.mmtf") for f in pdbs.glob(ftype)]
+
+    if isinstance(pdbs, bool) and pdbs:
+        #Use entire PDB database
+        if create_all_hierarchies_first:
+            return job.addChildJobFn(get_all_pdbs, cath_full_h5, update=update).rv()
+        else:
+            return job.addChildJobFn(get_all_pdbs, cath_full_h5, update=update, create_groups=False).rv()
+    elif isinstance(pdbs, (list,tuple)) and isinstance(pdbs[0], str):
+        if Path(pdbs[0]).is_file():
+            #Ceate custom files, not implemented
+            if create_all_hierarchies_first:
+                with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
+                    for pdb in pdbs:
+                        group = store.require_group(str(Path(pdb).name))
+            return pdbs
+
+        elif len(pdbs[0]) < 9:
+            #Is PDB_entity or PDB.chain or just PDB
+            if create_all_hierarchies_first:
+                return job.adChildJobFn(get_custom_pdbs, pdbs, cath_full_h5, update=update).rv() 
+            else:
+                return job.addChildJobFn(get_all_pdbs, cath_full_h5, update=update, create_groups=False).rv()
+        else:
+            raise RuntimeError("pdbs must files of strs") 
+
 
 def create_h5_hierarchy(job: Job, cath_full_h5: str, cathcode: Union[str, list[str], None] = None, 
                         skip_cathcode: Union[str, list[str], None] = None, pdbs: Union[bool, list[str], None] = None, 

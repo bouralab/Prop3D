@@ -65,7 +65,7 @@ class CalculateFeaturesError(RuntimeError):
         safe_remove(fail_file)
 
 def calculate_features(job: Job, cath_full_h5: str, cath_domain: str, cathcode: str, update_features: Union[list[str], None] = None, 
-                       domain_file: Union[str, None] = None, work_dir: Union[str, None] = None) -> None:
+                       domain_file: Union[str, None] = None, work_dir: Union[str, None] = None, edge_features: bool = True) -> None:
     """Featurize a protein at the atom, residue, and graph level saving all data into the h5 file on HSDS endpoint
 
     Parameters
@@ -85,6 +85,8 @@ def calculate_features(job: Job, cath_full_h5: str, cath_domain: str, cathcode: 
         Path to pdb file. If None, it will be downloaded from the raw IOStore (see data_stores)
     work_dir : str
         Where to save temp files
+    edge_features: bool
+        Include edge feature or not
     """
     if work_dir is None:
         if job is not None and hasattr(job, "fileStore"):

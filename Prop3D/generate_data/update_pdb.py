@@ -161,17 +161,17 @@ def get_all_pdbs(job: Job, full_pdb_h5: str, update: bool = False, create_groups
         store.require_group("domains")
         run_pdbs = set(pdbs)-set(store['domains'].keys())
 
+    #Map chains to entity ids
+    pdb_chains = chain2entity(pdbs)
+
+    if not create_groups:
+        return pdb_chains
+
     batch_size = 500
     batches = [pdbs[start:start+batch_size] for start in range(0,len(run_pdbs),batch_size)]
     map_job(job, create_groups, batches, full_pdb_h5)
         
     job.addFollowOnJobFn(finish_section, full_pdb_h5, "completed_names")
-
-    #Map chains to entity ids
-    pdb_chains = chain2entity(pdbs)
-    
-    if not create_groups:
-        return pdb_chains
     
     job.addFollowOnJobFn(create_splits_for_levels, full_pdb_h5, pdb_chains)
 
@@ -280,6 +280,8 @@ def get_custom_pdbs(job: Job, pdbs: Union[str,list[str]], full_pdb_h5: str, upda
         return pdb_chains
     
     job.addFollowOnJobFn(create_splits_for_levels, full_pdb_h5, pdb_chains, custom=False)
+
+    return pdb_chains
 
 def create_representatives(job: Job, clusters: pd.DataFrame, full_pdb_h5: str) -> None:
     """Add hard links from domain representatives to its equivalent in the "domains" branch hierarchy.

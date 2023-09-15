@@ -54,7 +54,8 @@ class ProteinFeaturizer(LocalStructure):
         Path to save feature file. If None, use cwd.
     """
     def __init__(self, path: str, cath_domain: str, job: Union[Job, None], work_dir: Union[str, None],
-      input_format:str = "pdb", force_feature_calculation: bool = False, update_features: list[str] = None, features_path: str = None, **kwds) -> None:
+                 input_format:str = "pdb", force_feature_calculation: bool = False, update_features: list[str] = None, \
+                 features_path: str = None, **kwds) -> None:
         feature_mode = "w+" if force_feature_calculation else "r"
         if features_path is None: # and update_features is not None:
             features_path = work_dir
@@ -304,7 +305,7 @@ class ProteinFeaturizer(LocalStructure):
 
         if not hasattr(self, "_autodock"):
             prep = mgltools.PrepareReceptor(job=self.job, work_dir=self.work_dir)
-            self._autodock = prep.get_autodock_atom_types(self.path)
+            self._autodock = prep.get_autodock_atom_types(self.other_formats["pdb"])
 
         try:
             atom_type, h_bond_donor = self._autodock[int(atom.serial_number)]
@@ -471,10 +472,10 @@ class ProteinFeaturizer(LocalStructure):
             try:
                 if only_charge:
                     pdb2pqr = Pdb2pqr(work_dir=self.work_dir, job=self.job)
-                    self._pqr = pdb2pqr.get_charge_from_pdb_file(self.path, with_charge=False)
+                    self._pqr = pdb2pqr.get_charge_from_pdb_file(self.other_formats["pdb"], with_charge=False)
                 else:
                     apbs = APBS(work_dir=self.work_dir, job=self.job)
-                    self._pqr = apbs.get_atom_potentials_from_pdb(self.path)
+                    self._pqr = apbs.get_atom_potentials_from_pdb(self.other_formats["pdb"])
             except (SystemExit, KeyboardInterrupt):
                 raise
             except Exception as e:
@@ -555,7 +556,7 @@ class ProteinFeaturizer(LocalStructure):
 
         if not hasattr(self, "_cx"):
             cx = CX(work_dir=self.work_dir, job=self.job)
-            self._cx = cx.get_concavity(self.path)
+            self._cx = cx.get_concavity(self.other_formats["pdb"])
 
         concavity_value = self._cx.get(atom.serial_number, np.NaN)
 
@@ -685,7 +686,7 @@ class ProteinFeaturizer(LocalStructure):
 
         if not hasattr(self, "_dssp"):
             dssp = DSSP(work_dir=self.work_dir, job=self.job)
-            self._dssp = dssp.get_dssp(self.structure, self.path)
+            self._dssp = dssp.get_dssp(self.structure, self.other_formats["pdb"])
 
         residue_key = [residue.parent.get_id(), residue.get_id()] #[self.chain, residue.get_id()]
         try:
@@ -771,7 +772,7 @@ class ProteinFeaturizer(LocalStructure):
 
         if not hasattr(self, "_dssp"):
             dssp = DSSP(work_dir=self.work_dir, job=self.job)
-            self._dssp = dssp.get_dssp(self.structure, self.path)
+            self._dssp = dssp.get_dssp(self.structure, self.other_formats["pdb"])
 
         try:
             atom_ss = self._dssp[residue.get_full_id()[2:]][2]
@@ -965,7 +966,7 @@ class ProteinFeaturizer(LocalStructure):
 
         if not hasattr(self, "_frustration_singleresidue"):
             frust = FrustratometeR(work_dir=self.work_dir)
-            self._frustration_singleresidue = frust.run(pdb_file=self.path, mode="singleresidue")
+            self._frustration_singleresidue = frust.run(pdb_file=self.other_formats["pdb"], mode="singleresidue")
 
         try:
             frust_values = self._frustration_singleresidue[
@@ -1065,7 +1066,7 @@ class ProteinFeaturizer(LocalStructure):
 
         if not hasattr(self, "_frustration_configutational"):
             frust = FrustratometeR(work_dir=self.work_dir)
-            self._frustration_configutational = frust.run(pdb_file=self.path, mode="configurational")
+            self._frustration_configutational = frust.run(pdb_file=self.other_formats["pdb"], mode="configurational")
 
         try:
             frust_values = self._frustration_configutational[

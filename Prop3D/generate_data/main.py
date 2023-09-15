@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from datetime import datetime
 from typing import Union, Any
 from argparse import Namespace
@@ -33,7 +34,7 @@ logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 def get_domain_structure_and_features(job: Job, cath_domain: str, superfamily: Union[str, None], cathFileStoreID: Union[str, FileID], 
                                       update_features: Union[list[str],tuple[str]] = None, further_parallelize: bool = False, 
-                                      force: Union[int,bool] = False, use_hsds: bool = True) -> None:
+                                      force: Union[int,bool] = False, use_hsds: bool = True, prepare_structure: bool = True) -> None:
     """Process and 'prepare' a single domain and calculate its features
     
     Parameters
@@ -68,7 +69,7 @@ def get_domain_structure_and_features(job: Job, cath_domain: str, superfamily: U
             data_stores(job).prepared_cath_structures.get_size(key)==0
         h5_key = f"/{superfamily}/domains/{cath_domain}"
     else:
-        should_prepare_structure = True
+        should_prepare_structure = prepare_structure
         further_parallelize = False
         force=True
         h5_key = os.path.basename(os.path.basename(cath_domain))[0]
@@ -110,7 +111,10 @@ def get_domain_structure_and_features(job: Job, cath_domain: str, superfamily: U
     else:
         feats_exist = False
 
-    if not should_prepare_structure and not feats_exist:
+    if not prepare_structure:
+        #Use input to calcualte features without preping first
+        local_domain_file = cath_domain
+    elif not should_prepare_structure and not feats_exist:
         local_domain_file = None #Will download in features function
 
     RealtimeLogger.info(f"get_domain_structure_and_features FEATURES {force} {update_features}, {feats_exist}")
@@ -321,6 +325,13 @@ def start_domain_and_features(job: Job, cathFileStoreID: Union[str, FileID], cat
             except KeyError:
                 raise RuntimeError(f"Must create hsds file first.")
             
+        if len(all_domains) == 0:
+            #Features first, no labels
+            if Path(pdb[0]).is_file():
+                all_domains = [Path(p).stem for p in pdbs]
+            else:
+                all_domains = pdbs
+            
         if not force: # and (isinstance(pdbs, bool) and pdbs):
             domains_to_run = list(set(all_domains)-set(done_domains))
         else:
@@ -461,11 +472,15 @@ def start_toil(job: Job, cathFileStoreID: Union[str, FileID], cathcode: Union[li
         elif isinstance(pdbs, list) and isinstance(pdbs[0], str):
             if Path(pdbs[0]).is_file():
                 #Ceate custom files, not implemented
-                raise RuntimeError("Use of PDB files is not supported yet")
+                next_job = start_domain_and_features_then_create_splits
+                #raise RuntimeError("Use of PDB files is not supported yet")
             elif len(pdbs[0]) < 9:
                 #Is PDB_entity or PDB.chain or just PDB
                 next_job = start_domain_and_features_then_create_splits
-        pdbs = hierarchy_job.rv()
+            pdbs = hierarchy_job.rv()
+        elif isinstance(pdbs, str) and Path(pdbs).is_dir():
+            next_job = start_domain_and_features_then_create_splits
+            pdbs = hierarchy_job.rv()
     else:
         #Normal execution
         next_job = start_domain_and_features
