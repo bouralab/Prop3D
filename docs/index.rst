@@ -75,6 +75,7 @@ Prop3D is not meant replace (better) tools such as `Biotite <https://github.com/
 
    create_dataset/cli.rst  
    create_dataset/custom_featurizers.rst
+   create_dataset/simple_featurizer.rst
 
 .. toctree::
    :maxdepth: 1

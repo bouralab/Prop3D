@@ -5,10 +5,10 @@ For all of these examples, we will use the Prop3D-20 dataset:
 
 .. code-block:: bash
 
-    export HS_USER=protein
-    export HS_PASSWORD=protein
-    export HS_ENDPOINT=http://hsds.pods.virginia.edu
-    export PROP3D_DATA=/projects/Prop3D/Prop3D-20.h5
+    export HS_USER=None
+    export HS_PASSWORD=None
+    export HS_ENDPOINT=http://prop3d-hsds.pods.virginia.edu
+    export PROP3D_DATA=/CATH/Prop3D-20.h5
 
 Get a single protein from the dataset with python (h5pyd)
 ---------------------------------------------------------
@@ -51,7 +51,7 @@ We recommend using `DistributedStructure <https://github.com/bouralab/Prop3D/blo
         key="2/30/30/100", 
         cath_domain_dataset="1kq2A00")
 
-    #Save 5 random rotation sampling from the SO(3) group to numpy files
+    #Save 5 random rotations sampling from the SO(3) group to numpy files
     for i, (r, M) in enumerate(structure.rotate(num=5)):
         coords, feats = structure.map_atoms_to_voxel_space(autoencoder=True)
         np.savez(f"1kq2A00_rotation{i}.npz", coords=coords, feats=feats)

@@ -18,7 +18,7 @@
 # -- Project information -----------------------------------------------------
 
 project = 'Prop3D'
-copyright = '2023, Eli Draizen'
+copyright = 'Creative Commons Attribution 4.0 International (CC BY 4.0)'
 author = 'Eli Draizen'
 
 # The full version, including alpha/beta/rc tags
