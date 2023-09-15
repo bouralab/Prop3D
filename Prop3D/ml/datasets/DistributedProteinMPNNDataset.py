@@ -107,15 +107,19 @@ class DistributedProteinMPNNDataset(DistributedDataset):
         
         feats = []
         for r in voxelizer.get_residues():
+            res_feats = []
             for atom_type in ("N", "CA", "C", "O"):
                 for a in r:
-                    if a["atom_name"] == atom_type:
+                    if a["atom_name"].decode("utf-8").strip() == atom_type:
                         coords_dict_chain[f"{atom_type}_chain_{voxelizer.chain}"].append(a[["X", "Y", "Z"]].tolist())
-                        feats.append(a[self.predict_features].tolist())
+                        res_feats.append(a[self.predict_features].tolist())
                         break
                 else:
                     coords_dict_chain[f"{atom_type}_chain_{voxelizer.chain}"].append([np.nan]*3)
-                    feats.append([np.nan]*len(self.predict_features))
+                    res_feats.append([np.nan]*len(self.predict_features))
+                
+            res_feats = np.mean(res_feats).tolist()
+            feats.append(res_feats)
         
         seq = voxelizer.get_sequence()
         return {
@@ -124,5 +128,6 @@ class DistributedProteinMPNNDataset(DistributedDataset):
             "visible_list": [voxelizer.chain], #np.ones(len(seq)),
             "num_of_chains": 1,
             "seq": seq,
+            f"seq_chain_{voxelizer.chain}": seq,
             "prop3d_features": feats
         }

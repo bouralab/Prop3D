@@ -2,17 +2,21 @@ import os
 import sys
 import copy
 from io import StringIO
-from typing import Union, Any, TypeVar, IO, AnyStr
+from functools import partial
+from collections import defaultdict
 from collections.abc import Iterator
+from typing import Union, Any, TypeVar, IO, AnyStr
 
-
-import pandas as pd
 import numpy as np
-from sklearn.decomposition import PCA
+import pandas as pd
+
 from sklearn import preprocessing
+from sklearn.decomposition import PCA
+
 from Bio import PDB
-from Bio.PDB.NeighborSearch import NeighborSearch
 from Bio.PDB import Selection
+from Bio.PDB.NeighborSearch import NeighborSearch
+
 from toil.realtimeLogger import RealtimeLogger
 
 import warnings
@@ -58,13 +62,16 @@ class LocalStructure(object):
         if self.path.endswith(".gz"):
             raise InvalidPDB("Error with {}. Gzipped archives not allowed. Please use constructor or util.get_pdb. File: {}".format(pdb, self.path))
 
-        self.input_format = input_format
-        if self.input_format in ["pdb", "pqr"]:
+        path = Path(path)
+        if input_format in ["pdb", "pqr"] or (input_format == "guess" and path.suffix in [".pdb", ".pqr"]):
             parser = PDB.PDBParser()
-        elif self.input_format == "mmcif":
+            self.input_format = "pdb"
+        elif input_format == "mmcif"  or (input_format == "guess" and path.suffix == ".cif"):
             parser = PDB.FastMMCIFParser()
-        elif self.input_format == "mmtf":
+            self.input_format = "mmcif"
+        elif input_format == "mmtf" or (input_format == "guess" and path.suffix == ".mmtf"):
             parser = PDB.MMTFParser()
+            self.input_format = "mmtf"
         else:
             raise RuntimeError("Invalid PDB parser (pdb, mmcif, mmtf)")
 
@@ -150,6 +157,8 @@ class LocalStructure(object):
 
         self.atom_feature_names = copy.copy(all_features.atom_features)
         self.residue_feature_names = copy.copy(all_features.residue_features)
+
+        self.other_formats = defaultdict(lambda: partial(self.save_pdb, path=f"{self.cath_domain}.pdb") if self.input_format != "pdb" else self.path)
 
     def __abs__(self) -> _Self:
         """Take the absolue value of all atom features

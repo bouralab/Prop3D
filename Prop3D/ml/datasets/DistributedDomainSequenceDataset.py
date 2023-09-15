@@ -92,13 +92,12 @@ class DistributedDomainSequenceDataset(DistributedDataset):
             return voxelizer
 
         sequence = voxelizer.get_sequence()
-        predict_features = voxelizer.features[self.predict_features]
+        predict_features = voxelizer.features[self.predict_features].tolist()
 
         if self.use_features is not None:
             use_features = voxelizer.features[self.use_features]
             return (sequence, use_features), predict_features
         else:
-            print(sequence, predict_features)
             return sequence, predict_features
 
 

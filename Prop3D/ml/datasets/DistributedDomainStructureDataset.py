@@ -18,9 +18,8 @@ class DistributedDomainStructureDataset(DistributedDataset):
     def __init__(self, path, key, use_features=None, predict_features=None,
       truth_key=None, cluster_level="S35", volume=256, nClasses=1, rotate=True,
       test=False, validation=False, representatives=False, domains=None, all_domains=False,
-      file_mode="r", expand_surface_data_loader=True, compare_kdtree=False,
-      space_fill_algorithm="kdtree", dataset_group_name=None, use_keys=None,
-      ignore_keys=None, remove_loops=False, return_structure=False, label_encoder_classes=None):
+      file_mode="r", dataset_group_name=None, use_keys=None, ignore_keys=None, 
+      remove_loops=False, return_structure=False, label_encoder_classes=None):
         assert [validation, test].count(True)<2, "Can only select none or one at a time"
         self.use_features = use_features
         self.cluster_level = cluster_level
@@ -35,9 +34,6 @@ class DistributedDomainStructureDataset(DistributedDataset):
         self.domains = domains
         self.all_domains = all_domains
         self.representatives = representatives
-        self.expand_surface_data_loader = expand_surface_data_loader
-        self.compare_kdtree = compare_kdtree
-        self.space_fill_algorithm = space_fill_algorithm
         self.remove_loops = remove_loops
         self.return_structure = return_structure
 
@@ -94,49 +90,21 @@ class DistributedDomainStructureDataset(DistributedDataset):
         return embedding
 
     def __getitem__(self, index, voxel_map=False):
-        voxelizer, indices, data, truth, _voxel_map, serial, b_factors = [None]*7
-        try:
-            if self.return_structure:
-                return self.get_structure_and_voxels(index)
+        if self.return_structure:
+            return self.get_structure_and_voxels(index)
 
-            voxelizer, indices, data, truth, _voxel_map, serial, b_factors = self.get_structure_and_voxels(index)
-            #data = np.nan_to_num(data)
+        voxelizer, indices, data, truth, _voxel_map, serial, b_factors = self.get_structure_and_voxels(index)
 
-            i, d = torch.from_numpy(indices), torch.from_numpy(data)
-            if self.expand_surface_data_loader:
-                i = i.int()
-                d = d.float()
+        i, d = torch.from_numpy(indices), torch.from_numpy(data)
 
-            if truth is not None:
-                if self.compare_kdtree and isinstance(truth, (list, tuple)):
-                    t=truth
-                else:
-                    t = torch.from_numpy(truth).float()
+        del voxelizer, indices, data, serial, b_factors, _voxel_map
 
-            del voxelizer, indices, data, serial, b_factors
-
-            #assert _voxel_map is not None
-
-            if self.compare_kdtree and _voxel_map is not None:
-                if truth is None:
-                    return i, d, None, _voxel_map
-                else:
-                    return i, d, t, _voxel_map
-            else:
-                del _voxel_map
-
-            if truth is None:
-                return i, d
-            else:
-                return i, d, t
-        except (KeyboardInterrupt, SystemExit):
-            #del voxelizer, indices, data, truth, _voxel_map, serials, b_factors
-            raise
-        except:
-            #del voxelizer, indices, data, truth, _voxel_map, serials, b_factors
-            raise
-            trace = traceback.format_exc()
-            print("Error:", trace)
+        if truth is not None:
+            t = torch.from_numpy(truth).float()
+            del truth
+            return i, d, t
+        else:
+            return i, d            
 
     def get_structure_and_voxels(self, index, truth_residues=None):
         cath_domain_dataset = super().__getitem__(index)
@@ -167,55 +135,18 @@ class DistributedDomainStructureDataset(DistributedDataset):
 
         if truth_residues is None and self.truth_key is not None:
             truth_residues = cath_domain_dataset.attrs[self.truth_key].split(",")
+        elif self.predict_features is not None:
             autoencoder = False
         else:
             autoencoder = True
 
-        if not self.expand_surface_data_loader:
-            indices, data, truth, voxel_map, serial, b_factors = voxelizer.map_atoms_to_voxel_space(
-                truth_residues=truth_residues,
-                autoencoder=autoencoder,
-                return_voxel_map=True,
-                return_serial=True,
-                return_b=True,
-                nClasses=self.nClasses,
-                use_raw_atom_coords=True)
-            voxel_map, serial, b_factors = None, None, None
-
-            if self.compare_kdtree:
-                indices, data, truth, voxel_map, serial, b_factors = voxelizer.map_atoms_to_voxel_space(
-                    truth_residues=truth_residues,
-                    autoencoder=autoencoder,
-                    return_voxel_map=True,
-                    return_serial=True,
-                    return_b=True,
-                    nClasses=self.nClasses)
-
-                truth = [indices_kdtree, data_kdtree]
-                # voxels_serial_map = defaultdict(list)
-                # for atom_grid, atoms in voxel_map.items():
-                #     for atom in atoms:
-                #         voxels_serial_map[atom].append(atom_grid)
-
-                max_atoms = max(_voxel_map.keys()) #max(voxels_serial_map.keys())
-                max_voxels = max(len(atoms) for atoms in _voxel_map.values()) #max(len(atoms) for atoms in voxels_serial_map.values())
-                voxel_map = torch.ones((max_atoms,max_voxels,3))*float('nan')
-                for k, v in sorted(_voxel_map.items(), key=lambda x:x[0]):
-                    assert len(v)<=voxel_map.size()[1]
-                    voxel_map[k-1, :len(v)] = torch.Tensor(sorted(v))
-
-
-
-                #assert voxel_map is not None
-
-        else:
-            indices, data, truth, voxel_map, serial, b_factors = voxelizer.map_atoms_to_voxel_space(
-                truth_residues=truth_residues,
-                autoencoder=autoencoder,
-                return_voxel_map=True,
-                return_serial=True,
-                return_b=True,
-                nClasses=self.nClasses)
+        indices, data, truth, voxel_map, serial, b_factors = voxelizer.map_atoms_to_voxel_space(
+            truth_residues=truth_residues,
+            autoencoder=autoencoder,
+            return_voxel_map=True,
+            return_serial=True,
+            return_b=True,
+            nClasses=self.nClasses)
 
         if self.test:
             n_truth = len(truth) if truth is not None else len(data)

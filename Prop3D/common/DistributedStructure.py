@@ -1,13 +1,15 @@
 import os
 import copy
-from typing import Union, Any, IO, AnyStr
+from pathlib import Path
 from collections.abc import Iterator
+from typing import Union, Any, IO, AnyStr
 
 import numpy as np
 import numpy.lib.recfunctions
 from Bio.PDB.Atom import Atom
 from Bio.PDB import PDBIO
 
+import h5py
 import h5pyd
 import pandas as pd
 
@@ -43,20 +45,35 @@ class DistributedStructure(AbstractStructure):
 
         if cath_domain_dataset is None:
             #Full key given
-            self.f = h5pyd.File(path, use_cache=False)
             try:
-                self.full_key = key
-                cath_domain_dataset = self.f[key]
-            except KeyError:
-                raise RuntimeError(f"Structure with key {key} does not exist in {path}")
+                self.f = h5pyd.File(path, use_cache=False)
+                try:
+                    self.full_key = key
+                    cath_domain_dataset = self.f[key]
+                except KeyError:
+                    raise RuntimeError(f"Structure with key {key} does not exist in {path}")
+            except IOError:
+                #Might be file:
+                try:
+                    self.f = h5py.File(path)
+                    cath_domain_dataset = self.f
+                    self.full_key = Path(path).stem
+                except IOError:
+                    fname = Path(path)
+                    if fname.is_file() and fname.suffix.isin(".pdb", ".mmcif"):
+                        assert 0
         elif isinstance(cath_domain_dataset, str):
-            #Name of domain
-            self.f = h5pyd.File(path, use_cache=False)
             try:
-                self.full_key = f"{key}/domains/{cath_domain_dataset}"
-                cath_domain_dataset = self.f[f"{key}/domains/{cath_domain_dataset}"]
-            except KeyError:
-                raise RuntimeError(f"Structure with key {key}/domains/{cath_domain_dataset} does not exist in {path}")
+                #Name of domain
+                self.f = h5pyd.File(path, use_cache=False)
+                try:
+                    self.full_key = f"{key}/domains/{cath_domain_dataset}"
+                    cath_domain_dataset = self.f[f"{key}/domains/{cath_domain_dataset}"]
+                except KeyError:
+                    raise RuntimeError(f"Structure with key {key}/domains/{cath_domain_dataset} does not exist in {path}")
+            except IOError:
+                #Might be file
+                raise RuntimeError("cath_domain_dataset must be a group within an hsds dataset")
         elif not isinstance(cath_domain_dataset, h5pyd.Group):
             raise RuntimeError("cath_domain_dataset must be None (key suppllied w/ previous argument), a domain name within the key, or a h5pyd.Group")
         else:
@@ -415,6 +432,12 @@ class DistributedStructure(AbstractStructure):
         """Reset bfactors for all atoms. New numpy array must be same length as the atom array"""
         self.data["bfactor"] = b_factors
 
+    def update_coords(self, coords: np.array) -> None:
+        super().update_coords(coords)
+        self.data['X'] = coords[:, 0]
+        self.data['Y'] = coords[:, 1]
+        self.data['Z'] = coords[:, 2]
+
     def calculate_neighbors(self, d_cutoff: float = 100.0) -> Iterator[tuple[np.array, np.array]]:
         """
         Calculates intermolecular contacts in a parsed struct object.
@@ -439,7 +462,7 @@ class DistributedStructure(AbstractStructure):
     def get_vdw(self, atom_or_residue: np.array) -> float:
         """Get Van der Waals radius for an atom or if its a residue, return an appmate volume as a sphere around all atoms in residue
         """
-        return atom_or_residue["vdw"]
+        return atom_or_residue["vdw_radii"]
 
     def remove_loops(self, verbose: bool = False) -> None:
         """Remove atoms present in loop regions

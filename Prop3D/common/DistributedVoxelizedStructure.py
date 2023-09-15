@@ -319,7 +319,7 @@ class DistributedVoxelizedStructure(DistributedStructure):
 
             #Handle truth values if its not an autoencoder
             if predicting_features:
-                truth_value = atom[self.self.predict_features]
+                truth_value = atom[self.predict_features].tolist()
             elif truth_residues is not None:
                 truth_value = true_value_.copy() if truth else neg_value_.copy()
 
@@ -351,7 +351,7 @@ class DistributedVoxelizedStructure(DistributedStructure):
             coords, feats = zip(*data_voxels.items())
             outputs = [np.array(coords), np.array(feats)]
 
-            if truth_residues is not None and not autoencoder:
+            if (truth_residues is not None or predicting_features) and not autoencoder:
                 truth = np.array([truth_voxels[grid] for grid in coords])
             else:
                 truth = None
@@ -444,20 +444,35 @@ class DistributedVoxelizedStructure(DistributedStructure):
             print("Mode is", mode, mode in [True])
 
     def get_vdw_grid_coords_for_atom(self, atom: np.array, atom_index: int) -> Iterator[list[tuple[int, int, int]]]:
+        """Get all grid coordinates for atom that itersect with its van der walls volume
+
+        Parameters
+        ----------
+        atom : np.array
+            Full atom features from 1 row of the entire feature dateset. Must include columns X,Y,Z
+        atom_index : int
+            deprecated.
+
+        Yeilds
+        -------
+        Grid coordinates for atom
+        """
         dist = self.get_vdw(atom)
-        coord = np.around(atom[["X", "Y", "Z"]], decimals=4)
+        coord = np.around(atom[["X", "Y", "Z"]].tolist(), decimals=4)
         neighbors = self.voxel_tree.query_ball_point(coord, r=dist)
         for idx in neighbors:
             yield self.voxel_tree.data[idx]
 
     def get_closest_grid_coord_for_atom(self, atom: np.array) -> Iterator[list[tuple[int, int, int]]]:
-        _, neighbors = self.voxel_tree.query([atom.coord])
+        coord = np.around(atom[["X", "Y", "Z"]].tolist(), decimals=4)
+        _, neighbors = self.voxel_tree.query([coord])
         for idx in neighbors:
             yield self.voxel_tree.data[idx]
 
     def get_vdw_grid_coords_for_residue(self, residue: np.array) -> Iterator[list[tuple[int, int, int]]]:
         dist = vdw_aa_radii.get(residue["residue_name"], 3.2)
-        center = np.nanmean([a.get_coord() for a in residue], axis=0)
+        coords = [np.around(a[["X", "Y", "Z"]].tolist(), decimals=4) for a in residue]
+        center = np.nanmean(coords, axis=0)
         neighbors = self.voxel_tree.query_ball_point(center, r=dist)
         for idx in neighbors:
             yield self.voxel_tree.data[idx]

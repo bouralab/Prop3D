@@ -330,6 +330,7 @@ class AbstractStructure(object):
             if resi != prev_resi:
                 resn = three_to_one(a["residue_name"].decode("utf-8"))
                 sequence += resn
+                prev_resi = resi
         
         return sequence
 
