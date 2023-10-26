@@ -12,8 +12,7 @@ from Bio.PDB.NeighborSearch import NeighborSearch
 
 from Prop3D.common.LocalStructure import LocalStructure
 from Prop3D.common.ProteinTables import vdw_radii, vdw_aa_radii
-from Prop3D.common.features import atom_features_by_category, number_of_features, \
-    default_atom_features, default_residue_features
+from Prop3D.common.features import all_features
 
 class LocalVoxelizedStructure(LocalStructure):
     """DEPRECATED use DistributedVoxelizedStructure. Maintined for legacy code.
@@ -190,7 +189,7 @@ class LocalVoxelizedStructure(LocalStructure):
             predicting_features = isinstance(self.predict_features, (list, tuple))
 
 
-        nFeatures = number_of_features(
+        nFeatures = all_features.number_of_features(
             only_aa=only_aa,
             only_atom=only_atom,
             non_geom_features=non_geom_features,
@@ -257,7 +256,7 @@ class LocalVoxelizedStructure(LocalStructure):
                     use_deepsite_features=use_deepsite_features)
 
             if self.replace_na:
-                features = features.fillna(default_atom_features)
+                features = features.fillna(all_features.default_atom_features)
 
             features = features.astype(float)
 
@@ -370,7 +369,7 @@ class LocalVoxelizedStructure(LocalStructure):
                 raise
 
             if self.replace_na:
-                features = features.fillna(default_residue_features)
+                features = features.fillna(all_features.default_residue_features)
 
             for residue_grid in self.get_vdw_grid_coords_for_residue(residue):
                 residue_grid = tuple(residue_grid.tolist())
@@ -432,7 +431,7 @@ class LocalVoxelizedStructure(LocalStructure):
             non_binding_site_atoms = []
 
 
-        nFeatures = number_of_features(
+        nFeatures = all_features.number_of_features(
             only_aa=only_aa,
             only_atom=only_atom,
             non_geom_features=non_geom_features,
@@ -589,10 +588,10 @@ class LocalVoxelizedStructure(LocalStructure):
 
             elif only_aa and use_deepsite_features:
                 feats = features[
-                    atom_features_by_category["get_residue"] + \
-                    atom_features_by_category["get_deepsite_features"] + \
-                    atom_features_by_category["get_charge_and_electrostatics"][1:3] +\
-                    atom_features_by_category["get_evolutionary_conservation_score"][-1:]]
+                    all_features.atom_features_by_category["get_residue"] + \
+                    all_features.atom_features_by_category["get_deepsite_features"] + \
+                    all_features.atom_features_by_category["get_charge_and_electrostatics"][1:3] +\
+                    all_features.atom_features_by_category["get_evolutionary_conservation_score"][-1:]]
 
                 if warn_if_buried:
                     return feats, is_buried
@@ -601,32 +600,32 @@ class LocalVoxelizedStructure(LocalStructure):
 
             if use_deepsite_features:
                 feats = features[
-                    atom_features_by_category["get_deepsite_features"] + \
-                    atom_features_by_category["get_charge_and_electrostatics"][1:3] +\
-                    atom_features_by_category["get_evolutionary_conservation_score"][-1:]]
+                    all_features.atom_features_by_category["get_deepsite_features"] + \
+                    all_features.atom_features_by_category["get_charge_and_electrostatics"][1:3] +\
+                    all_features.atom_features_by_category["get_evolutionary_conservation_score"][-1:]]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
                     return feats
 
             if only_atom:
-                feats = features[atom_features_by_category["get_atom_type"]]
+                feats = features[all_features.atom_features_by_category["get_atom_type"]]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
                     return feats
 
             elif only_aa:
-                feats = features[atom_features_by_category["get_residue"]]
+                feats = features[all_features.atom_features_by_category["get_residue"]]
                 if warn_if_buried:
                     return feats, is_buried
                 else:
                     return feats
             elif non_geom_features:
                 feats = features[
-                    atom_features_by_category["get_element_type"] + \
-                    atom_features_by_category["get_charge_and_electrostatics"] +\
-                    atom_features_by_category["get_hydrophobicity"] +\
+                    all_features.atom_features_by_category["get_element_type"] + \
+                    all_features.atom_features_by_category["get_charge_and_electrostatics"] +\
+                    all_features.atom_features_by_category["get_hydrophobicity"] +\
                     [float(is_buried)]]
                 if warn_if_buried:
                     return feats, is_buried

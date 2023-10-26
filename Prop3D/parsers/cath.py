@@ -4,6 +4,7 @@ import yaml
 import html
 import pandas as pd
 from io import StringIO
+from pathlib import Path
 
 from Prop3D.generate_data.data_stores import data_stores
 from Prop3D.parsers.json import JSONApi, WebService
@@ -11,9 +12,8 @@ from Prop3D.parsers.container import Container
 
 class CATHApi(JSONApi):
     def __init__(self, cath_store=None, work_dir=None, download=True, max_attempts=2, job=None):
-        if cath_store is None:
-            assert job is not None
-            cath_store = data_stores(job).cath_api_service
+        ds = f"file:{Path.cwd().absolute()}/" if job is None else job
+        cath_store = data_stores(ds).cath_api_service
         super().__init__("https://www.cathdb.info/version/v4_3_0/",
             cath_store, work_dir=work_dir, download=download, clean=False,
             max_attempts=max_attempts)
