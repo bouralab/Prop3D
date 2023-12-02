@@ -52,7 +52,11 @@ Make sure all of the prereuqisites are installed, then run:
 
 .. code-block:: bash
 
-    pip install prop3D
+    git clone https://github.com/bouralab/Prop3D.git
+    cd Prop3D
+    git submodule init
+    git submodule update
+    python setup.py install
 
 Next, configure HSDS to run with the pre-calculated datasets:
 
