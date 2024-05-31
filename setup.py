@@ -69,8 +69,7 @@ packages = [
     "Prop3D.util",
     "Prop3D.visualize",
     "Prop3D.ml",
-    "Prop3D.ml.datasets",
-    "Prop3D.ml.examples"
+    "Prop3D.ml.datasets"
 ]
 
 setup(

@@ -249,10 +249,12 @@ class _Pdb2pqr(Container):
         -------
         A path the the new pqr file
         """
-        pqr_file = "{}.pqr".format(pdb_file)
+        pqr_file = str(Path(self.work_dir) / f"{Path(pdb_file).name}.pqr")
+        #pqr_file = "{}.pqr".format(pdb_file)
 
         if remove_ter_lines:
-            pdb_file = _remove_ter_lines(pdb_file)
+            pdb_file = _remove_ter_lines(pdb_file, updated_pdb=str(Path(self.work_dir) / f"{Path(pdb_file).name}.untidy.pdb"))
+            self.files_to_remove.append(pdb_file)
 
         #Whitespace must be False to ensure correct PDB file
         if whitespace:

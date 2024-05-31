@@ -2,7 +2,7 @@ import os
 import sys
 import requests
 import traceback
-from typing import Union, Any
+from typing import Union, Any, Optional, Sequence
 
 from toil.job import Job
 
@@ -68,9 +68,9 @@ class PrepareProteinError(RuntimeError):
         store.write_output_file(fail_file, "errors/"+os.path.basename(fail_file))
         safe_remove(fail_file)
 
-def extract_domain(pdb_file: str, cath_domain: str, sfam_id: Union[str, None], chain: Union[None,str] = None, 
-                   rename_chain: Union[str, None] = None, striphet: bool = True, rslices: Union[list[str],tuple[str],None]= None, 
-                   work_dir: Union[str, None] = None) ->  tuple[str, list[str]]:
+def extract_domain(pdb_file: str, cath_domain: str, sfam_id: Optional[str] = None, chain: Optional[str] = None, 
+                   rename_chain: Optional[str] = None, striphet: bool = True, rslices: Optional[Sequence[str]] = None, 
+                   work_dir: Optional[str] = None) -> tuple[str, Sequence[str]]:
     """Extract a domain from a protein structure and cleans the output to make
     it in standard PDB format. No information in changed or added.
 
@@ -317,11 +317,14 @@ def prepare_domain(pdb_file: str, chain: str, cath_domain: str, sfam_id: Union[s
 
 
     else:
-        #Completely failed, raise error
-        raise PrepareProteinError(cath_domain, "prepare", "Unable to protonate" + \
-            "{} using pdb2pqr. Please check pdb2pqr error logs.".format(pdb_file) + \
-            "Most likeley reason for failing is that the structure is missing " + \
-            "too many heavy atoms.", job, errors)
+        try:
+            protonated_pdb = pdb2pqr.debump_add_h(fixed_pdb, ff="parse", noopt=True)
+        except Exception:
+            #Completely failed, raise error
+            raise PrepareProteinError(cath_domain, "prepare", "Unable to protonate" + \
+                "{} using pdb2pqr. Please check pdb2pqr error logs.".format(pdb_file) + \
+                " Most likeley reason for failing is that the structure is missing " + \
+                "too many heavy atoms.", job, errors)
 
     if perform_cns_min:
         #Remove pdb2pqr file at end

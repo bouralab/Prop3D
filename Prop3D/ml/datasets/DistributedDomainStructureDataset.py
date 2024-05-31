@@ -1,4 +1,5 @@
 import os
+import time
 
 try:
     import torch
@@ -13,7 +14,7 @@ from Prop3D.common.DistributedVoxelizedStructure import DistributedVoxelizedStru
 
 class DistributedDomainStructureDataset(DistributedDataset):
     hierarchy = ["C", "A", "T", "H", "S35", "S60", "S95", "S100"]
-    rvs = np.eye(3)
+    rvs = None #np.eye(3)
 
     def __init__(self, path, key, use_features=None, predict_features=None,
       truth_key=None, cluster_level="S35", volume=256, nClasses=1, rotate=True,
@@ -63,6 +64,10 @@ class DistributedDomainStructureDataset(DistributedDataset):
                     dataset_group_name += "train"
             else:
                 dataset_group_name = "domains"
+            
+            if key is None:
+                key = "/"
+
         self.dataset_group_name = dataset_group_name
 
         if key is None:
@@ -93,7 +98,18 @@ class DistributedDomainStructureDataset(DistributedDataset):
         if self.return_structure:
             return self.get_structure_and_voxels(index)
 
-        voxelizer, indices, data, truth, _voxel_map, serial, b_factors = self.get_structure_and_voxels(index)
+        indices = None
+        for _ in range(self.retries):
+            try:
+                voxelizer, indices, data, truth, _voxel_map, serial, b_factors = self.get_structure_and_voxels(index)
+                break
+            except (Exception, OSError) as e:
+                raise
+                time.sleep(1)
+        
+        if indices is None:
+            raise RuntimeError(f"Failed getting index {index}, {self.order[index]}")
+
 
         i, d = torch.from_numpy(indices), torch.from_numpy(data)
 
@@ -116,12 +132,12 @@ class DistributedDomainStructureDataset(DistributedDataset):
             rotate = self.rotate
         elif isinstance(self.rotate, bool) and self.rotate:
             #Use Dataset's random roation matrix
-            rotate = self.rvs
+            rotate = self.rvs if self.rvs is not None else True
         else:
             raise RuntimeError("Invalid rotation parameter. It must be True to use this Dataset's random roation matrix updated during each epoch, " + \
                 "(None or False) for no rotation, 'random' for a random rotation matrix from the voxelizer updated during every initalization, " + \
                 "'pai' to rotate to the structure's princple axes, or a rotation matrix given as a numpy array.")
-
+        
         voxelizer = DistributedVoxelizedStructure(
             self.path, key, cath_domain_dataset, volume=self.volume, rotate=rotate,
             use_features=self.use_features, predict_features=self.predict_features,

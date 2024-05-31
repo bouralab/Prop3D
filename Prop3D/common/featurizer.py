@@ -210,7 +210,7 @@ class ProteinFeaturizer(LocalStructure):
             self.get_deepsite_features(atom, calc_charge=False, calc_conservation=False)
             self.get_evolutionary_conservation_score(atom)
             self.get_frustration(atom)
-            self.get_custom_features(atom)
+            self.calculate_custom_features()
 
             is_buried = self.atom_features.loc[atom.serial_number, "residue_buried"]
 
@@ -292,7 +292,7 @@ class ProteinFeaturizer(LocalStructure):
             self.get_ss(residue)
             self.get_evolutionary_conservation_score(residue)
             self.get_frustration(residue)
-            self.get_custom_features(residue)
+            self.calculate_custom_features()
             is_buried = self.residue_features.loc[[residue.get_id()], "residue_buried"]
 
         if warn_if_buried:
@@ -344,7 +344,7 @@ class ProteinFeaturizer(LocalStructure):
         """Get Van der Waals radius for Bio.PDB.Atom"""
         vdw = super().get_vdw(atom_or_residue)
 
-        if isinstance(atom_or_residue, AtomType):
+        if isinstance(atom_or_residue, PDB.Atom.Atom):
             atom = atom_or_residue
             self.atom_features.loc[atom.serial_number, "vdw_radii"] = vdw
             return self.atom_features.loc[atom.serial_number, "vdw_radii"]
@@ -365,7 +365,7 @@ class ProteinFeaturizer(LocalStructure):
         only_charge : bool
             Only run pdb2pqr to get charge
         only_bool : bool
-            Only save threshld values (bool). Default is False
+            Only save threshold values (bool). Default is False
         calculate : bool
             Should calculate values, otherwise just look them up. Defautl True
         """
@@ -442,7 +442,7 @@ class ProteinFeaturizer(LocalStructure):
         return self.residue_features.loc[idx, cols]
 
     def get_charge_and_electrostatics_for_atom(self, atom: AtomType, only_charge: bool = False,
-                                               only_bool: bool = False, calculat: bool = True) -> pd.DataFrame:
+                                               only_bool: bool = False, calculate: bool = True) -> pd.DataFrame:
         """Run pdb2par and APBS on an atom to get carge and electrostatic information
 
         Parameters
@@ -511,7 +511,7 @@ class ProteinFeaturizer(LocalStructure):
             if calculate:
                 charge += [
                     electrostatic_pot_value,
-                    check_threshold("is_electronegative", electrostatic_pot_value) #float(electrostatic_pot_value < 0)
+                    default_features.check_threshold("is_electronegative", electrostatic_pot_value) #float(electrostatic_pot_value < 0)
                 ]
             cols += default_features.atom_features_by_category["get_charge_and_electrostatics"][3:]
 
@@ -700,7 +700,7 @@ class ProteinFeaturizer(LocalStructure):
 
         asa = np.array([
             residue_rasa,
-            check_threshold("residue_buried", residue_rasa, residue=True)
+            default_features.check_threshold("residue_buried", residue_rasa, residue=True)
         ])
 
         if is_atom:
@@ -1101,9 +1101,20 @@ class ProteinFeaturizer(LocalStructure):
         if not hasattr(self, "custom_feature_values"):
             self.custom_feature_values = {}
             self.custom_feature_modules = {}
+            self.custom_feature_done_category = []
         
+        update_whole_category = False
         for category in custom_features.features:
+            if category in self.custom_feature_done_category:
+                continue
+
+            if self.update_features is not None and category not in self.update_features:
+                update_whole_category = True
+
             for parser_name, features in groupby(list(category.values())[0], key=lambda feat: feat["parser"]):
+                if self.update_features is not None and not (update_whole_category or any(f in self.update_features for f in features)):
+                    continue
+
                 try:
                     parser = self.custom_feature_modules[category]
                 except KeyError:
@@ -1174,6 +1185,7 @@ class ProteinFeaturizer(LocalStructure):
 
                             for resi, atoms in resi_to_atoms.items():
                                 atom_results.loc[atoms, feat] = residue_results.loc[resi.get_id(), feat]
+            self.custom_feature_done_category.append(category)
 
 
 

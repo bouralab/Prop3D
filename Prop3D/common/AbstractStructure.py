@@ -1,6 +1,7 @@
 import os
 import copy
-from typing import Any, Union, IO, AnyStr, TypeVar
+from sys import stdin
+from typing import Any, Union, IO, AnyStr, TypeVar, Optional
 
 from collections.abc import Iterator
 
@@ -11,6 +12,7 @@ from sklearn.decomposition import PCA
 from scipy.stats import special_ortho_group
 
 from Prop3D.common.ProteinTables import three_to_one
+from Prop3D.util import natural_keys
 
 _Self = TypeVar('_Self', bound='AbstractStructure')
 
@@ -458,16 +460,18 @@ class AbstractStructure(object):
         """
         for r in range(num):
             if rvs is None:
-                M, theta, phi, z = special_ortho_group.rvs(3)
+                M = special_ortho_group.rvs(3)
+                #print("rotating randomly")
             else:
                 M=rvs
+                #assert 0
             self.shift_coords_to_origin()
             old_coords = self.get_coords()
             coords = np.dot(self.coords, M).round(decimals=4)
             self.update_coords(coords)
 
             self.shift_coords(self.get_mean_coord() if return_to is None else return_to)
-
+            
             yield r, M
 
     def update_bfactors(self, b_factors: list[Any]) -> None:
@@ -500,7 +504,7 @@ class AbstractStructure(object):
         """
         raise NotImplementedError
 
-    def get_secondary_structures_groups(self, verbose: bool = False) -> tuple[list[pd.DataFrame], dict[tuple[str], pd.DataFrame], dict[tuple[str], int], dict[tuple[str], str], dict[int, list[Any]], int]:
+    def get_secondary_structures_groups(self, verbose: bool = False, ss_min_len: int = 3, is_ob: bool=False, assume_correct: Optional[pd.Series]=None) -> tuple[list[pd.DataFrame], dict[tuple[str], pd.DataFrame], dict[tuple[str], int], dict[tuple[str], str], dict[int, list[Any]], int]:
         """Get groups of adjecent atom rows the belong to the same secondary structure.
         We use DSSP to assing secondary structures to each reisdue mapped down to atoms. 
         If any segment was <4 residues, they were merged the previous and next groups
@@ -528,54 +532,59 @@ class AbstractStructure(object):
         ss_type = ss_type.rename(columns={"is_helix":"H", "is_sheet":"E", "Unk_SS":"X"})
         ss_type = ss_type.idxmax(axis=1)
 
-        ss_groups = ss_type.groupby([(ss_type != ss_type.shift()).cumsum()-1])
+        if assume_correct is None:
+            ss_groups = ss_type.groupby((ss_type != ss_type.shift()).cumsum()-1)
+            ob_has_h = False
+            #Merge group shorter than 4 residues
+            for i, ss_group in ss_groups:
+                if 0<i<ss_groups.ngroups-1:
+                    this_group = ss_group.iloc[0]
+                    prev_group = ss_groups.get_group(i-1).iloc[0]
+                    next_group = ss_groups.get_group(i+1).iloc[0]
+                    this_group_atoms = tuple(self.get_atoms(include_atoms=ss_group.index))
+                    this_group_residues = tuple(self.unfold_entities(this_group_atoms, "R"))
+        
+                    if verbose:
+                        this_group_id = tuple(np.unique(r["residue_id"])[0] for r in this_group_residues)
+                        print(this_group_id[0], this_group_id[-1], this_group)
 
-        #Merge group shorter than 4 residues
-        for i, ss_group in ss_groups:
-            if 0<i<ss_groups.ngroups-1:
-                this_group = ss_group.iloc[0]
-                prev_group = ss_groups.get_group(i-1).iloc[0]
-                next_group = ss_groups.get_group(i+1).iloc[0]
-                this_group_atoms = tuple(self.get_atoms(include_atoms=ss_group.index))
-                this_group_residues = tuple(self.unfold_entities(this_group_atoms, "R"))
-
-                if verbose:
-                    this_group_id = tuple(np.unique(r["residue_id"])[0] for r in this_group_residues)
-                    print(this_group_id[0], this_group_id[-1], this_group)
-
-                if len(this_group_residues)<4 and this_group != "X":
-                    ss_type.loc[ss_group.index] = "X"
-                if len(this_group_residues)<3 and prev_group == next_group:
-                    ss_type.loc[ss_group.index] = prev_group
-                elif len(this_group_residues)<3 and next_group == "X" and this_group != prev_group:
-                    ss_type.loc[ss_group.index] = "X"
-
-                if this_group=="H" and prev_group=="E" and next_group=="E" and len(this_group_residues)<5:
-                    ss_type.loc[ss_group.index] = "X"
-
-                if len(this_group_residues)<3: #OB=5
-                    if prev_group == next_group:
+                    if len(this_group_residues)<4 and this_group != "X":
+                        ss_type.loc[ss_group.index] = "X"
+                    if len(this_group_residues)<3 and prev_group == next_group and not is_ob:
                         ss_type.loc[ss_group.index] = prev_group
-                    else:
-                        pass
-
-                    if this_group=="H" and prev_group=="E" and next_group=="E":
-                        ss_type.loc[ss_group.index] = "X"
-                    elif this_group=="E" and prev_group=="H" and next_group=="H":
+                    elif len(this_group_residues)<3 and next_group == "X" and this_group != prev_group:
                         ss_type.loc[ss_group.index] = "X"
 
-                if len(this_group_residues)>10 and this_group=="X":
-                    ss_type.loc[ss_group.index] = "H"
+                    if this_group=="H" and prev_group=="E" and next_group=="E" and len(this_group_residues)<5:
+                        ss_type.loc[ss_group.index] = "X"
+
+                    if (not is_ob and len(this_group_residues)<ss_min_len) or (is_ob and len(this_group_residues)<5): #OB=5
+                        if prev_group == next_group:
+                            ss_type.loc[ss_group.index] = prev_group
+                        else:
+                            pass
+
+                        if this_group=="H" and prev_group=="E" and next_group=="E":
+                            ss_type.loc[ss_group.index] = "X"
+                        elif this_group=="E" and prev_group=="H" and next_group=="H":
+                            ss_type.loc[ss_group.index] = "X"
+
+                    if this_group=="X" and (len(this_group_residues)>10 or (is_ob and not ob_has_h and len(this_group_residues)>5)):
+                        ss_type.loc[ss_group.index] = "H"
+                        ob_has_h = True
+        else:
+            ss_type = assume_correct
 
         #Regroup with correct SS
         ss_atom_groups = ss_type.groupby([(ss_type != ss_type.shift()).cumsum()-1])
-
+        import pdb; pdb.set_trace()
         ss_groups = []
         loop_for_ss = {}
         original_order = {}
-        ss_type = {}
+        ss_type_final = {}
         leading_trailing_residues = {}
 
+        prev_ss_id = None
         for i, ss_group in ss_atom_groups:
             #Get all atoms from SS and loops
             ss_atoms = tuple(self.get_atoms(include_atoms=ss_group.index))
@@ -585,9 +594,11 @@ class AbstractStructure(object):
             if ss_group.iloc[0] != "X":
                 ss_groups.append(ss_residues)
                 original_order[ss_residues_id] = len(ss_groups)
-                ss_type[ss_residues_id] = ss_group.iloc[0]
-            elif len(ss_groups)>0 and ss_group.iloc[0] == "X":
-                loop_for_ss[ss_residues_id] = ss_residues
+                ss_type_final[ss_residues_id] = ss_group.iloc[0]
+                prev_ss_id = ss_residues_id
+            elif prev_ss_id is not None and len(ss_groups)>0 and ss_group.iloc[0] == "X":
+                #loop_for_ss[ss_residues_id] = ss_residues
+                loop_for_ss[prev_ss_id] = ss_residues
 
         first_group = ss_atom_groups.get_group(0)
         if first_group.iloc[0] == "X":
@@ -605,9 +616,64 @@ class AbstractStructure(object):
             for ss in ss_groups:
                 ss_id = tuple(np.unique(r["residue_id"])[0] for r in ss)
                 _ssid = list(sorted(map(int, ss_id)))
-                print(_ssid[0], _ssid[-1], ss_type[ss_id])
+                print(_ssid[0], _ssid[-1], ss_type_final[ss_id])
 
-        return ss_groups, loop_for_ss, original_order, ss_type, leading_trailing_residues, number_ss
+        should_continue = None
+        while not isinstance(should_continue, bool):
+            should_continue = input("Is this correct? [Y/n]")
+            if should_continue.lower() in ["", "y", "n"]:
+                should_continue = not (should_continue == "n")
+        
+
+        if not should_continue:
+            print("Enter correct segments per line (start stop type '1 9 E'):")
+            #segment_resi = []
+            ss_type.loc[:] = "X"
+            for line in stdin:
+                try:
+                    start, stop, ss_type_str = line.rstrip().split()
+                except Exception:
+                    if line.rstrip() == "":
+                        break
+                    else:
+                        raise RuntimeError("Must be (start stop type '1 9 E')")
+                
+                start_key = natural_keys(start, use_int=True)
+                stop_key = natural_keys(stop, use_int=True)
+
+                assert stop_key>start_key, (start_key, stop_key)
+
+                all_keys = [natural_keys(x.decode("ascii"), use_int=True) for x in self.data["residue_id"]]
+                use_idx = [i for i, k in enumerate(all_keys) if start_key<=k<=stop_key]
+                
+                if ss_type_str == "E":
+                    ss_type.loc[self.data[use_idx]["serial_number"]] = "E"
+                    # self.data[use_idx]["is_sheet"] = 1.
+                    # self.data[use_idx]["is_helix"] = 0.
+                    # self.data[use_idx]["Unk_SS"] = 0.
+                    #segment_resi += use_idx
+                elif ss_type_str == "H":
+                    ss_type.loc[self.data[use_idx]["serial_number"]] = "H"
+                    # self.data[use_idx]["is_sheet"] = 0.
+                    # self.data[use_idx]["is_helix"] = 1.
+                    # self.data[use_idx]["Unk_SS"] = 0.
+                    #segment_resi += use_idx
+                else:
+                    ss_type.loc[self.data[use_idx]["serial_number"]] = "X"
+                    # self.data[use_idx]["is_sheet"] = 0.
+                    # self.data[use_idx]["is_helix"] = 0.
+                    # self.data[use_idx]["Unk_SS"] = 1.
+            
+            # loop_resi = list(sorted(set(range(len(self.data)))-set(segment_resi)))
+            # self.data[loop_resi]["is_sheet"] = 0.
+            # self.data[loop_resi]["is_helix"] = 0.
+            # self.data[loop_resi]["Unk_SS"] = 1.
+
+            # import pdb; pdb.set_trace()
+        
+            return self.get_secondary_structures_groups(verbose=verbose, ss_min_len=ss_min_len, is_ob=is_ob, assume_correct=ss_type)
+
+        return ss_groups, loop_for_ss, original_order, ss_type_final, leading_trailing_residues, number_ss
 
     def remove_loops(self, verbose: bool = False) -> None:
         raise NotImplementedError

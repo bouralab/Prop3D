@@ -146,6 +146,9 @@ def apiSingularityCall(job,
     runscript = runscript or entrypoint
     stream = stream or detach
 
+    if "parameters" in kwargs and params is None:
+        params = kwargs.pop("parameters")
+
     options = []
 
     # make certain that files have the correct permissions
@@ -158,9 +161,9 @@ def apiSingularityCall(job,
         if user is None:
             user = str(thisUser) + ":" + str(thisGroup)
 
-    if containerName is None:
-        raise RuntimeError("Container name must not be None")
-        containerName = getContainerName(job)
+    # if containerName is None:
+    #     raise RuntimeError("Container name must not be None")
+    #     containerName = getContainerName(job)
 
     if working_dir is None:
         working_dir = os.getcwd()

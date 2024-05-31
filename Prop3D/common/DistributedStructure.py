@@ -82,10 +82,21 @@ class DistributedStructure(AbstractStructure):
 
         self.cath_domain_dataset = cath_domain_dataset
 
-        self.cath_domain = self.full_key[1:].rsplit('/', 1)[1]
-        self.pdb = self.cath_domain[:4]
-        self.chain = self.cath_domain[4]
-        self.domNo = self.cath_domain[5:]
+        if "/" in self.full_key[1:]:
+            self.cath_domain = self.full_key[1:].rsplit('/', 1)[1]
+        else:
+            self.cath_domain = self.full_key[1:]
+
+        if len(self.cath_domain) == 7:
+            #is CATH
+            self.pdb = self.cath_domain[:4]
+            self.chain = self.cath_domain[4]
+            self.domNo = self.cath_domain[5:]
+        else:
+            self.pdb = self.cath_domain
+            self.chain = self.cath_domain
+            self.domNo = self.cath_domain
+
         self.coarse_grained = coarse_grained
 
         if coarse_grained:
@@ -94,7 +105,10 @@ class DistributedStructure(AbstractStructure):
             self.feature_names = [name for name in self.data.dtype.names if name not in residue_columns]
             self.features = self.data[self.feature_names]
         else:
-            self.data = self.cath_domain_dataset["atom"][:]
+            try:
+                self.data = self.cath_domain_dataset["atom"][:]
+            except:
+                assert 0, (self.cath_domain_dataset, list(self.cath_domain_dataset.keys()))
             self.pdb_info = self.data[atom_columns]
             self.feature_names = [name for name in self.data.dtype.names if name not in atom_columns]
             self.features = self.data[self.feature_names]

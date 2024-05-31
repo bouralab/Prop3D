@@ -25,5 +25,5 @@ class SCWRL(Container):
 
     def fix_rotamers(self, in_file, out_file=None, **kwds):
         if out_file is None:
-            out_file = os.path.splitext(in_file)[0]+".scwrl.pdb"
+            out_file = str(Path(self.work_dir) / f"{Path(pdb_file).stem}.scwrl.pdb")
         return self(in_file, out_file, **kwds)

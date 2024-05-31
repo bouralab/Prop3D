@@ -21,6 +21,7 @@ class DSSP(Container):
 
         if remove_ter_lines:
             pdb_path = _remove_ter_lines(pdb_path)
+            self.files_to_remove.append(pdb_path)
 
         try:
             dssp = self.__call__(in_file=pdb_path, out_file=out_file)

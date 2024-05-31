@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Union, Any
+from typing import Union, Any, Optional
 from argparse import Namespace
 from collections import defaultdict
 
@@ -34,7 +34,8 @@ logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 def get_domain_structure_and_features(job: Job, cath_domain: str, superfamily: Union[str, None], cathFileStoreID: Union[str, FileID], 
                                       update_features: Union[list[str],tuple[str]] = None, further_parallelize: bool = False, 
-                                      force: Union[int,bool] = False, use_hsds: bool = True, prepare_structure: bool = True) -> None:
+                                      force: Union[int,bool] = False, use_hsds: bool = True, prepare_structure: bool = True,
+                                      work_dir: Optional[str] = None) -> None:
     """Process and 'prepare' a single domain and calculate its features
     
     Parameters
@@ -58,6 +59,14 @@ def get_domain_structure_and_features(job: Job, cath_domain: str, superfamily: U
     """
     RealtimeLogger.info("get_domain_structure_and_features Process domain "+cath_domain)
 
+    if work_dir is None:
+        if job is not None and hasattr(job, "fileStore"):
+            work_dir_tmp = job.fileStore.getLocalTempDir()
+        else:
+            work_dir_tmp = os.getcwd()
+    else:
+        work_dir_tmp = work_dir
+
     if not use_hsds:
         raise RuntimeError("You must use HSDS")
     
@@ -72,18 +81,19 @@ def get_domain_structure_and_features(job: Job, cath_domain: str, superfamily: U
         should_prepare_structure = prepare_structure
         further_parallelize = False
         force=True
-        h5_key = os.path.basename(os.path.basename(cath_domain))[0]
+        h5_key = Path(cath_domain).name
 
     if force or (isinstance(force, int) and force==2) or should_prepare_structure:
         #Get Processed domain file first
         RealtimeLogger.info(f"Processing domain {cath_domain}")
         if further_parallelize:
             job.addChildJobFn(process_domain, cath_domain, superfamily,
-                cathFileStoreID=cathFileStoreID)
+                cathFileStoreID=cathFileStoreID, work_dir=work_dir)
         else:
             try:
-                prepared_file, _, _, local_file = process_domain(job, cath_domain, superfamily, cathFileStoreID=cathFileStoreID)
+                prepared_file, _, _, local_file = process_domain(job, cath_domain, superfamily, cathFileStoreID=cathFileStoreID, work_dir=work_dir_tmp)
                 local_domain_file = prepared_file if local_file else None
+                
             except (SystemExit, KeyboardInterrupt):
                 raise
             except:
@@ -100,7 +110,8 @@ def get_domain_structure_and_features(job: Job, cath_domain: str, superfamily: U
     elif not force and use_hsds:
         with h5pyd.File(cathFileStoreID, mode="r", use_cache=False, retries=100) as store:
             try:
-                feat_files = list(store[f"/{superfamily}/domains/{cath_domain}"].keys())
+                sfam = "" if local_file else superfamily
+                feat_files = list(store[f"{sfam}/domains/{cath_domain}"].keys())
                 if len(feat_files) == 3 and "atom" in feat_files and \
                   "residue" in feat_files and feat_files and "edges":
                     feats_exist = True
@@ -123,12 +134,12 @@ def get_domain_structure_and_features(job: Job, cath_domain: str, superfamily: U
         #Calculate features Processed domain file
         if further_parallelize:
             job.addFollowOnJobFn(calc_features_func, cathFileStoreID, cath_domain,
-                superfamily, update_features=update_features, domain_file=local_domain_file)
+                superfamily, update_features=update_features, domain_file=local_domain_file, work_dir=work_dir)
         else:
             RealtimeLogger.info("get_domain_structure_and_features calculate_features")
             try:
                 calc_features_func(job, cathFileStoreID, cath_domain, superfamily,
-                    update_features=update_features, domain_file=local_domain_file)
+                    update_features=update_features, domain_file=local_domain_file, work_dir=work_dir_tmp)
             except (SystemExit, KeyboardInterrupt):
                 raise
             except:
@@ -144,7 +155,7 @@ def get_domain_structure_and_features(job: Job, cath_domain: str, superfamily: U
 
 def process_superfamily(job: Job, superfamily: Union[str, None], cathFileStoreID: Union[str, FileID], 
                         update_features: Union[list[str], tuple[str]] = None, force: bool = False, 
-                        use_hsds: bool = True, further_parallize: bool = True) -> None:
+                        use_hsds: bool = True, further_parallize: bool = True, work_dir: Optional[str] = None) -> None:
     """Process all domains in superfamily
 
     Parameters
@@ -325,10 +336,12 @@ def start_domain_and_features(job: Job, cathFileStoreID: Union[str, FileID], cat
             except KeyError:
                 raise RuntimeError(f"Must create hsds file first.")
             
+        add_path = False
         if len(all_domains) == 0:
             #Features first, no labels
             if Path(pdb[0]).is_file():
                 all_domains = [Path(p).stem for p in pdbs]
+                add_path = True
             else:
                 all_domains = pdbs
             
@@ -336,13 +349,18 @@ def start_domain_and_features(job: Job, cathFileStoreID: Union[str, FileID], cat
             domains_to_run = list(set(all_domains)-set(done_domains))
         else:
             domains_to_run = all_domains
+
+        if Path(pdbs[0]).is_file():
+            domains_to_run = [str(Path(pdbs[0]).parent / d) for d in domains_to_run]
         # elif isinstance(pdbs, (list, tuple)):
 
         #     domains_to_run = [f for f in pdbs if os.path.splitext(os.path.basename(f))[0] \
         #     not in done_domains]
+        
         RealtimeLogger.info(f"Running domains: {domains_to_run}")
         map_job(job, get_domain_structure_and_features, domains_to_run, None, cathFileStoreID,
-            update_features=update_features, force=force, further_parallelize=True, use_hsds=use_hsds)
+            update_features=update_features, force=force, further_parallelize=True, use_hsds=use_hsds,
+            work_dir=work_dir)
         return
     else:
         #No cath code proved, use all
@@ -368,14 +386,15 @@ def start_domain_and_features(job: Job, cathFileStoreID: Union[str, FileID], cat
         #Start CATH hiearchy
         RealtimeLogger.info("Starting CATH Hierachy")
         cath_hierarchy_runner(job, cathcode, process_superfamily, cathFileStoreID,
-            skip_cathcode=skip_cathcode, update_features=update_features, use_hsds=use_hsds, force=force)
+            skip_cathcode=skip_cathcode, update_features=update_features, use_hsds=use_hsds, force=force,
+            work_dir=work_dir)
     else:
         superfamilies = domains_to_run["cathcode"].drop_duplicates().str.replace(".", "/")
         if skip_cathcode is not None and len(skip_cathcode) > 0:
             superfamilies = superfamilies[~superfamilies.isin(skip_cathcode)]
         RealtimeLogger.info("Superfamilies to run: {}".format(len(superfamilies)))
         map_job(job, process_superfamily, superfamilies, cathFileStoreID,
-            update_features=update_features, force=force)
+            update_features=update_features, force=force, work_dir=work_dir)
 
 def start_domain_and_features_then_create_splits(job: Job, cathFileStoreID: Union[str, FileID], cathcode: Union[list[str], str] = None, 
                                                  skip_cathcode: Union[list[str], str, None] = None, update_features: Union[list[str], tuple[str], None] = None, 
@@ -408,13 +427,13 @@ def start_domain_and_features_then_create_splits(job: Job, cathFileStoreID: Unio
     """
     job.addChildJobFn(start_domain_and_features, cathFileStoreID, cathcode=cathcode,
         skip_cathcode=skip_cathcode, update_features=update_features, use_hsds=use_hsds,
-        pdbs=pdbs, force=force)
+        pdbs=pdbs, force=force, work_dir=work_dir)
     
     if (isinstance(pdbs, bool) and pdbs):
         #Use entire PDB database
         from Prop3D.generate_data.update_pdb import get_all_pdbs
         job.addFollowOnJobFn(get_all_pdbs, cathFileStoreID, update=update)
-    elif len(pdbs[0]) < 9:
+    elif isinstance(pdbs, str) and len(pdbs[0]) < 9:
         #Is PDB_entity or PDB.chain or just PDB
         from Prop3D.generate_data.update_pdb import get_custom_pdbs
         job.addFollowOnJobFn(get_custom_pdbs, cathFileStoreID, update=update)
@@ -449,11 +468,13 @@ def start_toil(job: Job, cathFileStoreID: Union[str, FileID], cathcode: Union[li
     update : bool
         Add new entries from source database (CATH or PDB) since last update. Default is False.
     """
-    if work_dir is None:
-        if job is not None and hasattr(job, "fileStore"):
-            work_dir = job.fileStore.getLocalTempDir()
-        else:
-            work_dir = os.getcwd()
+    # if work_dir is None:
+    #     if job is not None and hasattr(job, "fileStore"):
+    #         work_dir_tmp = job.fileStore.getLocalTempDir()
+    #     else:
+    #         work_dir_tmp = os.getcwd()
+    # else:
+    #     work_dir_tmp = work_dir
 
     if pdbs is not None and (cathcode is not None or skip_cathcode is not None):
         raise RuntimeError("Cannot use --pdbs with --cathcode or --skip_cathcode")
@@ -469,18 +490,22 @@ def start_toil(job: Job, cathFileStoreID: Union[str, FileID], cathcode: Union[li
         if (isinstance(pdbs, bool) and pdbs):
             #Use entire PDB database
             next_job = start_domain_and_features_then_create_splits
-        elif isinstance(pdbs, list) and isinstance(pdbs[0], str):
+        elif isinstance(pdbs, list) and isinstance(pdbs[0], (str,Path)):
             if Path(pdbs[0]).is_file():
                 #Ceate custom files, not implemented
                 next_job = start_domain_and_features_then_create_splits
                 #raise RuntimeError("Use of PDB files is not supported yet")
-            elif len(pdbs[0]) < 9:
+            elif isinstance(pdbs[0], str) and len(pdbs[0]) < 9:
                 #Is PDB_entity or PDB.chain or just PDB
                 next_job = start_domain_and_features_then_create_splits
-            pdbs = hierarchy_job.rv()
+            else:
+                raise RuntimeError("Cannot read paths, make sure they absolute")
+            #pdbs = hierarchy_job.rv()
         elif isinstance(pdbs, str) and Path(pdbs).is_dir():
             next_job = start_domain_and_features_then_create_splits
             pdbs = hierarchy_job.rv()
+        else:
+            raise RuntimeError(f"Cannot read paths, make sure they absolute: {pdbs}")
     else:
         #Normal execution
         next_job = start_domain_and_features
@@ -581,7 +606,7 @@ if __name__ == "__main__":
         default=False)
     parser.add_argument(
         "--work_dir",
-        default=os.getcwd())
+        default=None)
     parser.add_argument(
         "--restartable",
         action="store_true",
@@ -622,7 +647,7 @@ if __name__ == "__main__":
                     with open(options.pdb[0]) as f:
                         options.pdb = [pdb.rstrip() for pdb in f]
             elif os.path.isdir(options.pdb[0]):
-                options.pdb = [pdb for pdb in next(os.walk(options.pdb[0]))[2] if pdb.endswith(".pdb")]
+                options.pdb = [Path(pdb).resolve() for pdb in next(os.walk(options.pdb[0]))[2] if pdb.endswith(".pdb")]
             else:
                 raise RuntimeError("Invalid option for --pdb. Must be paths to pdbs files as arguments, a single file with path on each line, or a directory with pdb files")
 
@@ -652,7 +677,8 @@ if __name__ == "__main__":
     # elif "HS_ENDPOINT" not in os.environ or not os.environ["HS_ENDPOINT"].startswith("http"):
     #     raise RuntimeError("Must specify HSDS endpoint env variable: HS_ENDPOINT and it must begin with http")
 
-    os.environ["TOIL_START_DIR"] = options.work_dir
+    if options.work_dir is not None:
+        os.environ["TOIL_START_DIR"] = options.work_dir
 
     if options.restartable:
         options.restart = True

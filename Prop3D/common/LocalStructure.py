@@ -2,6 +2,7 @@ import os
 import sys
 import copy
 from io import StringIO
+from pathlib import Path
 from functools import partial
 from collections import defaultdict
 from collections.abc import Iterator
@@ -25,7 +26,7 @@ warnings.simplefilter('ignore', PDB.PDBExceptions.PDBConstructionWarning)
 from Prop3D.util import natural_keys
 from Prop3D.util.pdb import InvalidPDB
 from Prop3D.common.ProteinTables import vdw_radii, vdw_aa_radii
-from Prop3D.common.features import all_features
+from Prop3D.common.features import default_features as all_features
 
 AtomType = TypeVar('AtomType', bound='PDB.Atom')
 ResidueType = TypeVar('ResidueType', bound='PDB.Residue')
@@ -147,6 +148,7 @@ class LocalStructure(object):
             atom_index = [self._remove_altloc(a).serial_number for a in self.structure.get_atoms()]
             self.atom_features = all_features.default_atom_feature_df(len(atom_index)).assign(serial_number=atom_index)
             self.atom_features = self.atom_features.set_index("serial_number")
+        self.data = self.atom_features
 
         if self.residue_feature_mode == "r" and os.path.isfile(self.residue_features_file):
             self.residue_features = pd.read_hdf(self.residue_features_file, "table", mode="r")
@@ -503,7 +505,7 @@ class LocalStructure(object):
             self.atom_features = self.atom_features.assign(**features)
             self.atom_feature_names += list(features.keys())
 
-    def get_pdb_dataframe(self, coarse_grained: bool = False, include_featuresd: bool = False) -> pd.DataFrame:
+    def get_pdb_dataframe(self, coarse_grained: bool = False, include_features: bool = False) -> pd.DataFrame:
         """Get standard data from PDB as a data frame
 
         Parameters
@@ -919,7 +921,7 @@ def angle_between(v1: np.array, v2: np.array) -> np.array:
     v2_u = unit_vector(v2)
     return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
 
-def get_dihedral(p0: np.array, p1: np.array, p: np.array, p3: np.array) -> float:
+def get_dihedral(p0: np.array, p1: np.array, p2: np.array, p3: np.array) -> float:
     """Praxeolitic formula
     1 sqrt, 1 cross product"""
 

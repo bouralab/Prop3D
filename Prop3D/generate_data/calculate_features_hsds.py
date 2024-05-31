@@ -1,5 +1,6 @@
 import os
 import traceback
+from pathlib import Path
 from functools import partial
 from typing import Union, Any
 
@@ -100,10 +101,10 @@ def calculate_features(job: Job, cath_full_h5: str, cath_domain: str, cathcode: 
         cath_key = f"/{cathcode}/domains/{cath_domain}"
         s3_cath_key = "{}/{}".format(cathcode, cath_domain)
     elif os.path.isfile(cath_domain):
-        cath_key = os.path.splitext(os.path.basename(cath_domain))[0]
+        cath_key = f"/domains/{Path(cath_domain).name}" #os.path.splitext(os.path.basename(cath_domain))[0]
         s3_cath_key = None
     else:
-        cath_key = cath_domain
+        cath_key = f"/domains/{cath_domain}"
         s3_cath_key = None
 
 

@@ -1,4 +1,5 @@
 import os
+import time
 from numbers import Number
 
 import numpy as np
@@ -46,7 +47,7 @@ class DistributedDataset(Dataset):
         creating data_splits
     """
 
-    def __init__(self, path, key, test=False, dataset_group_name="datasets", use_keys=None, ignore_keys=None, file_mode="r", use_cache=False, retries=50, label_encoder_classes=None):
+    def __init__(self, path, key, test=False, dataset_group_name="datasets", use_keys=None, ignore_keys=None, file_mode="r", use_cache=False, retries=100, label_encoder_classes=None):
         self.path = path
         self.key = key
         self.test = test
@@ -143,10 +144,16 @@ class DistributedDataset(Dataset):
         return len(self.order)
 
     def __getitem__(self, index):
-        if not self.is_dataset:
-            return self.f[self.order[index]]
-        else:
-            return self.f[self.key][self.order[index]]
+        for i in range(self.retries):
+            try:
+                if not self.is_dataset:
+                    return self.f[self.order[index]]
+                else:
+                    return self.f[self.key][self.order[index]]
+            except Exception:
+                pass
+            
+            time.sleep(1) #Issue with multiple requests? wait a second
 
     @property
     def f(self):

@@ -30,8 +30,14 @@ class Features(object):
         else:
             features_file = base.parent / "custom_featurizers" / "custom_features.yaml"
 
-        with features_file.open() as fh:
-            self.features = yaml.safe_load(fh)
+        try:
+            with features_file.open() as fh:
+                self.features = yaml.safe_load(fh)
+        except FileNotFoundError:
+            if custom:
+                self.features = {}
+            else:
+                raise
 
         self.atom_features = [feature["name"] for category in self.features for feature in \
             list(category.values())[0]]
@@ -231,6 +237,9 @@ class AllFeatures(object):
 
     def __getattr__(self, __name: str) -> Any:
         """Combine features from many features"""
+        if __name in dir(self):
+            return super().__getattr__(__name)
+
         result = None
         for feats in self.features:
             if hasattr(feats, __name):
@@ -255,6 +264,10 @@ class AllFeatures(object):
             return super().__getattr__(__name)
             raise RuntimeError("Unable to combine features")
         return result
+    
+    def assign(*args, **kwds):
+        self.features = [f.assign(**args, **kwds) for f in self.features]
+        return self
 
     
 default_features = Features()

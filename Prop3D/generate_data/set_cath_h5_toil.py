@@ -400,7 +400,7 @@ def setup_custom_cath_file_for_sfam(job: Job, full_sfam_path: str, cath_full_h5:
                 store.require_group(f"{row.h5_key}/domains")
 
 def setup_custom_file(job: Job, cath_full_h5: str, pdbs: Union[bool, list[str], str], update: bool = False, 
-                      force: bool = False, create_all_hierarchies_first: bool = False) -> Union[None, Promise]:
+                      force: bool = False, create_all_hierarchies_first: bool = True) -> Union[None, Promise]:
     """Create a 'Custom' file with single group to hold all entries. Root contains only 3 groups: 'domains', 
     'data_splits', and 'representatives'. This is used for PDB entries or given list of files where no hierarchy
     is used.
@@ -447,7 +447,7 @@ def setup_custom_file(job: Job, cath_full_h5: str, pdbs: Union[bool, list[str], 
         pass
 
     #It might be a direcotry or CATH formatted directory
-    if Path(pdbs).is_dir():
+    if isinstance(pdbs, (str, Path)) and Path(pdbs).is_dir():
         pdbs = Path(pdbs)
         child_files = list(pdbs.iterdir())
         if all([f.is_dir() for f in child_files]):
@@ -471,6 +471,7 @@ def setup_custom_file(job: Job, cath_full_h5: str, pdbs: Union[bool, list[str], 
         else:
             #All PDB files in single direcotry
             pdbs = [f for ftype in ("*.pdb", "*.cif", "*.mmtf") for f in pdbs.glob(ftype)]
+            print(pdbs)
 
     if isinstance(pdbs, bool) and pdbs:
         #Use entire PDB database
@@ -478,13 +479,15 @@ def setup_custom_file(job: Job, cath_full_h5: str, pdbs: Union[bool, list[str], 
             return job.addChildJobFn(get_all_pdbs, cath_full_h5, update=update).rv()
         else:
             return job.addChildJobFn(get_all_pdbs, cath_full_h5, update=update, create_groups=False).rv()
-    elif isinstance(pdbs, (list,tuple)) and isinstance(pdbs[0], str):
+    elif isinstance(pdbs, (list,tuple)) and isinstance(pdbs[0], (str,Path)):
         if Path(pdbs[0]).is_file():
             #Ceate custom files, not implemented
             if create_all_hierarchies_first:
                 with h5py.File(cath_full_h5, mode="a", use_cache=False, retries=100) as store:
+                    domain_group = store.require_group("domains")
                     for pdb in pdbs:
-                        group = store.require_group(str(Path(pdb).name))
+                        group = domain_group.require_group(str(Path(pdb).name))
+                
             return pdbs
 
         elif len(pdbs[0]) < 9:
